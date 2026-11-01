@@ -129,6 +129,10 @@ cargo test --release
 
 The binary lands in `target/release/goby.exe`. Settings live in `%APPDATA%\Goby\settings.ini`.
 
+## Author
+
+Made by [Azer Sadykhzadeh](https://azer.one).
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
