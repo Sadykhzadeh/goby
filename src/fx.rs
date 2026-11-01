@@ -177,6 +177,82 @@ impl Modulated {
     }
 }
 
+/// Feedback echo with a darkening low-pass in the loop, like tape or a canyon wall.
+pub struct Echo {
+    line: Delay,
+    tone: Biquad,
+    sample_rate: f32,
+}
+
+impl Echo {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            line: Delay::new(sample_rate as usize),
+            tone: Biquad::new(Shape::LowPass, sample_rate, 3500.0, 0.7),
+            sample_rate,
+        }
+    }
+
+    /// Returns only the echoes; the caller mixes them with the dry signal.
+    #[inline]
+    pub fn process(&mut self, x: f32, ms: f32, feedback: f32) -> f32 {
+        // Read before this sample is pushed, so "0 samples ago" is already one sample late.
+        let wet = self.line.read(ms * self.sample_rate / 1000.0 - 1.0);
+        self.line.push(x + self.tone.process(wet) * feedback);
+        wet
+    }
+
+    pub fn clear(&mut self) {
+        self.line.clear();
+    }
+}
+
+/// Schroeder/Freeverb-style mono reverb: parallel damped combs into series all-passes.
+pub struct Reverb {
+    combs: [(Delay, usize, f32); 4],
+    allpasses: [(Delay, usize); 2],
+}
+
+impl Reverb {
+    pub fn new(sample_rate: f32) -> Self {
+        let scale = sample_rate / 44_100.0;
+        let comb = |n: f32| (Delay::new((n * scale * 1.6) as usize), (n * scale) as usize, 0.0);
+        let ap = |n: f32| (Delay::new((n * scale) as usize + 2), (n * scale) as usize);
+        Self { combs: [comb(1116.0), comb(1188.0), comb(1277.0), comb(1356.0)], allpasses: [ap(556.0), ap(441.0)] }
+    }
+
+    /// `size` 0..1 stretches the room and its decay; `damp` 0..1 darkens the tail.
+    /// Returns only the reverberation.
+    #[inline]
+    pub fn process(&mut self, x: f32, size: f32, damp: f32) -> f32 {
+        let feedback = 0.70 + 0.28 * size;
+        let stretch = 0.6 + 0.6 * size;
+        let mut out = 0.0;
+        for (line, len, low) in &mut self.combs {
+            let y = line.read(*len as f32 * stretch);
+            *low = y * (1.0 - damp) + *low * damp;
+            line.push(x * 0.25 + *low * feedback);
+            out += y;
+        }
+        for (line, len) in &mut self.allpasses {
+            let delayed = line.read(*len as f32);
+            line.push(out + delayed * 0.5);
+            out = delayed - out * 0.5;
+        }
+        out * 0.5
+    }
+
+    pub fn clear(&mut self) {
+        for (line, _, low) in &mut self.combs {
+            line.clear();
+            *low = 0.0;
+        }
+        for (line, _) in &mut self.allpasses {
+            line.clear();
+        }
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -231,6 +307,25 @@ mod tests {
         assert_eq!(d.read(0.0), 49.0);
         assert_eq!(d.read(10.0), 39.0);
         assert!((d.read(10.5) - 38.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn echo_repeats_after_its_delay() {
+        let mut e = Echo::new(SR);
+        let out: Vec<f32> =
+            (0..SR as usize / 2).map(|i| e.process(if i == 0 { 1.0 } else { 0.0 }, 100.0, 0.5)).collect();
+        let first = out.iter().position(|s| s.abs() > 0.5).unwrap();
+        assert_eq!(first, (SR * 0.1) as usize);
+    }
+
+    #[test]
+    fn reverb_rings_on_and_decays() {
+        let mut r = Reverb::new(SR);
+        let out: Vec<f32> = (0..SR as usize * 4).map(|i| r.process(if i < 64 { 0.5 } else { 0.0 }, 0.6, 0.3)).collect();
+        let early = peak(out[(SR * 0.2) as usize..(SR * 0.4) as usize].iter().copied());
+        let late = peak(out[(SR * 3.5) as usize..].iter().copied());
+        assert!(early > 0.005, "no tail: {early}");
+        assert!(late < early * 0.1, "does not decay: {late} vs {early}");
     }
 
     #[test]
