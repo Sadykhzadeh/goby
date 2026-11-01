@@ -367,3 +367,28 @@ mod tests {
         assert!(peak < 0.15, "80 Hz leaked at {peak}");
     }
 }
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// `cargo test --release bench -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark"]
+    fn realtime_factor() {
+        let sr = 48_000;
+        let input: Vec<f32> =
+            (0..sr * 10).map(|i| (i as f32 * 0.0291).sin() * 0.4 + (i as f32 * 0.071).sin() * 0.2).collect();
+        for preset in Preset::ALL {
+            let mut v = Voice::new(sr as u32);
+            v.set(preset, preset.semitones(), 1.0);
+            let mut buf = input.clone();
+            let t = std::time::Instant::now();
+            for block in buf.chunks_mut(480) {
+                v.process(block);
+            }
+            let secs = t.elapsed().as_secs_f64();
+            println!("{preset:?}: 10 s of audio in {:.2} ms → {:.3} % of one core", secs * 1000.0, secs / 10.0 * 100.0);
+        }
+    }
+}
