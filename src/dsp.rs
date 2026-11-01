@@ -3,6 +3,10 @@
 
 use std::f32::consts::PI;
 
+use crate::fx::{
+    Biquad, Crusher, Delay, Echo, Envelope, Lfo, Modulated, Noise, Reverb, Shape, Vocoder, Wander, ratio, saturate,
+};
+
 /// Delay-line pitch shifter with correlation-aligned jumps (WSOLA in a ring).
 ///
 /// A read tap drifts through the delay line at `1 - ratio` samples per sample.
@@ -164,146 +168,259 @@ impl PitchShifter {
     }
 }
 
-/// RBJ biquad, transposed direct form II.
-#[derive(Clone, Copy)]
-struct Biquad {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-    z1: f32,
-    z2: f32,
+/// Everything a voice is made of. Zero switches a stage off, so a recipe only names what it uses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Recipe {
+    /// Pitch shift in semitones; formants move with it (the chipmunk / giant colour).
+    pub pitch: f32,
+    /// Up to two extra pitched copies of the voice, in semitones (0 = unused).
+    pub harmony: [f32; 2],
+    pub harmony_mix: f32,
+    pub vibrato_hz: f32,
+    pub vibrato_cents: f32,
+    /// Slow random pitch drift: drunk, nervous, mutating.
+    pub wobble_hz: f32,
+    pub wobble_cents: f32,
+    pub ring_hz: f32,
+    pub ring_mix: f32,
+    /// Replaces the voiced buzz with noise while keeping the vowel shapes.
+    pub whisper: f32,
+    /// Carrier root of the vocoder in Hz (0 = no vocoder).
+    pub vocoder_hz: f32,
+    pub vocoder_chord: bool,
+    /// Short feedback comb: metallic, tin-can, robotic.
+    pub comb_ms: f32,
+    pub comb_feedback: f32,
+    pub chorus: f32,
+    pub flanger_hz: f32,
+    pub flanger_mix: f32,
+    pub tremolo_hz: f32,
+    pub tremolo_depth: f32,
+    pub highpass_hz: f32,
+    pub lowpass_hz: f32,
+    /// Saturation drive (0 = clean); `hard_clip` squares it off instead.
+    pub drive: f32,
+    pub hard_clip: bool,
+    /// Sample-and-hold rate in Hz and bit depth (0 = clean).
+    pub crush_hz: f32,
+    pub crush_bits: u32,
+    /// Radio static that only plays while you talk.
+    pub hiss: f32,
+    pub echo_ms: f32,
+    pub echo_feedback: f32,
+    pub echo_mix: f32,
+    pub reverb_size: f32,
+    pub reverb_damp: f32,
+    pub reverb_mix: f32,
+    /// Make-up gain for recipes that lose or add a lot of level.
+    pub gain: f32,
 }
 
-impl Biquad {
-    fn new(sample_rate: u32, freq: f32, q: f32, highpass: bool) -> Self {
-        let w = 2.0 * PI * freq / sample_rate as f32;
-        let (sin, cos) = w.sin_cos();
-        let alpha = sin / (2.0 * q);
-        let a0 = 1.0 + alpha;
-        let (b0, b1, b2) = if highpass {
-            ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0)
-        } else {
-            ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0)
-        };
-        Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2.0 * cos / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
-    }
-
-    #[inline]
-    fn process(&mut self, x: f32) -> f32 {
-        let y = self.b0 * x + self.z1;
-        self.z1 = self.b1 * x - self.a1 * y + self.z2;
-        self.z2 = self.b2 * x - self.a2 * y;
-        y
-    }
+impl Recipe {
+    pub const DRY: Recipe = Recipe {
+        pitch: 0.0,
+        harmony: [0.0; 2],
+        harmony_mix: 0.0,
+        vibrato_hz: 0.0,
+        vibrato_cents: 0.0,
+        wobble_hz: 0.0,
+        wobble_cents: 0.0,
+        ring_hz: 0.0,
+        ring_mix: 0.0,
+        whisper: 0.0,
+        vocoder_hz: 0.0,
+        vocoder_chord: false,
+        comb_ms: 0.0,
+        comb_feedback: 0.0,
+        chorus: 0.0,
+        flanger_hz: 0.0,
+        flanger_mix: 0.0,
+        tremolo_hz: 0.0,
+        tremolo_depth: 0.0,
+        highpass_hz: 0.0,
+        lowpass_hz: 0.0,
+        drive: 0.0,
+        hard_clip: false,
+        crush_hz: 0.0,
+        crush_bits: 0,
+        hiss: 0.0,
+        echo_ms: 0.0,
+        echo_feedback: 0.0,
+        echo_mix: 0.0,
+        reverb_size: 0.0,
+        reverb_damp: 0.0,
+        reverb_mix: 0.0,
+        gain: 1.0,
+    };
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Preset {
-    Off,
-    Minion,
-    Helium,
-    Giant,
-    Robot,
-    Radio,
-}
-
-impl Preset {
-    pub const ALL: [Preset; 6] =
-        [Preset::Off, Preset::Minion, Preset::Helium, Preset::Giant, Preset::Robot, Preset::Radio];
-
-    pub fn index(self) -> usize {
-        Self::ALL.iter().position(|p| *p == self).unwrap()
-    }
-
-    pub fn from_index(i: usize) -> Preset {
-        Self::ALL.get(i).copied().unwrap_or(Preset::Off)
-    }
-
-    /// Pitch the preset starts from, in semitones. The user can still move it.
-    pub fn semitones(self) -> f32 {
-        match self {
-            Preset::Minion => 8.0,
-            Preset::Helium => 12.0,
-            Preset::Giant => -6.0,
-            Preset::Off | Preset::Robot | Preset::Radio => 0.0,
-        }
-    }
-}
-
-/// The full chain: pitch → robot → radio → gain.
+/// Runs one recipe. Every stage is allocated up front, so switching voices in the audio
+/// thread never allocates; stages a recipe does not use cost nothing.
 pub struct Voice {
     sample_rate: f32,
-    pitch: PitchShifter,
-    robot_phase: f32,
-    comb: Vec<f32>,
-    comb_pos: usize,
-    hp: Biquad,
-    lp: Biquad,
-    lp2: Biquad,
-    preset: Preset,
-    semitones: f32,
-    gain: f32,
+    recipe: Recipe,
+    tone: f32,
+    volume: f32,
+    shifters: [PitchShifter; 3],
+    vibrato: Lfo,
+    wobble: Wander,
+    ring: Lfo,
+    tremolo: Lfo,
+    noise: Noise,
+    vocoder: Vocoder,
+    comb: Delay,
+    chorus: Modulated,
+    flanger: Modulated,
+    highpass: Biquad,
+    lowpass: Biquad,
+    crusher: Crusher,
+    envelope: Envelope,
+    echo: Echo,
+    reverb: Reverb,
 }
 
 impl Voice {
     pub fn new(sample_rate: u32) -> Self {
+        let sr = sample_rate as f32;
         Self {
-            sample_rate: sample_rate as f32,
-            pitch: PitchShifter::new(sample_rate),
-            robot_phase: 0.0,
-            // 6 ms metallic comb for the robot.
-            comb: vec![0.0; (sample_rate as f32 * 0.006) as usize],
-            comb_pos: 0,
-            hp: Biquad::new(sample_rate, 450.0, 0.707, true),
-            lp: Biquad::new(sample_rate, 2800.0, 0.707, false),
-            lp2: Biquad::new(sample_rate, 2800.0, 0.707, false),
-            preset: Preset::Off,
-            semitones: 0.0,
-            gain: 1.0,
+            sample_rate: sr,
+            recipe: Recipe::DRY,
+            tone: 0.0,
+            volume: 1.0,
+            shifters: std::array::from_fn(|_| PitchShifter::new(sample_rate)),
+            vibrato: Lfo::default(),
+            wobble: Wander::default(),
+            ring: Lfo::default(),
+            tremolo: Lfo::default(),
+            noise: Noise::default(),
+            vocoder: Vocoder::new(sr),
+            comb: Delay::new((sr * 0.03) as usize),
+            chorus: Modulated::new(sr),
+            flanger: Modulated::new(sr),
+            highpass: Biquad::default(),
+            lowpass: Biquad::default(),
+            crusher: Crusher::default(),
+            envelope: Envelope::default(),
+            echo: Echo::new(sr),
+            reverb: Reverb::new(sr),
         }
     }
 
-    pub fn set(&mut self, preset: Preset, semitones: f32, gain: f32) {
-        self.preset = preset;
-        self.gain = gain;
-        if semitones != self.semitones {
-            self.semitones = semitones;
-            self.pitch.set_ratio(2f32.powf(semitones / 12.0));
+    /// `tone` moves any voice up or down in semitones; `volume` is the output level.
+    pub fn set(&mut self, recipe: &Recipe, tone: f32, volume: f32) {
+        if *recipe != self.recipe {
+            self.recipe = *recipe;
+            let sr = self.sample_rate;
+            if recipe.highpass_hz > 0.0 {
+                self.highpass = Biquad::new(Shape::High, sr, recipe.highpass_hz, 0.707);
+            }
+            if recipe.lowpass_hz > 0.0 {
+                self.lowpass = Biquad::new(Shape::Low, sr, recipe.lowpass_hz, 0.707);
+            }
+            // Tails of the previous voice would ring on into the new one.
+            self.comb.clear();
+            self.chorus.clear();
+            self.flanger.clear();
+            self.echo.clear();
+            self.reverb.clear();
         }
+        self.tone = tone;
+        self.volume = volume;
+    }
+
+    fn shifting(&self) -> bool {
+        let r = &self.recipe;
+        (r.pitch + self.tone).abs() > 0.01 || r.vibrato_cents > 0.0 || r.wobble_cents > 0.0
     }
 
     /// How far behind the input the output currently is, in samples.
     pub fn delay(&self) -> f32 {
-        if self.preset != Preset::Off && self.semitones.abs() > 0.01 { self.pitch.delay } else { 0.0 }
+        if self.shifting() { self.shifters[0].delay } else { 0.0 }
     }
 
     pub fn process(&mut self, block: &mut [f32]) {
-        let off = self.preset == Preset::Off;
-        let shift = !off && self.semitones.abs() > 0.01;
+        let r = self.recipe;
+        let sr = self.sample_rate;
+        if r == Recipe::DRY && self.tone == 0.0 {
+            block.iter_mut().for_each(|s| *s *= self.volume);
+            return;
+        }
+        let shifting = self.shifting();
+        let modulated = r.vibrato_cents > 0.0 || r.wobble_cents > 0.0;
+        self.shifters[0].set_ratio(ratio(r.pitch + self.tone));
+        for (k, semis) in r.harmony.iter().enumerate() {
+            self.shifters[k + 1].set_ratio(ratio(semis + self.tone));
+        }
+        let harmonies = r.harmony.iter().filter(|s| **s != 0.0).count();
+
         for s in block.iter_mut() {
-            let mut x = *s;
-            if shift {
-                x = self.pitch.process(x);
+            let dry = *s;
+            let mut x = dry;
+            if shifting {
+                if modulated {
+                    let cents = self.vibrato.next(r.vibrato_hz, sr) * r.vibrato_cents
+                        + self.wobble.next(r.wobble_hz, sr) * r.wobble_cents;
+                    self.shifters[0].set_ratio(ratio(r.pitch + self.tone + cents / 100.0));
+                }
+                x = self.shifters[0].process(dry);
             }
-            match self.preset {
-                Preset::Robot => {
-                    self.robot_phase = (self.robot_phase + 55.0 / self.sample_rate) % 1.0;
-                    x *= (2.0 * PI * self.robot_phase).sin() * 1.6;
-                    let delayed = self.comb[self.comb_pos];
-                    x += delayed * 0.55;
-                    self.comb[self.comb_pos] = x;
-                    self.comb_pos = (self.comb_pos + 1) % self.comb.len();
+            if harmonies > 0 {
+                let mut h = 0.0;
+                for k in 0..2 {
+                    if r.harmony[k] != 0.0 {
+                        h += self.shifters[k + 1].process(dry);
+                    }
                 }
-                Preset::Radio => {
-                    x = self.lp2.process(self.lp.process(self.hp.process(x)));
-                    x = (x * 4.0).tanh() * 0.6;
-                }
-                _ => {}
+                x = x * (1.0 - r.harmony_mix) + h / harmonies as f32 * r.harmony_mix;
+            }
+            if r.ring_mix > 0.0 {
+                x = x * (1.0 - r.ring_mix) + x * self.ring.next(r.ring_hz, sr) * r.ring_mix * 1.4;
+            }
+            if r.whisper > 0.0 {
+                x = x * (1.0 - r.whisper) + x * self.noise.next() * 1.7 * r.whisper;
+            }
+            if r.vocoder_hz > 0.0 {
+                x = self.vocoder.process(x, r.vocoder_hz, r.vocoder_chord);
+            }
+            if r.comb_ms > 0.0 {
+                let y = x + self.comb.read(r.comb_ms * sr / 1000.0 - 1.0) * r.comb_feedback;
+                self.comb.push(y);
+                x = y * (1.0 - r.comb_feedback * 0.5);
+            }
+            if r.chorus > 0.0 {
+                x = x * (1.0 - r.chorus * 0.5) + self.chorus.chorus(x) * r.chorus;
+            }
+            if r.flanger_mix > 0.0 {
+                x = x * (1.0 - r.flanger_mix * 0.5) + self.flanger.flanger(x, r.flanger_hz) * r.flanger_mix * 0.6;
+            }
+            if r.tremolo_depth > 0.0 {
+                x *= 1.0 - r.tremolo_depth * (0.5 + 0.5 * self.tremolo.next(r.tremolo_hz, sr));
+            }
+            if r.highpass_hz > 0.0 {
+                x = self.highpass.process(x);
+            }
+            if r.lowpass_hz > 0.0 {
+                x = self.lowpass.process(x);
+            }
+            if r.drive > 0.0 {
+                x = if r.hard_clip { (x * r.drive).clamp(-0.6, 0.6) } else { saturate(x, r.drive) * 0.8 };
+            }
+            if r.crush_bits > 0 {
+                x = self.crusher.process(x, r.crush_hz, r.crush_bits, sr);
+            }
+            if r.hiss > 0.0 {
+                let talking = self.envelope.next(dry, 0.01, 0.0005);
+                x += self.noise.next() * r.hiss * (talking * 4.0).min(1.0);
+            }
+            if r.echo_mix > 0.0 {
+                x += self.echo.process(x, r.echo_ms, r.echo_feedback) * r.echo_mix;
+            }
+            if r.reverb_mix > 0.0 {
+                x = x * (1.0 - r.reverb_mix * 0.3)
+                    + self.reverb.process(x, r.reverb_size, r.reverb_damp) * r.reverb_mix * 2.0;
             }
             // Soft limit so a loud scream never clips hard in voice chat.
-            *s = if off { x * self.gain } else { (x * self.gain).tanh() };
+            *s = (x * r.gain * self.volume).tanh();
         }
     }
 }
@@ -372,53 +489,6 @@ mod tests {
         let out: Vec<f32> = input.iter().map(|s| p.process(*s)).collect();
         let peak = out[SR as usize / 10..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!((peak - 0.5).abs() < 0.02, "peak {peak}");
-    }
-
-    #[test]
-    fn every_preset_stays_finite_and_bounded() {
-        for preset in Preset::ALL {
-            let mut v = Voice::new(SR);
-            v.set(preset, preset.semitones(), 1.0);
-            let mut block = sine(180.0, 0.5);
-            block.iter_mut().for_each(|s| *s *= 2.0);
-            v.process(&mut block);
-            assert!(block.iter().all(|s| s.is_finite() && s.abs() <= 1.0 + f32::EPSILON), "{preset:?}");
-        }
-    }
-
-    #[test]
-    fn radio_cuts_lows() {
-        let mut v = Voice::new(SR);
-        v.set(Preset::Radio, 0.0, 1.0);
-        let mut low = sine(80.0, 0.5);
-        v.process(&mut low);
-        let peak = low[SR as usize / 10..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        assert!(peak < 0.15, "80 Hz leaked at {peak}");
-    }
-}
-
-#[cfg(test)]
-mod bench {
-    use super::*;
-
-    /// `cargo test --release bench -- --ignored --nocapture`
-    #[test]
-    #[ignore = "benchmark"]
-    fn realtime_factor() {
-        let sr = 48_000;
-        let input: Vec<f32> =
-            (0..sr * 10).map(|i| (i as f32 * 0.0291).sin() * 0.4 + (i as f32 * 0.071).sin() * 0.2).collect();
-        for preset in Preset::ALL {
-            let mut v = Voice::new(sr as u32);
-            v.set(preset, preset.semitones(), 1.0);
-            let mut buf = input.clone();
-            let t = std::time::Instant::now();
-            for block in buf.chunks_mut(480) {
-                v.process(block);
-            }
-            let secs = t.elapsed().as_secs_f64();
-            println!("{preset:?}: 10 s of audio in {:.2} ms → {:.3} % of one core", secs * 1000.0, secs / 10.0 * 100.0);
-        }
     }
 }
 

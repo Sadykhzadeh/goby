@@ -6,6 +6,7 @@ mod fx;
 mod ring;
 mod settings;
 mod ui;
+mod voices;
 
 fn main() -> windows::core::Result<()> {
     ui::run()

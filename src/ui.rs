@@ -22,9 +22,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, Result, w};
 use windows_numerics::Vector2;
 
-use crate::dsp::Preset;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::settings::Settings;
+use crate::voices;
 
 static BASTELEUR: &[u8] = include_bytes!("../ui/fonts/Basteleur-Bold.ttf");
 
@@ -151,7 +151,7 @@ struct App {
     outputs: Vec<Endpoint>,
     input: usize,
     output: usize,
-    preset: Preset,
+    preset: usize,
 
     shared: Arc<Shared>,
     engine: Option<Engine>,
@@ -174,45 +174,17 @@ struct App {
     voiced: Box<[f32; SCOPE_LEN]>,
 }
 
-fn name_of(p: Preset) -> &'static str {
-    match p {
-        Preset::Off => "Off",
-        Preset::Minion => "Minion",
-        Preset::Helium => "Helium",
-        Preset::Giant => "Giant",
-        Preset::Robot => "Robot",
-        Preset::Radio => "Radio",
-    }
+/// The window shows the six basic voices; the rest of the catalog arrives with the gallery.
+const SHOWN: usize = 6;
+
+fn name_of(voice: usize) -> &'static str {
+    voices::ALL[voice].en
 }
 
-/// Each preset is drawn as the waveform it makes: one invented icon family.
-fn glyph(p: Preset) -> Vec<(f32, f32)> {
-    let wave = |cycles: f32, amp: f32, clip: f32| -> Vec<(f32, f32)> {
-        (0..=96)
-            .map(|i| {
-                let t = i as f32 / 96.0;
-                let s = ((t * cycles * std::f32::consts::TAU).sin() * amp).clamp(-clip, clip);
-                (t * 44.0, 9.0 - s * 7.0)
-            })
-            .collect()
-    };
-    match p {
-        Preset::Off => vec![(0.0, 9.0), (44.0, 9.0)],
-        Preset::Minion => wave(5.0, 0.75, 1.0),
-        Preset::Helium => wave(9.0, 0.55, 1.0),
-        Preset::Giant => wave(1.25, 1.0, 1.0),
-        Preset::Robot => {
-            let mut pts = vec![(0.0, 13.0)];
-            for (i, x) in [7.0, 15.0, 22.0, 30.0, 37.0].iter().enumerate() {
-                let (from, to) = if i % 2 == 0 { (13.0, 5.0) } else { (5.0, 13.0) };
-                pts.push((*x, from));
-                pts.push((*x, to));
-            }
-            pts.push((44.0, 5.0));
-            pts
-        }
-        Preset::Radio => wave(3.0, 1.3, 0.45),
-    }
+/// Each voice is drawn as the waveform it actually makes, in a 44x18 box.
+fn glyph(voice: usize) -> Vec<(f32, f32)> {
+    let wave = voices::glyph(&voices::ALL[voice], 97);
+    wave.iter().enumerate().map(|(i, s)| (i as f32 * 44.0 / 96.0, 9.0 - s * 7.0)).collect()
 }
 
 fn short(name: &str) -> &str {
@@ -247,7 +219,7 @@ impl App {
                 round,
                 gfx: None,
                 dpi: GetDpiForWindow(hwnd) as f32,
-                preset: Preset::from_index(settings.preset),
+                preset: voices::index_of(&settings.voice).unwrap_or(1).min(SHOWN - 1),
                 settings,
                 inputs: Vec::new(),
                 outputs: Vec::new(),
@@ -267,7 +239,7 @@ impl App {
                 glow: [0.0; 6],
                 knob: 0.0,
                 latency: 0.0,
-                glyphs: Preset::ALL.iter().map(|p| glyph(*p)).collect(),
+                glyphs: (0..SHOWN).map(glyph).collect(),
                 raw: Box::new([0.0; SCOPE_LEN]),
                 voiced: Box::new([0.0; SCOPE_LEN]),
             };
@@ -293,7 +265,7 @@ impl App {
     }
 
     fn apply_voice(&mut self) {
-        self.settings.preset = self.preset.index();
+        self.settings.voice = voices::ALL[self.preset].id.to_string();
         self.shared.set(self.preset, self.settings.semitones, self.settings.volume);
     }
 
@@ -346,7 +318,7 @@ impl App {
             self.restart();
         }
         for (i, g) in self.glow.iter_mut().enumerate() {
-            let target = if i == self.preset.index() {
+            let target = if i == self.preset {
                 1.0
             } else if self.hover == Hit::Preset(i) {
                 0.45
@@ -434,8 +406,8 @@ impl App {
         }
         match hit {
             Hit::Preset(i) => {
-                self.preset = Preset::ALL[i];
-                self.settings.semitones = self.preset.semitones();
+                self.preset = i;
+                self.settings.semitones = 0.0;
                 self.apply_voice();
                 self.settings.save();
             }
@@ -682,7 +654,7 @@ impl App {
 
         // Presets as a typographic row; each glyph is the waveform it produces.
         let cell = PRESETS.w() / 6.0;
-        for (i, p) in Preset::ALL.iter().enumerate() {
+        for i in 0..SHOWN {
             let x = PRESETS.l + cell * i as f32;
             let glow = self.glow[i];
             let pts: Vec<(f32, f32)> =
@@ -690,7 +662,7 @@ impl App {
             self.line(g, &pts, mix(FAINT, ACCENT, glow), 1.7)?;
             self.text(
                 g,
-                name_of(*p),
+                name_of(i),
                 &f.preset,
                 R::new(x, PRESETS.t + 32.0, cell, 28.0),
                 CENTER,
@@ -945,7 +917,7 @@ fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
 /// A small app icon in the same language as the preset glyphs: the Minion wave, in lemon.
 fn make_icon(size: i32) -> Option<HICON> {
     let n = size as usize;
-    let pts: Vec<(f32, f32)> = glyph(Preset::Minion)
+    let pts: Vec<(f32, f32)> = glyph(1)
         .iter()
         .map(|(x, y)| (x / 44.0 * (size as f32 - 4.0) + 2.0, (y - 9.0) * size as f32 / 22.0 + size as f32 / 2.0))
         .collect();

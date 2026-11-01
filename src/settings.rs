@@ -6,7 +6,8 @@ use std::path::PathBuf;
 pub struct Settings {
     pub input: String,
     pub output: String,
-    pub preset: usize,
+    /// Voice id from the catalog; ids are stable across versions.
+    pub voice: String,
     pub semitones: f32,
     pub volume: f32,
     pub monitor: bool,
@@ -14,7 +15,14 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { input: String::new(), output: String::new(), preset: 1, semitones: 8.0, volume: 1.0, monitor: false }
+        Self {
+            input: String::new(),
+            output: String::new(),
+            voice: "minion".into(),
+            semitones: 0.0,
+            volume: 1.0,
+            monitor: false,
+        }
     }
 }
 
@@ -30,7 +38,7 @@ impl Settings {
             match k.trim() {
                 "input" => s.input = v.to_string(),
                 "output" => s.output = v.to_string(),
-                "preset" => s.preset = v.parse().unwrap_or(s.preset),
+                "voice" => s.voice = v.to_string(),
                 "semitones" => s.semitones = v.parse::<f32>().unwrap_or(s.semitones).clamp(-12.0, 12.0),
                 "volume" => s.volume = v.parse::<f32>().unwrap_or(s.volume).clamp(0.0, 2.0),
                 "monitor" => s.monitor = v == "1",
@@ -42,8 +50,8 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\npreset={}\nsemitones={}\nvolume={}\nmonitor={}\n",
-            self.input, self.output, self.preset, self.semitones, self.volume, self.monitor as u8
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\n",
+            self.input, self.output, self.voice, self.semitones, self.volume, self.monitor as u8
         )
     }
 
@@ -70,7 +78,7 @@ mod tests {
         let s = Settings {
             input: "{0.0.1.00000000}.{abc}".into(),
             output: "{0.0.0.00000000}.{def}".into(),
-            preset: 3,
+            voice: "demon".into(),
             semitones: -6.0,
             volume: 1.25,
             monitor: true,

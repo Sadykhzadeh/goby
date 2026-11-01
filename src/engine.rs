@@ -21,8 +21,9 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
 use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
-use crate::dsp::{Preset, Voice};
+use crate::dsp::Voice;
 use crate::ring::{Consumer, Producer, ring};
+use crate::voices;
 
 pub const RATE: u32 = 48_000;
 /// Ring fill the outputs steer towards. Larger is safer, smaller is snappier.
@@ -32,7 +33,7 @@ pub const SCOPE_LEN: usize = 2048;
 
 /// Lock-free knobs, meters and scope taps shared between the UI and the audio threads.
 pub struct Shared {
-    preset: AtomicU32,
+    voice: AtomicU32,
     semitones: AtomicU32,
     gain: AtomicU32,
     pub failed: AtomicBool,
@@ -51,7 +52,7 @@ impl Default for Shared {
     fn default() -> Self {
         let taps = || (0..SCOPE_LEN).map(|_| AtomicU32::new(0)).collect();
         Self {
-            preset: AtomicU32::new(0),
+            voice: AtomicU32::new(0),
             semitones: AtomicU32::new(0),
             gain: AtomicU32::new(1f32.to_bits()),
             failed: AtomicBool::new(false),
@@ -67,9 +68,10 @@ impl Default for Shared {
 }
 
 impl Shared {
-    pub fn set(&self, preset: Preset, semitones: f32, gain: f32) {
-        self.preset.store(preset.index() as u32, Relaxed);
-        self.semitones.store(semitones.to_bits(), Relaxed);
+    /// `voice` indexes `voices::ALL`; `tone` shifts it in semitones.
+    pub fn set(&self, voice: usize, tone: f32, gain: f32) {
+        self.voice.store(voice as u32, Relaxed);
+        self.semitones.store(tone.to_bits(), Relaxed);
         self.gain.store(gain.to_bits(), Relaxed);
     }
 
@@ -357,10 +359,10 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                 let packet: &[f32] =
                     if silent { &[] } else { std::slice::from_raw_parts(data as *const f32, n as usize) };
 
-                let preset = Preset::from_index(shared.preset.load(Relaxed) as usize);
+                let def = voices::ALL.get(shared.voice.load(Relaxed) as usize).unwrap_or(&voices::ALL[0]);
                 let semis = f32::from_bits(shared.semitones.load(Relaxed));
                 let gain = f32::from_bits(shared.gain.load(Relaxed));
-                voice.set(preset, semis, gain);
+                voice.set(&def.recipe, semis, gain);
 
                 let mut done = 0;
                 while done < n as usize {
@@ -529,7 +531,7 @@ mod live {
         let mic = default_endpoint(true).expect("no mic");
         let cable = list(false).into_iter().find(|e| e.name.contains("CABLE Input")).expect("no VB-Cable");
         let shared = Arc::new(Shared::default());
-        shared.set(Preset::Minion, 8.0, 1.0);
+        shared.set(voices::index_of("minion").unwrap(), 0.0, 1.0);
         let engine = Engine::start(&mic.id, std::slice::from_ref(&cable.id), shared.clone()).expect("start");
         std::thread::sleep(Duration::from_secs(1));
         let mut samples = Vec::new();
