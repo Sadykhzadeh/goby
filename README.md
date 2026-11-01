@@ -4,7 +4,8 @@ A small, fast voice changer for Windows. It takes your real microphone, turns yo
 minion, a demon, a robot, a walkie-talkie or one of 61 voices, and hands the result to any
 game or chat app through a virtual audio cable.
 
-One ~460 KB executable. No installer, no background service, no driver of its own, no
+One ~600 KB executable that installs itself for your user, no administrator rights
+needed, or runs without installing. No background service, no driver of its own, no
 account, nothing sent anywhere. The window is plain Win32 in the Windows 11 style: Mica,
 the system accent colour, light or dark to match Windows, English or Russian to match
 your display language.
@@ -34,7 +35,8 @@ when the app starts and the result is drawn.
 ## Using it in CS2 (or Discord, OBS, anything)
 
 1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free).
-2. Run `goby.exe`. On the first run Windows asks once for permission to rename the
+2. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
+   **Just run it**). On the first start Windows asks once for permission to rename the
    cable, so it shows up as **Goby Mic** everywhere instead of "CABLE Output".
 3. Under **Who hears Goby**, press **Add a program** and pick CS2, Discord or OBS from
    the menu. It lists every program that has used your microphone (the same list Windows
@@ -58,7 +60,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 
 | | |
 |---|---|
-| Executable | 465 KB |
+| Executable | 598 KB, icons and installer included |
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
@@ -128,6 +130,22 @@ cargo test --release
 ```
 
 The binary lands in `target/release/goby.exe`. Settings live in `%APPDATA%\Goby\settings.ini`.
+
+## Installing and uninstalling
+
+Goby installs per user into `%LOCALAPPDATA%\Programs\Goby`, with a Start menu shortcut
+and an entry under **Settings > Apps**. Running a newer download updates it in place.
+Uninstall it from Settings > Apps: it closes Goby, hands the programs you chose back to
+the default microphone, gives the cable its VB-Audio names back, and removes its
+shortcuts, settings and folder.
+
+For scripts and package managers:
+
+```
+goby-0.2.0-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
+goby.exe --uninstall --quiet                        # silent uninstall
+goby-0.2.0-windows-x64.exe --portable               # run without installing or asking
+```
 
 ## Author
 
