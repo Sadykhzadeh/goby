@@ -137,6 +137,46 @@ impl Delay {
     }
 }
 
+/// Modulated short delays: chorus (no feedback) and flanger (feedback, shorter delay).
+pub struct Modulated {
+    line: Delay,
+    lfo: [Lfo; 2],
+    sample_rate: f32,
+    last: f32,
+}
+
+impl Modulated {
+    pub fn new(sample_rate: f32) -> Self {
+        let mut lfo = [Lfo::default(); 2];
+        lfo[1].phase = 0.33;
+        Self { line: Delay::new((sample_rate * 0.04) as usize), lfo, sample_rate, last: 0.0 }
+    }
+
+    /// Two voices 12-25 ms behind, wobbling slowly: a fuller, doubled voice.
+    #[inline]
+    pub fn chorus(&mut self, x: f32) -> f32 {
+        self.line.push(x);
+        let ms = self.sample_rate / 1000.0;
+        let a = self.line.read((15.0 + 4.0 * self.lfo[0].next(0.7, self.sample_rate)) * ms);
+        let b = self.line.read((21.0 + 4.0 * self.lfo[1].next(0.9, self.sample_rate)) * ms);
+        (a + b) * 0.5
+    }
+
+    /// 1-7 ms sweep with feedback: the jet-plane swoosh.
+    #[inline]
+    pub fn flanger(&mut self, x: f32, rate_hz: f32) -> f32 {
+        self.line.push(x + self.last * 0.6);
+        let ms = self.sample_rate / 1000.0;
+        self.last = self.line.read((4.0 + 3.0 * self.lfo[0].next(rate_hz, self.sample_rate)) * ms);
+        self.last
+    }
+
+    pub fn clear(&mut self) {
+        self.line.clear();
+        self.last = 0.0;
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -191,6 +231,18 @@ mod tests {
         assert_eq!(d.read(0.0), 49.0);
         assert_eq!(d.read(10.0), 39.0);
         assert!((d.read(10.5) - 38.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn modulated_delays_stay_bounded() {
+        let mut m = Modulated::new(SR);
+        for i in 0..SR as usize {
+            let x = sine(220.0, i, SR) * 0.5;
+            assert!(m.chorus(x).abs() <= 0.5 + 1e-4);
+        }
+        m.clear();
+        let p = peak((0..SR as usize).map(|i| m.flanger(sine(220.0, i, SR) * 0.5, 0.3)));
+        assert!(p < 1.5 && p.is_finite(), "{p}");
     }
 
     #[test]
