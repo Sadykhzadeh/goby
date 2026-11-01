@@ -74,9 +74,9 @@ pub struct Biquad {
 }
 
 pub enum Shape {
-    LowPass,
-    HighPass,
-    BandPass,
+    Low,
+    High,
+    Band,
 }
 
 impl Biquad {
@@ -86,9 +86,9 @@ impl Biquad {
         let alpha = sin / (2.0 * q);
         let a0 = 1.0 + alpha;
         let (b0, b1, b2) = match shape {
-            Shape::LowPass => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0),
-            Shape::HighPass => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0),
-            Shape::BandPass => (alpha, 0.0, -alpha),
+            Shape::Low => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0),
+            Shape::High => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0),
+            Shape::Band => (alpha, 0.0, -alpha),
         };
         Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2.0 * cos / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
     }
@@ -188,7 +188,7 @@ impl Echo {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             line: Delay::new(sample_rate as usize),
-            tone: Biquad::new(Shape::LowPass, sample_rate, 3500.0, 0.7),
+            tone: Biquad::new(Shape::Low, sample_rate, 3500.0, 0.7),
             sample_rate,
         }
     }
@@ -225,7 +225,9 @@ impl Reverb {
     /// Returns only the reverberation.
     #[inline]
     pub fn process(&mut self, x: f32, size: f32, damp: f32) -> f32 {
-        let feedback = 0.70 + 0.28 * size;
+        // Capped so even the biggest hall dies out within about a second: in voice chat a
+        // long tail smears the next sentence.
+        let feedback = 0.70 + 0.22 * size;
         let stretch = 0.6 + 0.6 * size;
         let mut out = 0.0;
         for (line, len, low) in &mut self.combs {
@@ -302,7 +304,7 @@ pub struct Vocoder {
 impl Vocoder {
     pub fn new(sample_rate: f32) -> Self {
         let band = |i: usize| 120.0 * (6000.0f32 / 120.0).powf(i as f32 / 15.0);
-        let make = || std::array::from_fn(|i| Biquad::new(Shape::BandPass, sample_rate, band(i), 6.0));
+        let make = || std::array::from_fn(|i| Biquad::new(Shape::Band, sample_rate, band(i), 6.0));
         Self {
             analysis: make(),
             synthesis: make(),
@@ -443,8 +445,8 @@ mod tests {
             let mut f = shape();
             peak((0..SR as usize / 2).map(|i| f.process(sine(hz, i, SR))).skip(SR as usize / 10))
         };
-        let lp = || Biquad::new(Shape::LowPass, SR, 1000.0, 0.707);
-        let hp = || Biquad::new(Shape::HighPass, SR, 1000.0, 0.707);
+        let lp = || Biquad::new(Shape::Low, SR, 1000.0, 0.707);
+        let hp = || Biquad::new(Shape::High, SR, 1000.0, 0.707);
         assert!(level(lp, 100.0) > 0.9 && level(lp, 8000.0) < 0.05);
         assert!(level(hp, 8000.0) > 0.9 && level(hp, 100.0) < 0.05);
     }
