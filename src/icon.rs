@@ -3,6 +3,9 @@
 
 use std::f32::consts::{PI, TAU};
 
+/// The one icon colour, everywhere: Explorer, the taskbar, Settings > Apps and the title bar.
+pub const RGB: u32 = 0xFFB900;
+
 /// Straight-alpha BGRA pixels, top row first, of the icon at `size`×`size` in colour `rgb`.
 pub fn pixels(size: usize, rgb: u32) -> Vec<u32> {
     let s = size as f32;

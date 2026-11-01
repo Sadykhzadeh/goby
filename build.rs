@@ -8,8 +8,6 @@ mod icon;
 use std::path::PathBuf;
 
 const AUTHOR: &str = "Azer Sadykhzadeh";
-/// The icon colour in Explorer, the taskbar pin and Settings > Apps.
-const ICON_RGB: u32 = 0xFFB900;
 const ICON_SIZES: [usize; 8] = [16, 20, 24, 32, 40, 48, 64, 256];
 
 const RT_ICON: u16 = 3;
@@ -44,8 +42,140 @@ fn resource(out: &mut Vec<u8>, kind: u16, id: u16, data: &[u8]) {
     pad4(out);
 }
 
+/// Writes deflate bits: values least-significant bit first, Huffman codes most-significant first.
+struct Bits {
+    out: Vec<u8>,
+    acc: u32,
+    n: u32,
+}
+
+impl Bits {
+    fn put(&mut self, value: u32, count: u32) {
+        self.acc |= value << self.n;
+        self.n += count;
+        while self.n >= 8 {
+            self.out.push(self.acc as u8);
+            self.acc >>= 8;
+            self.n -= 8;
+        }
+    }
+
+    fn code(&mut self, code: u32, len: u32) {
+        let reversed = (0..len).fold(0, |r, i| r | ((code >> i) & 1) << (len - 1 - i));
+        self.put(reversed, len);
+    }
+
+    /// A literal or length symbol in the fixed Huffman code of RFC 1951.
+    fn symbol(&mut self, v: u32) {
+        match v {
+            0..=143 => self.code(0x30 + v, 8),
+            144..=255 => self.code(0x190 + v - 144, 9),
+            256..=279 => self.code(v - 256, 7),
+            _ => self.code(0xC0 + v - 280, 8),
+        }
+    }
+}
+
+const LEN_BASE: [u32; 29] =
+    [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const LEN_EXTRA: [u32; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const DIST_BASE: [u32; 30] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
+    8193, 12289, 16385, 24577,
+];
+const DIST_EXTRA: [u32; 30] =
+    [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+
+/// One fixed-Huffman deflate block whose matches look one pixel or one row back. Icons are
+/// mostly transparent runs, so this small encoder already shrinks them about tenfold.
+fn deflate(data: &[u8], row: usize) -> Vec<u8> {
+    let mut b = Bits { out: Vec::new(), acc: 0, n: 0 };
+    b.put(1, 1); // last block
+    b.put(1, 2); // fixed Huffman codes
+    let mut i = 0;
+    while i < data.len() {
+        let mut best = (0usize, 0usize);
+        for d in [4, row] {
+            if d <= i {
+                let n = (0..258).take_while(|&k| i + k < data.len() && data[i + k] == data[i + k - d]).count();
+                if n > best.0 {
+                    best = (n, d);
+                }
+            }
+        }
+        if best.0 >= 3 {
+            let (len, dist) = (best.0 as u32, best.1 as u32);
+            let k = LEN_BASE.iter().rposition(|&base| base <= len).unwrap();
+            b.symbol(257 + k as u32);
+            b.put(len - LEN_BASE[k], LEN_EXTRA[k]);
+            let k = DIST_BASE.iter().rposition(|&base| base <= dist).unwrap();
+            b.code(k as u32, 5);
+            b.put(dist - DIST_BASE[k], DIST_EXTRA[k]);
+            i += best.0;
+        } else {
+            b.symbol(data[i] as u32);
+            i += 1;
+        }
+    }
+    b.symbol(256);
+    if b.n > 0 {
+        b.out.push(b.acc as u8);
+    }
+    b.out
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    !bytes.iter().fold(!0u32, |crc, &byte| {
+        (0..8).fold(crc ^ byte as u32, |c, _| if c & 1 != 0 { (c >> 1) ^ 0xEDB8_8320 } else { c >> 1 })
+    })
+}
+
+fn adler32(bytes: &[u8]) -> u32 {
+    let (a, b) = bytes.iter().fold((1u32, 0u32), |(a, b), &x| {
+        let a = (a + x as u32) % 65521;
+        (a, (b + a) % 65521)
+    });
+    b << 16 | a
+}
+
+/// An RGBA PNG of the icon, as Windows expects for the large sizes.
+fn icon_png(size: usize) -> Vec<u8> {
+    let px = icon::pixels(size, icon::RGB);
+    let mut raw = Vec::with_capacity(size * (1 + size * 4));
+    for row in px.chunks(size) {
+        raw.push(0); // no filter
+        for p in row {
+            raw.extend([(p >> 16) as u8, (p >> 8) as u8, *p as u8, (p >> 24) as u8]);
+        }
+    }
+    let mut zlib = vec![0x78, 0x01];
+    zlib.extend(deflate(&raw, 1 + size * 4));
+    zlib.extend(adler32(&raw).to_be_bytes());
+
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+        png.extend((data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend(data);
+        png.extend(&body);
+        png.extend(crc32(&body).to_be_bytes());
+    };
+    let mut header = Vec::new();
+    header.extend((size as u32).to_be_bytes());
+    header.extend((size as u32).to_be_bytes());
+    header.extend([8, 6, 0, 0, 0]); // 8-bit RGBA
+    chunk(b"IHDR", &header);
+    chunk(b"IDAT", &zlib);
+    chunk(b"IEND", &[]);
+    png
+}
+
 /// A 32-bit icon image: BITMAPINFOHEADER, bottom-up BGRA, then an all-clear AND mask.
+/// Large sizes are PNG instead, which Windows has read inside icons since Vista.
 fn icon_image(size: usize) -> Vec<u8> {
+    if size >= 64 {
+        return icon_png(size);
+    }
     let mut b = Vec::new();
     let mask_row = size.div_ceil(32) * 4;
     for v in [40u32, size as u32, size as u32 * 2] {
@@ -56,7 +186,7 @@ fn icon_image(size: usize) -> Vec<u8> {
     b.extend(0u32.to_le_bytes());
     b.extend(((size * size * 4 + mask_row * size) as u32).to_le_bytes());
     b.extend([0u8; 16]);
-    let px = icon::pixels(size, ICON_RGB);
+    let px = icon::pixels(size, icon::RGB);
     for row in (0..size).rev() {
         for p in &px[row * size..(row + 1) * size] {
             b.extend(p.to_le_bytes());
