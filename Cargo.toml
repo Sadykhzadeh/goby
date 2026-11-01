@@ -7,6 +7,7 @@ keywords = ["voice-changer", "wasapi", "audio", "windows", "dsp"]
 categories = ["multimedia::audio"]
 
 [dependencies]
+windows-core = "0.62.2"
 windows-numerics = "0.3.1"
 
 [dependencies.windows]

@@ -16,10 +16,11 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, Lo
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, Result, w};
+use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, Result, w};
 
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
+use crate::policy;
 use crate::settings::Settings;
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
@@ -77,7 +78,10 @@ enum Hit {
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
-    Help,
+    /// Make the cable the Windows default microphone.
+    MakeDefault,
+    /// Rename the cable to Goby (elevated).
+    NameCable,
     Scrollbar(Pane),
 }
 
@@ -140,6 +144,11 @@ struct App {
     status: String,
     healthy: bool,
     retry_at: Option<Instant>,
+    /// The virtual cable (play side, record side), if installed.
+    cable: Option<(Endpoint, Endpoint)>,
+    cable_is_default: bool,
+    /// Re-read device names a moment after the elevated rename was started.
+    recheck_at: Option<Instant>,
 
     mouse: (f32, f32),
     hover: Hit,
@@ -177,6 +186,11 @@ struct Margins {
     right: i32,
     top: i32,
     bottom: i32,
+}
+
+#[link(name = "shell32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn ShellExecuteW(hwnd: HWND, op: PCWSTR, file: PCWSTR, params: PCWSTR, dir: PCWSTR, show: i32) -> HINSTANCE;
 }
 
 #[link(name = "dwmapi", kind = "raw-dylib")]
@@ -227,6 +241,9 @@ impl App {
             status: String::new(),
             healthy: true,
             retry_at: None,
+            cable: None,
+            cable_is_default: false,
+            recheck_at: None,
             mouse: (-1.0, -1.0),
             hover: Hit::None,
             drag: None,
@@ -268,12 +285,15 @@ impl App {
         let keep_out = self.outputs.get(self.output).map(|e| e.id.clone()).unwrap_or(self.settings.output.clone());
         self.inputs = engine::list(true);
         self.outputs = engine::list(false);
+        self.cable = engine::cable();
+        self.cable_is_default =
+            self.cable.as_ref().is_some_and(|(_, rec)| engine::default_endpoint(true).is_some_and(|d| d.id == rec.id));
         let pick = |list: &[Endpoint], id: &str| list.iter().position(|e| e.id == id);
         self.input = pick(&self.inputs, &keep_in)
             .or_else(|| engine::default_endpoint(true).and_then(|d| pick(&self.inputs, &d.id)))
             .unwrap_or(0);
         self.output = pick(&self.outputs, &keep_out)
-            .or_else(|| self.outputs.iter().position(|e| e.name.to_ascii_lowercase().contains("cable input")))
+            .or_else(|| self.cable.as_ref().and_then(|(play, _)| pick(&self.outputs, &play.id)))
             .unwrap_or(0);
     }
 
@@ -370,6 +390,11 @@ impl App {
             self.retry_at = Some(Instant::now() + Duration::from_secs(2));
             self.dirty = true;
         }
+        if self.recheck_at.is_some_and(|t| Instant::now() >= t) {
+            self.recheck_at = None;
+            self.refresh_devices();
+            self.dirty = true;
+        }
         if self.retry_at.is_some_and(|t| Instant::now() >= t) {
             self.refresh_devices();
             self.restart();
@@ -446,8 +471,34 @@ impl App {
                 self.settings.save();
             }
             Hit::Pick(p) => self.menu(p),
-            Hit::Help => {
-                let _ = std::process::Command::new("control.exe").arg("mmsys.cpl,,1").spawn();
+            Hit::MakeDefault => {
+                if let Some((_, record)) = &self.cable
+                    && let Err(e) = policy::set_default(&record.id)
+                {
+                    self.status = e.message();
+                    self.healthy = false;
+                }
+                self.refresh_devices();
+                self.dirty = true;
+            }
+            Hit::NameCable => {
+                if let Some((play, record)) = &self.cable {
+                    let exe = std::env::current_exe().unwrap_or_default();
+                    let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
+                    // A UAC prompt: the names live under HKLM like every endpoint setting.
+                    let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
+                    unsafe {
+                        ShellExecuteW(
+                            self.hwnd,
+                            w!("runas"),
+                            PCWSTR(exe.as_ptr()),
+                            PCWSTR(args.as_ptr()),
+                            PCWSTR::null(),
+                            0,
+                        );
+                    }
+                    self.recheck_at = Some(Instant::now() + Duration::from_secs(4));
+                }
             }
             Hit::Scrollbar(pane) => {
                 let at = match pane {
@@ -826,8 +877,25 @@ impl App {
         let mon = self.t("В наушники по умолчанию", "To your default headphones");
         let hear = self.t("Слышать себя", "Hear myself");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Monitor), glyph::HEADPHONE, hear, mon)?;
-        let help = self.t("Выберите CABLE Output по умолчанию", "Make CABLE Output the default");
-        self.row_card(g, &mut y, Hit::Help, glyph::OPEN, self.t("Микрофон в CS2", "Mic in CS2"), help)?;
+        if let Some((play, record)) = self.cable.clone() {
+            let games = self.t("Микрофон для игр", "Mic for games");
+            if self.cable_is_default {
+                let done = self.t("Готово: CS2 и чаты слышат Goby", "Done: CS2 and chats hear Goby");
+                self.row_card(g, &mut y, Hit::None, glyph::GAME, games, done)?;
+            } else {
+                let how = format!("{} «{}»", self.t("Сделать по умолчанию:", "Make default:"), short(&record.name));
+                self.row_card(g, &mut y, Hit::MakeDefault, glyph::GAME, games, &how)?;
+            }
+            if !play.name.starts_with("Goby") {
+                let name = self.t("Назвать кабель «Goby»", "Name the cable Goby");
+                let why = self.t("Чтобы не путаться в устройствах", "So it is easy to spot in device lists");
+                self.row_card(g, &mut y, Hit::NameCable, glyph::RENAME, name, why)?;
+            }
+        } else {
+            let none =
+                self.t("Установите VB-Cable, чтобы голос шёл в игры", "Install VB-Cable to route the voice into games");
+            self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Виртуальный кабель", "Virtual cable"), none)?;
+        }
 
         g.unclip();
         let content = y + scroll - PANE.t;
@@ -872,6 +940,8 @@ impl App {
             match hit {
                 Hit::Toggle(s) => self.toggle(g, r.r - 56.0, r.t + 24.0, s),
                 Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
+                Hit::None if self.cable_is_default => g.icon(glyph::CHECK, Font::Icon12, side, th.accent())?,
+                Hit::None => {}
                 _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
             }
             let visible = R { l: r.l, t: r.t.max(PANE.t), r: r.r, b: r.b.min(PANE.b) };
