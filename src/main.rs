@@ -6,6 +6,7 @@ mod fx;
 mod mic;
 mod ring;
 mod settings;
+mod theme;
 mod ui;
 mod voices;
 
