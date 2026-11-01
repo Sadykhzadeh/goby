@@ -5,6 +5,8 @@ edition = "2024"
 description = "Lightweight real-time voice changer for Windows: your mic, a few fun voices, straight into any game through a virtual cable."
 keywords = ["voice-changer", "wasapi", "audio", "windows", "dsp"]
 categories = ["multimedia::audio"]
+license = "MIT"
+readme = "README.md"
 
 [dependencies]
 windows-core = "0.62.2"
