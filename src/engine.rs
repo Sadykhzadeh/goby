@@ -14,6 +14,12 @@ use windows::Win32::System::Com::{
 };
 use windows::core::{PWSTR, Result as WinResult};
 
+use crate::ring::Consumer;
+
+pub const RATE: u32 = 48_000;
+/// Ring fill the outputs steer towards. Larger is safer, smaller is snappier.
+const TARGET_MS: f64 = 12.0;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Endpoint {
     pub id: String,
@@ -64,9 +70,81 @@ pub fn default_endpoint(capture: bool) -> Option<Endpoint> {
     describe(&dev).ok()
 }
 
+/// Pulls processed audio from the ring at the output's own clock.
+pub struct Reader {
+    ring: Consumer,
+    frac: f64,
+    s0: f32,
+    s1: f32,
+    target: f64,
+    fill: f64,
+    priming: bool,
+}
+
+impl Reader {
+    fn new(ring: Consumer) -> Self {
+        let target = RATE as f64 * TARGET_MS / 1000.0;
+        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, priming: true }
+    }
+
+    fn next(&mut self) -> f32 {
+        let avail = self.ring.len() as f64;
+        if self.priming {
+            if avail < self.target {
+                return 0.0;
+            }
+            self.priming = false;
+        }
+        // After a long stall, throw away the backlog instead of playing it late.
+        if avail > self.target * 4.0 {
+            self.ring.skip((avail - self.target) as usize);
+        }
+        self.fill += (avail - self.fill) * 0.0005;
+        // Proportional nudge, capped at ±0.5 %: inaudible, but enough for any real clock drift.
+        let nudge = ((self.fill - self.target) / self.target * 0.02).clamp(-0.005, 0.005);
+        self.frac += 1.0 + nudge;
+        while self.frac >= 1.0 {
+            self.frac -= 1.0;
+            self.s0 = self.s1;
+            match self.ring.pop() {
+                Some(s) => self.s1 = s,
+                None => {
+                    self.priming = true;
+                    return 0.0;
+                }
+            }
+        }
+        self.s0 + (self.s1 - self.s0) * self.frac as f32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ring::ring;
+
+    #[test]
+    fn fill_stays_near_target_under_clock_drift() {
+        let target = (RATE as f64 * TARGET_MS / 1000.0) as usize;
+        for drift in [-0.002, 0.0, 0.002] {
+            // Feed RATE * (1 + drift) samples per second, read RATE per second, for 60 s.
+            let (mut prod, cons) = ring(RATE as usize);
+            let mut r = Reader::new(cons);
+            let mut fed = 0.0f64;
+            for _ in 0..60_000 {
+                fed += RATE as f64 * (1.0 + drift) / 1000.0;
+                while fed >= 1.0 {
+                    prod.push(0.1);
+                    fed -= 1.0;
+                }
+                for _ in 0..RATE / 1000 {
+                    r.next();
+                }
+            }
+            let fill = r.ring.len();
+            assert!(fill.abs_diff(target) < target / 2, "drift {drift}: fill {fill}, target {target}");
+        }
+    }
 
     #[test]
     #[ignore = "needs real audio devices"]
