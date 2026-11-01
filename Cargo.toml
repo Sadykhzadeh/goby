@@ -1,6 +1,6 @@
 [package]
 name = "goby"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Azer Sadykhzadeh"]
 homepage = "https://azer.one"
@@ -38,11 +38,14 @@ features = [
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Globalization",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
+    "Win32_UI_Controls",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]
 

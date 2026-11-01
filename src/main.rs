@@ -6,6 +6,8 @@ mod engine;
 mod fx;
 mod gfx;
 mod icon;
+mod install;
+mod lang;
 mod mic;
 mod policy;
 mod ring;
@@ -15,12 +17,42 @@ mod ui;
 mod voices;
 
 fn main() -> windows::core::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    // Relaunched elevated by the window to rename the virtual cable; does that and exits.
-    if let [_, flag, render, capture] = args.as_slice()
-        && flag == "--name-cable"
-    {
-        return policy::name_cable(render, capture);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match args.as_slice() {
+        // Relaunched elevated to (re)name the virtual cable; does only that.
+        ["--name-cable", render, capture] => policy::name_cable(render, capture, ("Goby", "Goby Mic")),
+        ["--name-cable", render, capture, play_name, record_name] => {
+            policy::name_cable(render, capture, (play_name, record_name))
+        }
+        // Silent install for scripts and package managers.
+        ["--install", rest @ ..] => {
+            if let Err(e) = install::install(rest.contains(&"--desktop")) {
+                install::failed(&e);
+            }
+            Ok(())
+        }
+        ["--uninstall", rest @ ..] => {
+            install::uninstall(rest.contains(&"--quiet"));
+            Ok(())
+        }
+        // Debug builds and `--portable` skip the setup question.
+        rest if cfg!(debug_assertions) || rest.contains(&"--portable") || install::is_installed_copy() => ui::run(),
+        _ => match install::ask() {
+            install::Choice::Install { desktop } => {
+                match install::install(desktop) {
+                    Ok(exe) => {
+                        let _ = std::process::Command::new(exe).spawn();
+                    }
+                    Err(e) => {
+                        install::failed(&e);
+                        ui::run()?;
+                    }
+                }
+                Ok(())
+            }
+            install::Choice::RunOnce => ui::run(),
+            install::Choice::Quit => Ok(()),
+        },
     }
-    ui::run()
 }

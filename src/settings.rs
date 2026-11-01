@@ -56,10 +56,15 @@ fn list(v: &str) -> Vec<String> {
 }
 
 fn path() -> Option<PathBuf> {
-    std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Goby").join("settings.ini"))
+    Settings::dir().map(|d| d.join("settings.ini"))
 }
 
 impl Settings {
+    /// `%APPDATA%\Goby`, where the settings live.
+    pub fn dir() -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Goby"))
+    }
+
     pub fn parse(text: &str) -> Settings {
         let mut s = Settings::default();
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
@@ -154,12 +159,7 @@ mod tests {
 
     #[test]
     fn old_files_do_not_double_the_pitch() {
-        let s = Settings::parse(
-            "preset=1
-semitones=8
-volume=1
-",
-        );
+        let s = Settings::parse("preset=1\nsemitones=8\nvolume=1\n");
         assert_eq!(s.semitones, 0.0);
         assert_eq!(s.voice, "minion");
     }

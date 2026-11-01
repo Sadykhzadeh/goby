@@ -57,11 +57,12 @@ pub fn rename(id: &str, name: &str) -> Result<()> {
     }
 }
 
-/// Entry point of `goby.exe --name-cable <render id> <capture id>`, run elevated.
-pub fn name_cable(render: &str, capture: &str) -> Result<()> {
+/// Entry point of `goby.exe --name-cable <render id> <capture id> [<render name> <capture name>]`,
+/// run elevated: names the cable "Goby" / "Goby Mic", or whatever names are given.
+pub fn name_cable(render: &str, capture: &str, names: (&str, &str)) -> Result<()> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()? };
-    rename(render, "Goby")?;
-    rename(capture, "Goby Mic")
+    rename(render, names.0)?;
+    rename(capture, names.1)
 }
 
 /// Per-app default devices: what Settings > Sound > Volume mixer sets for each program.
