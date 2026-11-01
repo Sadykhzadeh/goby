@@ -2,6 +2,7 @@
 
 mod dsp;
 mod engine;
+mod fx;
 mod ring;
 mod settings;
 mod ui;
