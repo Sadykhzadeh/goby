@@ -14,6 +14,7 @@ use windows::Win32::Graphics::Dwm::{
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -131,6 +132,46 @@ impl Layout {
     }
 }
 
+/// A native popup menu, prepared by the window and shown by `show` with no borrow of the
+/// window state alive. Choices are reported by key (device id or exe name), not position.
+struct Popup {
+    pick: Option<Pick>,
+    labels: Vec<String>,
+    keys: Vec<String>,
+    checked: Option<usize>,
+    /// Label of the last item and title of the file dialog it opens.
+    browse: Option<(String, String)>,
+    at: POINT,
+}
+
+impl Popup {
+    fn show(&self, hwnd: HWND) -> Option<String> {
+        const BROWSE: usize = 10_000;
+        let chosen = unsafe {
+            let menu = CreatePopupMenu().ok()?;
+            for (i, label) in self.labels.iter().enumerate() {
+                let flags = if self.checked == Some(i) { MF_STRING | MF_CHECKED } else { MF_STRING };
+                let _ = AppendMenuW(menu, flags, i + 1, &HSTRING::from(label.as_str()));
+            }
+            if let Some((label, _)) = &self.browse {
+                if !self.labels.is_empty() {
+                    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                }
+                let _ = AppendMenuW(menu, MF_STRING, BROWSE, &HSTRING::from(label.as_str()));
+            }
+            let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN;
+            let id = TrackPopupMenuEx(menu, flags.0, self.at.x, self.at.y, hwnd, None);
+            let _ = DestroyMenu(menu);
+            id.0 as usize
+        };
+        match chosen {
+            0 => None,
+            BROWSE => browse_exe(hwnd, &self.browse.as_ref()?.1),
+            i => self.keys.get(i - 1).cloned(),
+        }
+    }
+}
+
 struct Drag {
     hit: Hit,
     /// For scrollbars: pointer y and scroll offset when the drag started.
@@ -187,8 +228,10 @@ struct App {
     mic_apps: Vec<apps::MicApp>,
     app_state: Vec<AppState>,
     apps_at: Instant,
-    /// Processes already pinned to Goby, so each is asked only once.
+    /// Processes already pinned to Goby, so each is asked only once, and the cable path
+    /// they were pinned to: a different cable starts the cache over.
     pinned: Vec<u32>,
+    pinned_to: String,
     /// Re-read device names a moment after the elevated rename was started.
     recheck_at: Option<Instant>,
 
@@ -360,6 +403,7 @@ impl App {
             app_state: Vec::new(),
             apps_at: Instant::now(),
             pinned: Vec::new(),
+            pinned_to: String::new(),
             recheck_at: None,
             mouse: (-1.0, -1.0),
             hover: Hit::None,
@@ -444,8 +488,22 @@ impl App {
     /// them back). Windows keeps the choice per program, so it outlives this process.
     fn sync_apps(&mut self) {
         self.apps_at = Instant::now();
-        let record = self.cable.as_ref().map(|(_, r)| r.id.clone());
-        let ours = record.as_deref().map(policy::capture_interface_path).unwrap_or_default();
+        let offered: Vec<apps::MicApp> =
+            apps::recent().into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
+        // Without the cable there is nothing to pin to, and "" would match every program.
+        let Some(record) = self.cable.as_ref().map(|(_, r)| r.id.clone()) else {
+            let states = vec![AppState::Waiting; self.settings.routed.len()];
+            if offered != self.mic_apps || states != self.app_state {
+                self.dirty = true;
+            }
+            (self.mic_apps, self.app_state) = (offered, states);
+            return;
+        };
+        let ours = policy::capture_interface_path(&record);
+        if ours != self.pinned_to {
+            self.pinned.clear();
+            self.pinned_to = ours.clone();
+        }
         let snapshot = apps::processes();
         self.pinned.retain(|pid| snapshot.iter().any(|(_, p)| p == pid));
 
@@ -456,7 +514,7 @@ impl App {
             // One success covers the whole program; Windows stores the choice per program.
             for pid in pids.iter().filter(|_| !pinned) {
                 let already = policy::app_route(*pid).is_ok_and(|now| now.eq_ignore_ascii_case(&ours));
-                if already || record.as_deref().is_some_and(|id| policy::route_app(*pid, Some(id)).is_ok()) {
+                if already || policy::route_app(*pid, Some(&record)).is_ok() {
                     pinned = true;
                     self.pinned.push(*pid);
                     break;
@@ -488,8 +546,6 @@ impl App {
             self.settings.save();
         }
 
-        let offered: Vec<apps::MicApp> =
-            apps::recent().into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
         if offered != self.mic_apps || states != self.app_state {
             self.dirty = true;
         }
@@ -509,42 +565,74 @@ impl App {
         self.sync_apps();
     }
 
-    /// Native menu of recent microphone users, plus "Other program..." for anything else.
-    fn add_app_menu(&mut self) {
-        const BROWSE: usize = 10_000;
-        let Some(row) = self.hits.iter().find(|(_, h)| *h == Hit::AddApp).map(|(r, _)| *r) else { return };
-        let scale = self.dpi / 96.0;
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            for (i, a) in self.mic_apps.iter().enumerate() {
-                let label = if a.active {
+    /// The "Add a program" menu: recent microphone users, plus "Other program…".
+    fn app_popup(&self) -> Option<Popup> {
+        let row = self.hits.iter().find(|(_, h)| *h == Hit::AddApp).map(|(r, _)| *r)?;
+        let labels = self
+            .mic_apps
+            .iter()
+            .map(|a| {
+                if a.active {
                     format!("{}\t{}", a.name, self.t("слушает сейчас", "listening now"))
                 } else {
                     a.name.clone()
-                };
-                let _ = AppendMenuW(menu, MF_STRING, i + 1, &HSTRING::from(label));
-            }
-            if !self.mic_apps.is_empty() {
-                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            }
-            let other = HSTRING::from(self.t("Другая программа…", "Other program…"));
-            let _ = AppendMenuW(menu, MF_STRING, BROWSE, &other);
-            let mut p = POINT { x: ((row.l + 52.0) * scale) as i32, y: (row.b * scale) as i32 };
+                }
+            })
+            .collect();
+        Some(Popup {
+            pick: None,
+            labels,
+            keys: self.mic_apps.iter().map(|a| a.exe.clone()).collect(),
+            checked: None,
+            browse: Some((
+                self.t("Другая программа…", "Other program…").into(),
+                self.t("Какая программа должна слышать Goby?", "Which program should hear Goby?").into(),
+            )),
+            at: self.screen_point(row.l + 52.0, row.b),
+        })
+    }
+
+    /// The device menu under a picker card, keyed by endpoint id.
+    fn device_popup(&mut self, pick: Pick) -> Option<Popup> {
+        self.refresh_devices();
+        let card = self.hits.iter().find(|(_, h)| *h == Hit::Pick(pick)).map(|(r, _)| *r)?;
+        let (items, selected) = match pick {
+            Pick::Mic => (&self.inputs, self.input),
+            Pick::Out => (&self.outputs, self.output),
+        };
+        Some(Popup {
+            pick: Some(pick),
+            labels: items.iter().map(|e| e.name.clone()).collect(),
+            keys: items.iter().map(|e| e.id.clone()).collect(),
+            checked: Some(selected),
+            browse: None,
+            at: self.screen_point(card.l + 52.0, card.b),
+        })
+    }
+
+    fn screen_point(&self, x: f32, y: f32) -> POINT {
+        let scale = self.dpi / 96.0;
+        let mut p = POINT { x: (x * scale) as i32, y: (y * scale) as i32 };
+        unsafe {
             let _ = ClientToScreen(self.hwnd, &mut p);
-            let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN;
-            let id = TrackPopupMenuEx(menu, flags.0, p.x, p.y, self.hwnd, None);
-            let _ = DestroyMenu(menu);
-            id.0 as usize
-        };
-        let exe = match chosen {
-            0 => None,
-            BROWSE => {
-                browse_exe(self.hwnd, self.t("Какая программа должна слышать Goby?", "Which program should hear Goby?"))
+        }
+        p
+    }
+
+    /// Applies what was chosen in a popup, by key: the lists may have changed meanwhile.
+    fn popup_done(&mut self, pick: Option<Pick>, key: String) {
+        match pick {
+            None => self.route(key),
+            Some(pick) => {
+                let list = if pick == Pick::Mic { &self.inputs } else { &self.outputs };
+                if let Some(i) = list.iter().position(|e| e.id == key) {
+                    match pick {
+                        Pick::Mic => self.input = i,
+                        Pick::Out => self.output = i,
+                    }
+                    self.restart();
+                }
             }
-            i => self.mic_apps.get(i - 1).map(|a| a.exe.clone()),
-        };
-        if let Some(exe) = exe {
-            self.route(exe);
         }
         self.dirty = true;
     }
@@ -690,7 +778,8 @@ impl App {
         self.set_knob(k, lo + t * (hi - lo));
     }
 
-    fn press(&mut self, double: bool) {
+    /// Handles a click. Menus are returned rather than shown: see `Popup`.
+    fn press(&mut self, double: bool) -> Option<Popup> {
         let hit = self.hit_at(self.mouse);
         match hit {
             Hit::Tile(i) => {
@@ -726,7 +815,7 @@ impl App {
                 }
                 self.settings.save();
             }
-            Hit::Pick(p) => self.menu(p),
+            Hit::Pick(p) => return self.device_popup(p),
             Hit::Remove(i) => {
                 if i < self.settings.routed.len() {
                     let exe = self.settings.routed.remove(i);
@@ -736,7 +825,7 @@ impl App {
                     self.sync_apps();
                 }
             }
-            Hit::AddApp => self.add_app_menu(),
+            Hit::AddApp => return self.app_popup(),
             Hit::About => unsafe {
                 ShellExecuteW(
                     Some(self.hwnd),
@@ -757,6 +846,7 @@ impl App {
             }
             Hit::None => {}
         }
+        None
     }
 
     fn moved(&mut self) {
@@ -837,38 +927,6 @@ impl App {
             a.target = (row + TILE_H - self.lay.gallery.h()).min(self.gallery_max);
         }
         true
-    }
-
-    /// A real Win32 popup menu under the card: native look, keyboard and accessibility.
-    fn menu(&mut self, pick: Pick) {
-        self.refresh_devices();
-        let (items, selected) = match pick {
-            Pick::Mic => (&self.inputs, self.input),
-            Pick::Out => (&self.outputs, self.output),
-        };
-        let Some(card) = self.hits.iter().find(|(_, h)| *h == Hit::Pick(pick)).map(|(r, _)| *r) else { return };
-        let scale = self.dpi / 96.0;
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            for (i, e) in items.iter().enumerate() {
-                let flags = if i == selected { MF_STRING | MF_CHECKED } else { MF_STRING };
-                let _ = AppendMenuW(menu, flags, i + 1, &HSTRING::from(e.name.as_str()));
-            }
-            let mut p = POINT { x: ((card.l + 52.0) * scale) as i32, y: (card.b * scale) as i32 };
-            let _ = ClientToScreen(self.hwnd, &mut p);
-            let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN;
-            let id = TrackPopupMenuEx(menu, flags.0, p.x, p.y, self.hwnd, None);
-            let _ = DestroyMenu(menu);
-            id.0 as usize
-        };
-        if chosen > 0 {
-            match pick {
-                Pick::Mic => self.input = chosen - 1,
-                Pick::Out => self.output = chosen - 1,
-            }
-            self.restart();
-        }
-        self.dirty = true;
     }
 
     // ---------- drawing ----------
@@ -1176,6 +1234,7 @@ impl App {
         g.unclip();
         let content = y + scroll - self.lay.pane.t;
         self.settings_max = (content - self.lay.pane.h()).max(0.0);
+        self.settings_scroll.target = self.settings_scroll.target.min(self.settings_max);
         self.scrollbar(g, self.lay.pane, scroll, self.settings_max, Pane::Settings);
         Ok(())
     }
@@ -1362,7 +1421,18 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 app.mouse = point(lp, app.dpi);
-                app.press(msg == WM_LBUTTONDBLCLK);
+                if let Some(popup) = app.press(msg == WM_LBUTTONDBLCLK) {
+                    // The menu runs a modal loop that sends timers and paints back here, so
+                    // `app` is not used across it; it is fetched again afterwards.
+                    let chosen = popup.show(hwnd);
+                    let Some(app) = app_of(hwnd) else { return LRESULT(0) };
+                    if let Some(key) = chosen {
+                        app.popup_done(popup.pick, key);
+                    }
+                    app.hover = app.hit_at(app.mouse);
+                    app.dirty = true;
+                    return LRESULT(0);
+                }
                 app.hover = app.hit_at(app.mouse);
                 app.dirty = true;
                 LRESULT(0)
@@ -1453,6 +1523,16 @@ fn window_size(w: f32, h: f32, dpi: u32, style: WINDOW_STYLE) -> (i32, i32) {
 
 pub fn run() -> Result<()> {
     unsafe {
+        // A second Goby would open a second engine into the same cable: bring the first one
+        // forward instead.
+        let _guard = CreateMutexW(None, true, w!("Goby.SingleInstance"))?;
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            if let Ok(hwnd) = FindWindowW(w!("GobyWindow"), PCWSTR::null()) {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
+            return Ok(());
+        }
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let instance = GetModuleHandleW(None)?;
@@ -1482,11 +1562,18 @@ pub fn run() -> Result<()> {
             None,
         )?;
 
-        // The monitor the window landed on may not be the primary one.
+        // Fit the monitor the window landed on: its DPI, and its work area on small laptops.
         let dpi = GetDpiForWindow(hwnd);
-        if dpi != GetDpiForSystem() {
-            let (w, h) = window_size(WIDTH, HEIGHT, dpi, style);
-            let _ = SetWindowPos(hwnd, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
+        let (mut w, mut h) = window_size(WIDTH, HEIGHT, dpi, style);
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info).as_bool() {
+            let work = info.rcWork;
+            let (min_w, min_h) = window_size(MIN_W, MIN_H, dpi, style);
+            w = w.min(work.right - work.left).max(min_w);
+            h = h.min(work.bottom - work.top).max(min_h);
+            let x = work.left + (work.right - work.left - w).max(0) / 2;
+            let y = work.top + (work.bottom - work.top - h).max(0) / 2;
+            let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER);
         }
 
         let mut app = Box::new(App::new(hwnd));
