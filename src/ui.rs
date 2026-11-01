@@ -548,6 +548,10 @@ impl App {
     fn paint(&mut self) -> Result<()> {
         self.ensure_gfx()?;
         let g = self.gfx.as_ref().unwrap();
+        // Behind a fullscreen game nobody sees the window; skip the GPU work entirely.
+        if unsafe { g.rt.CheckWindowState() } == D2D1_WINDOW_STATE_OCCLUDED {
+            return Ok(());
+        }
         let result = unsafe {
             g.rt.BeginDraw();
             g.rt.Clear(Some(&rgb(BASE)));
@@ -1051,6 +1055,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let cursor = if app.hover == Hit::None { IDC_ARROW } else { IDC_HAND };
                 SetCursor(LoadCursorW(None, cursor).ok());
                 LRESULT(1)
+            }
+            WM_SIZE if wp.0 as u32 == SIZE_MINIMIZED => {
+                // Give the GPU memory back while we sit in the taskbar.
+                app.gfx = None;
+                LRESULT(0)
             }
             WM_SIZE => {
                 if let Some(g) = &app.gfx {
