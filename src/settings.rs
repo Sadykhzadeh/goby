@@ -62,6 +62,11 @@ impl Settings {
                 _ => {}
             }
         }
+        // Files from before the voice catalog stored an absolute pitch per preset; as an
+        // offset on top of a voice that would double it, so start those from zero.
+        if !text.lines().any(|l| l.trim_start().starts_with("voice=")) {
+            s.semitones = 0.0;
+        }
         s
     }
 
@@ -116,6 +121,18 @@ mod tests {
             dry_mix: 0.25,
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    #[test]
+    fn old_files_do_not_double_the_pitch() {
+        let s = Settings::parse(
+            "preset=1
+semitones=8
+volume=1
+",
+        );
+        assert_eq!(s.semitones, 0.0);
+        assert_eq!(s.voice, "minion");
     }
 
     #[test]
