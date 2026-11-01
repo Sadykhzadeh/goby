@@ -429,6 +429,27 @@ impl Voice {
 mod tests {
     use super::*;
 
+    #[test]
+    fn tone_moves_even_a_dry_voice() {
+        let mut v = Voice::new(SR);
+        v.set(&Recipe::DRY, 12.0, 1.0);
+        let mut x = sine(220.0, 1.0);
+        v.process(&mut x);
+        // The soft limiter squashes the sine a little, so look at the dominant frequency only.
+        let f = dominant_freq(&x[SR as usize / 4..]);
+        assert!((f - 440.0).abs() <= 4.0, "got {f}");
+    }
+
+    #[test]
+    fn dry_voice_without_tone_is_bit_exact() {
+        let mut v = Voice::new(SR);
+        v.set(&Recipe::DRY, 0.0, 1.0);
+        let input = sine(330.0, 0.1);
+        let mut x = input.clone();
+        v.process(&mut x);
+        assert_eq!(x, input);
+    }
+
     const SR: u32 = 48_000;
 
     fn sine(freq: f32, secs: f32) -> Vec<f32> {
