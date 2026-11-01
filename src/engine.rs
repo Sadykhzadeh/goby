@@ -52,6 +52,10 @@ pub struct Shared {
     mic_frames: AtomicU32,
     effect_frames: AtomicU32,
     queued_frames: AtomicU32,
+    /// Ring fill the outputs aim for, set by the mic from its packet size (0 = default).
+    ring_target: AtomicU32,
+    /// Whether the mic really runs in exclusive mode (it falls back to shared).
+    pub mic_exclusive: AtomicBool,
     /// Times the cable ran dry and had to wait (each one is an audible gap).
     pub underruns: AtomicU32,
 }
@@ -74,6 +78,8 @@ impl Default for Shared {
             mic_frames: AtomicU32::new(0),
             effect_frames: AtomicU32::new(0),
             queued_frames: AtomicU32::new(0),
+            ring_target: AtomicU32::new(0),
+            mic_exclusive: AtomicBool::new(false),
             underruns: AtomicU32::new(0),
         }
     }
@@ -175,6 +181,36 @@ pub fn default_endpoint(capture: bool) -> Option<Endpoint> {
     describe(&dev).ok()
 }
 
+/// Integer or float PCM at 48 kHz, for exclusive mode where nothing converts for us.
+fn pcm_format(channels: u16, sample: Sample) -> WAVEFORMATEX {
+    let bits: u16 = if sample == Sample::I16 { 16 } else { 32 };
+    WAVEFORMATEX {
+        wFormatTag: if sample == Sample::F32 { 3 } else { 1 },
+        nChannels: channels,
+        nSamplesPerSec: RATE,
+        nAvgBytesPerSec: RATE * (bits / 8 * channels) as u32,
+        nBlockAlign: bits / 8 * channels,
+        wBitsPerSample: bits,
+        cbSize: 0,
+    }
+}
+
+/// Turns one captured packet into mono float, whatever the stream delivers.
+unsafe fn to_mono(data: *const u8, frames: usize, channels: usize, sample: Sample, out: &mut [f32]) {
+    let n = frames * channels;
+    let read = |i: usize| unsafe {
+        match sample {
+            Sample::F32 => *(data as *const f32).add(i),
+            Sample::I32 => *(data as *const i32).add(i) as f32 / 2_147_483_648.0,
+            Sample::I16 => *(data as *const i16).add(i) as f32 / 32_768.0,
+        }
+    };
+    debug_assert!(out.len() >= frames && n >= frames);
+    for (f, o) in out[..frames].iter_mut().enumerate() {
+        *o = (0..channels).map(|c| read(f * channels + c)).sum::<f32>() / channels as f32;
+    }
+}
+
 fn float_format(channels: u16) -> WAVEFORMATEX {
     WAVEFORMATEX {
         wFormatTag: 3, // WAVE_FORMAT_IEEE_FLOAT
@@ -187,11 +223,20 @@ fn float_format(channels: u16) -> WAVEFORMATEX {
     }
 }
 
+/// Sample format of a stream's buffer; shared mode is always float, exclusive mode is not.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Sample {
+    F32,
+    I32,
+    I16,
+}
+
 struct Stream {
     client: IAudioClient,
     event: HANDLE,
     frames: u32,
     channels: usize,
+    sample: Sample,
 }
 
 impl Stream {
@@ -204,7 +249,46 @@ impl Stream {
                 | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
             // 10 ms: Windows rounds up to what the device can actually do.
             client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 100_000, 0, &float_format(channels), None)?;
-            Stream::finish(client, channels as usize)
+            Stream::finish(client, channels as usize, Sample::F32)
+        }
+    }
+
+    /// Exclusive mode at the device's shortest period: a USB mic that delivers 10 ms
+    /// packets to the shared engine often manages 3 ms on its own. `None` when the device
+    /// takes none of our formats; errors when it is busy or exclusive mode is disallowed.
+    fn open_exclusive(id: &str) -> WinResult<Option<Stream>> {
+        unsafe {
+            let dev = enumerator()?.GetDevice(&HSTRING::from(id))?;
+            let mut client: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
+            let (mut default, mut min) = (0i64, 0i64);
+            client.GetDevicePeriod(Some(&mut default), Some(&mut min))?;
+            let formats = [
+                (1, Sample::F32),
+                (1, Sample::I32),
+                (1, Sample::I16),
+                (2, Sample::F32),
+                (2, Sample::I32),
+                (2, Sample::I16),
+            ];
+            let Some((fmt, channels, sample)) = formats
+                .into_iter()
+                .map(|(ch, sample)| (pcm_format(ch, sample), ch, sample))
+                .find(|(f, _, _)| client.IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, f, None).is_ok())
+            else {
+                return Ok(None);
+            };
+            let flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
+            if let Err(e) = client.Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, flags, min, min, &fmt, None) {
+                if e.code() != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED {
+                    return Err(e);
+                }
+                // The driver wants a whole number of its own blocks: ask again with that size.
+                let frames = client.GetBufferSize()?;
+                let period = (10_000_000.0 * frames as f64 / RATE as f64).round() as i64;
+                client = dev.Activate(CLSCTX_ALL, None)?;
+                client.Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, flags, period, period, &fmt, None)?;
+            }
+            Stream::finish(client, channels as usize, sample).map(Some)
         }
     }
 
@@ -231,16 +315,16 @@ impl Stream {
                 return Ok(None);
             }
             result?;
-            Stream::finish(client.cast()?, mix.nChannels as usize).map(Some)
+            Stream::finish(client.cast()?, mix.nChannels as usize, Sample::F32).map(Some)
         }
     }
 
-    fn finish(client: IAudioClient, channels: usize) -> WinResult<Stream> {
+    fn finish(client: IAudioClient, channels: usize, sample: Sample) -> WinResult<Stream> {
         unsafe {
             let event = CreateEventW(None, false, false, None)?;
             client.SetEventHandle(event)?;
             let frames = client.GetBufferSize()?;
-            Ok(Stream { client, event, frames, channels })
+            Ok(Stream { client, event, frames, channels, sample })
         }
     }
 
@@ -276,7 +360,13 @@ pub struct Engine {
 
 impl Engine {
     /// `outputs[0]` is the cable; the rest (your headphones) do not count towards latency.
-    pub fn start(input: &str, outputs: &[String], shared: Arc<Shared>) -> std::result::Result<Engine, String> {
+    /// `exclusive` asks for the mic in exclusive mode, falling back to shared if refused.
+    pub fn start(
+        input: &str,
+        exclusive: bool,
+        outputs: &[String],
+        shared: Arc<Shared>,
+    ) -> std::result::Result<Engine, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let mut engine = Engine { stop: stop.clone(), threads: Vec::new() };
         let mut producers = Vec::new();
@@ -289,7 +379,7 @@ impl Engine {
             engine.threads.push(std::thread::spawn(move || render(&id, Reader::new(cons), i == 0, &stop, &shared, tx)));
         }
         let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready_tx);
-        engine.threads.push(std::thread::spawn(move || capture(&id, producers, &stop2, &shared2, tx)));
+        engine.threads.push(std::thread::spawn(move || capture(&id, exclusive, producers, &stop2, &shared2, tx)));
 
         for _ in 0..outputs.len() + 1 {
             match ready_rx.recv_timeout(Duration::from_secs(3)) {
@@ -352,6 +442,7 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
             if !s.wait() {
                 continue;
             }
+            reader.set_target(shared.ring_target.load(Relaxed));
             let n = s.frames - s.client.GetCurrentPadding()?;
             if n == 0 {
                 continue;
@@ -371,9 +462,18 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
     });
 }
 
-fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared, ready: Ready) {
+fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared, ready: Ready) {
     run(shared, ready, |started| unsafe {
-        let s = Stream::open(id, 1)?;
+        let s = match exclusive.then(|| Stream::open_exclusive(id)) {
+            Some(Ok(Some(s))) => s,
+            _ => Stream::open(id, 1)?,
+        };
+        let is_exclusive = s.sample != Sample::F32 || s.channels != 1 || s.frames < 400;
+        shared.mic_exclusive.store(is_exclusive, Relaxed);
+        // The outputs need one mic packet in hand plus 2 ms of slack for scheduling jitter.
+        let packet = if is_exclusive { s.frames } else { (RATE as f64 * TARGET_MS / 1000.0) as u32 - RATE / 500 };
+        shared.ring_target.store(packet + RATE / 500, Relaxed);
+        let mut input = vec![0.0f32; s.frames.max(MAX_BLOCK as u32) as usize * 2];
         let cap: IAudioCaptureClient = s.client.GetService()?;
         let mut voice = Voice::new(RATE);
         let mut mic = Mic::new(RATE);
@@ -389,8 +489,12 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                 let (mut data, mut n, mut flags) = (std::ptr::null_mut(), 0u32, 0u32);
                 cap.GetBuffer(&mut data, &mut n, &mut flags, None, None)?;
                 let silent = flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 || data.is_null();
-                let packet: &[f32] =
-                    if silent { &[] } else { std::slice::from_raw_parts(data as *const f32, n as usize) };
+                let frames = (n as usize).min(input.len());
+                if silent {
+                    input[..frames].fill(0.0);
+                } else {
+                    to_mono(data, frames, s.channels, s.sample, &mut input);
+                }
 
                 let enabled = shared.enabled.load(Relaxed);
                 let chosen = if enabled { shared.voice.load(Relaxed) as usize } else { 0 };
@@ -403,14 +507,10 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                 voice.set(&def.recipe, semis, gain);
 
                 let mut done = 0;
-                while done < n as usize {
-                    let len = (n as usize - done).min(MAX_BLOCK);
+                while done < frames {
+                    let len = (frames - done).min(MAX_BLOCK);
                     let chunk = &mut block[..len];
-                    if silent {
-                        chunk.fill(0.0);
-                    } else {
-                        chunk.copy_from_slice(&packet[done..done + len]);
-                    }
+                    chunk.copy_from_slice(&input[done..done + len]);
                     done += len;
 
                     mic.process(chunk, mic_gain, gate);
@@ -466,6 +566,14 @@ impl Reader {
     fn new(ring: Consumer) -> Self {
         let target = RATE as f64 * TARGET_MS / 1000.0;
         Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, priming: true, underruns: 0 }
+    }
+
+    /// Follows the mic: a smaller packet needs less cushion. 0 keeps the default.
+    fn set_target(&mut self, frames: u32) {
+        if frames > 0 && frames as f64 != self.target {
+            self.target = frames as f64;
+            self.fill = self.target;
+        }
     }
 
     fn next(&mut self) -> f32 {
@@ -576,27 +684,86 @@ mod live {
     #[ignore = "needs real audio devices"]
     fn live_latency() {
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
-        let mic = default_endpoint(true).expect("no mic");
-        let cable = list(false).into_iter().find(|e| e.name.contains("CABLE Input")).expect("no VB-Cable");
+        let saved = crate::settings::Settings::load().input;
+        let mics = list(true);
+        let mic = mics.iter().find(|e| e.id == saved).or(mics.first()).expect("no mic").clone();
+        let (cable, _) = cable().expect("no VB-Cable");
         let shared = Arc::new(Shared::default());
         shared.set(voices::index_of("minion").unwrap(), 0.0, 1.0);
-        let engine = Engine::start(&mic.id, std::slice::from_ref(&cable.id), shared.clone()).expect("start");
+        let exclusive = std::env::var("GOBY_SHARED").is_err();
+        let engine = Engine::start(&mic.id, exclusive, std::slice::from_ref(&cable.id), shared.clone()).expect("start");
         std::thread::sleep(Duration::from_secs(1));
         let mut samples = Vec::new();
+        let mut parts = Vec::new();
         for _ in 0..300 {
             std::thread::sleep(Duration::from_millis(100));
             samples.push(shared.latency_ms());
+            parts.push([&shared.mic_frames, &shared.effect_frames, &shared.queued_frames].map(|a| a.load(Relaxed)));
         }
         drop(engine);
         let avg = samples.iter().sum::<f32>() / samples.len() as f32;
         let (min, max) = samples.iter().fold((f32::MAX, 0f32), |(a, b), s| (a.min(*s), b.max(*s)));
         println!(
-            "{} → {}: latency min {min:.1} avg {avg:.1} max {max:.1} ms, underruns {}, failed={}",
+            "{} → {}: latency min {min:.1} avg {avg:.1} max {max:.1} ms, underruns {}, exclusive={}, failed={}",
             mic.name,
             cable.name,
             shared.underruns.load(Relaxed),
+            shared.mic_exclusive.load(Relaxed),
             shared.failed.load(Relaxed)
         );
+        let avg_ms = |k: usize| {
+            parts.iter().map(|p: &[u32; 3]| p[k] as f32).sum::<f32>() / parts.len() as f32 / RATE as f32 * 1000.0
+        };
+        println!(
+            "  mic packet {:.1} ms, effect {:.1} ms, ring + cable queue {:.1} ms",
+            avg_ms(0),
+            avg_ms(1),
+            avg_ms(2)
+        );
         assert!(!shared.failed.load(Relaxed));
+    }
+}
+
+#[cfg(test)]
+mod exclusive_probe {
+    use super::*;
+
+    /// `cargo test --release exclusive_formats -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs real audio devices"]
+    fn exclusive_formats() {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+        for ep in list(true) {
+            let r = (|| unsafe {
+                let dev = enumerator()?.GetDevice(&HSTRING::from(ep.id.as_str()))?;
+                let c: IAudioClient = dev.Activate(CLSCTX_ALL, None)?;
+                let (mut def, mut min) = (0i64, 0i64);
+                c.GetDevicePeriod(Some(&mut def), Some(&mut min))?;
+                let mut ok = Vec::new();
+                for ch in [1u16, 2] {
+                    for (tag, bits) in [(1u16, 16u16), (1, 24), (1, 32), (3, 32)] {
+                        let f = WAVEFORMATEX {
+                            wFormatTag: tag,
+                            nChannels: ch,
+                            nSamplesPerSec: RATE,
+                            nAvgBytesPerSec: RATE * (bits / 8 * ch) as u32,
+                            nBlockAlign: bits / 8 * ch,
+                            wBitsPerSample: bits,
+                            cbSize: 0,
+                        };
+                        if c.IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &f, None).is_ok() {
+                            ok.push(format!("{ch}ch {}{bits}", if tag == 3 { "f" } else { "i" }));
+                        }
+                    }
+                }
+                WinResult::Ok(format!(
+                    "period default {:.2} ms, min {:.2} ms; exclusive: {:?}",
+                    def as f64 / 1e4,
+                    min as f64 / 1e4,
+                    ok
+                ))
+            })();
+            println!("{:<34} {}", ep.name, r.unwrap_or_else(|e| e.to_string()));
+        }
     }
 }

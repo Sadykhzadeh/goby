@@ -18,6 +18,8 @@ pub struct Settings {
     pub gate_db: f32,
     /// Share of the original voice mixed back in, 0..1.
     pub dry_mix: f32,
+    /// Take the mic in exclusive mode for shorter packets (falls back if refused).
+    pub exclusive: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +36,7 @@ impl Default for Settings {
             gate: false,
             gate_db: -50.0,
             dry_mix: 0.0,
+            exclusive: true,
         }
     }
 }
@@ -58,6 +61,7 @@ impl Settings {
                 "mic_gain_db" => s.mic_gain_db = v.parse::<f32>().unwrap_or(s.mic_gain_db).clamp(-12.0, 24.0),
                 "gate" => s.gate = v == "1",
                 "gate_db" => s.gate_db = v.parse::<f32>().unwrap_or(s.gate_db).clamp(-80.0, -10.0),
+                "exclusive" => s.exclusive = v != "0",
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -72,7 +76,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\n",
             self.input,
             self.output,
             self.voice,
@@ -84,6 +88,7 @@ impl Settings {
             self.gate as u8,
             self.gate_db,
             self.dry_mix,
+            self.exclusive as u8,
         )
     }
 
@@ -119,6 +124,7 @@ mod tests {
             gate: true,
             gate_db: -45.0,
             dry_mix: 0.25,
+            exclusive: false,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

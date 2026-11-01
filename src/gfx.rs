@@ -376,6 +376,7 @@ pub mod glyph {
     pub const CHECK: u16 = 0xE73E;
     pub const RENAME: u16 = 0xE8AC;
     pub const GAME: u16 = 0xE7FC;
+    pub const SPEED: u16 = 0xEC4A;
     pub const VOLUME: u16 = 0xE767;
     pub const TONE: u16 = 0xE8D6;
     pub const GATE: u16 = 0xE9E9;

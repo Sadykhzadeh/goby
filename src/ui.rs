@@ -56,6 +56,7 @@ enum Switch {
     Effect,
     Gate,
     Monitor,
+    Exclusive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -159,7 +160,7 @@ struct App {
     settings_scroll: Anim,
     gallery_max: f32,
     settings_max: f32,
-    switches: [Anim; 3],
+    switches: [Anim; 4],
     tab_x: Anim,
     tab_w: Anim,
     tab_widths: Vec<f32>,
@@ -253,7 +254,7 @@ impl App {
             settings_scroll: Anim::default(),
             gallery_max: 0.0,
             settings_max: 0.0,
-            switches: [Anim::default(); 3],
+            switches: [Anim::default(); 4],
             tab_x: Anim::default(),
             tab_w: Anim::default(),
             tab_widths: Vec::new(),
@@ -264,7 +265,8 @@ impl App {
             dirty: true,
             quiet_frames: 0,
         };
-        for (i, on) in [app.settings.enabled, app.settings.gate, app.settings.monitor].into_iter().enumerate() {
+        let s = &app.settings;
+        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive].into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
         }
@@ -327,7 +329,7 @@ impl App {
         {
             targets.push(d.id);
         }
-        match Engine::start(&mic.id, &targets, self.shared.clone()) {
+        match Engine::start(&mic.id, self.settings.exclusive, &targets, self.shared.clone()) {
             Ok(e) => {
                 self.healthy = true;
                 self.status.clear();
@@ -399,7 +401,7 @@ impl App {
             self.refresh_devices();
             self.restart();
         }
-        let on = [self.settings.enabled, self.settings.gate, self.settings.monitor];
+        let on = [self.settings.enabled, self.settings.gate, self.settings.monitor, self.settings.exclusive];
         let mut moving = false;
         for (a, on) in self.switches.iter_mut().zip(on) {
             a.target = if on { 1.0 } else { 0.0 };
@@ -463,9 +465,10 @@ impl App {
                     Switch::Effect => self.settings.enabled = !self.settings.enabled,
                     Switch::Gate => self.settings.gate = !self.settings.gate,
                     Switch::Monitor => self.settings.monitor = !self.settings.monitor,
+                    Switch::Exclusive => self.settings.exclusive = !self.settings.exclusive,
                 }
                 self.apply();
-                if s == Switch::Monitor {
+                if matches!(s, Switch::Monitor | Switch::Exclusive) {
                     self.restart();
                 }
                 self.settings.save();
@@ -865,6 +868,15 @@ impl App {
         section(g, &mut y, self.t("Микрофон", "Microphone"))?;
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
         self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
+        let fast = self.t("Низкая задержка", "Low latency");
+        let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
+            (true, true) => {
+                self.t("Эксклюзивный режим: микрофон только у Goby", "Exclusive mode: only Goby uses the mic")
+            }
+            (true, false) => self.t("Микрофон не дал эксклюзивный режим", "The mic refused exclusive mode"),
+            _ => self.t("Общий режим, пакеты по 10 мс", "Shared mode, 10 ms packets"),
+        };
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
         self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
         let gate = self.t("Глушит клавиатуру и шум между фразами", "Mutes keys and noise between phrases");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
