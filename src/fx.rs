@@ -253,6 +253,42 @@ impl Reverb {
     }
 }
 
+/// Lo-fi: holds samples to fake a lower sample rate and quantises to fewer bits.
+#[derive(Clone, Copy, Default)]
+pub struct Crusher {
+    held: f32,
+    phase: f32,
+}
+
+impl Crusher {
+    #[inline]
+    pub fn process(&mut self, x: f32, rate_hz: f32, bits: u32, sample_rate: f32) -> f32 {
+        self.phase += rate_hz / sample_rate;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+            let steps = (1u32 << bits.clamp(1, 16)) as f32 / 2.0;
+            self.held = (x * steps).round() / steps;
+        }
+        self.held
+    }
+}
+
+/// Envelope follower: fast attack, slower release, in linear amplitude.
+#[derive(Clone, Copy, Default)]
+pub struct Envelope {
+    level: f32,
+}
+
+impl Envelope {
+    #[inline]
+    pub fn next(&mut self, x: f32, attack: f32, release: f32) -> f32 {
+        let a = x.abs();
+        let k = if a > self.level { attack } else { release };
+        self.level += (a - self.level) * k;
+        self.level
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -326,6 +362,15 @@ mod tests {
         let late = peak(out[(SR * 3.5) as usize..].iter().copied());
         assert!(early > 0.005, "no tail: {early}");
         assert!(late < early * 0.1, "does not decay: {late} vs {early}");
+    }
+
+    #[test]
+    fn crusher_quantises_to_its_bit_depth() {
+        let mut c = Crusher::default();
+        for i in 0..1000 {
+            let y = c.process(sine(100.0, i, SR), 8000.0, 3, SR);
+            assert!(((y * 4.0).round() - y * 4.0).abs() < 1e-5, "{y} is not on a 3-bit step");
+        }
     }
 
     #[test]
