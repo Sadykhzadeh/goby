@@ -1,149 +1,130 @@
-//! The window: plain Win32 + Direct2D + DirectWrite, drawn by hand in DIPs.
-//!
-//! One fixed-size layout, retained only as a handful of fields on `App`;
-//! everything is repainted at ~30 fps because the scope is live anyway.
+//! The window, laid out like Windows 11 Settings: Mica backdrop, cards, the system accent,
+//! Segoe UI Variable and native menus. Plain Win32 underneath; drawn by `gfx`.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::*;
-use windows::Win32::Graphics::Direct2D::*;
-use windows::Win32::Graphics::DirectWrite::*;
-use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
-use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_UNKNOWN;
+use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+use windows::Win32::Graphics::Dwm::{
+    DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Interface, Result, w};
-use windows_numerics::Vector2;
+use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, Result, w};
 
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
+use crate::gfx::{Align, Font, Gfx, R, glyph};
 use crate::settings::Settings;
-use crate::voices;
-
-static BASTELEUR: &[u8] = include_bytes!("../ui/fonts/Basteleur-Bold.ttf");
-
-// Warm graphite, not slate. The only colour is a pale, tonal lemon.
-const BASE: u32 = 0x141311;
-const SURFACE: u32 = 0x1b1916;
-const FIELD: u32 = 0x211f1b;
-const EDGE: u32 = 0x2c2924;
-const INK: u32 = 0xece8df;
-const MUTED: u32 = 0xa8a296;
-const FAINT: u32 = 0x615c54;
-const WATERMARK: u32 = 0x262420;
-const ACCENT: u32 = 0xe8dc96;
-const WARN: u32 = 0xe9a07a;
+use crate::theme::{Theme, argb, with_alpha};
+use crate::voices::{self, Category};
 
 // Layout, in DIPs.
-const WIDTH: f32 = 580.0;
-const HEIGHT: f32 = 760.0;
-const LEFT: f32 = 28.0;
-const RIGHT: f32 = WIDTH - 28.0;
-const SCOPE: R = R { l: LEFT, t: 76.0, r: RIGHT, b: 286.0 };
-const PRESETS: R = R { l: LEFT, t: 304.0, r: RIGHT, b: 368.0 };
-const TONE_Y: f32 = 392.0;
-const VOLUME_Y: f32 = 474.0;
-const RULER_H: f32 = 62.0;
-const COMBO_X: f32 = 168.0;
-const COMBO_H: f32 = 34.0;
-const MIC_Y: f32 = 564.0;
-const OUT_Y: f32 = 608.0;
-const MONITOR_Y: f32 = 658.0;
-const FOOT_Y: f32 = 708.0;
-const ITEM_H: f32 = 32.0;
-const LINK_TEXT: &str = "Настройки звука";
-// Lives in Win32_UI_Controls; not worth pulling that whole feature in for one number.
+const WIDTH: f32 = 920.0;
+const HEIGHT: f32 = 720.0;
+const SCOPE: R = R::new(24.0, 16.0, 560.0, 164.0);
+const TABS_Y: f32 = 192.0;
+const GALLERY: R = R::new(24.0, 236.0, 560.0, 468.0);
+const COLS: usize = 4;
+const TILE_GAP: f32 = 8.0;
+/// Room on the right of a scrolling pane for its scrollbar.
+const GUTTER: f32 = 12.0;
+const TILE_H: f32 = 76.0;
+const PANE: R = R::new(604.0, 16.0, 292.0, 688.0);
+const CARD_GAP: f32 = 4.0;
+
 const WM_MOUSELEAVE: u32 = 0x02A3;
-const LIST_MAX: usize = 7;
+const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x0020_0000);
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-struct R {
-    l: f32,
-    t: f32,
-    r: f32,
-    b: f32,
-}
-
-impl R {
-    const fn new(l: f32, t: f32, w: f32, h: f32) -> R {
-        R { l, t, r: l + w, b: t + h }
-    }
-    fn w(&self) -> f32 {
-        self.r - self.l
-    }
-    fn h(&self) -> f32 {
-        self.b - self.t
-    }
-    fn has(&self, (x, y): (f32, f32)) -> bool {
-        x >= self.l && x < self.r && y >= self.t && y < self.b
-    }
-    fn d2d(&self) -> D2D_RECT_F {
-        D2D_RECT_F { left: self.l, top: self.t, right: self.r, bottom: self.b }
-    }
-}
-
-fn rgb(hex: u32) -> D2D1_COLOR_F {
-    let c = |s: u32| ((hex >> s) & 0xff) as f32 / 255.0;
-    D2D1_COLOR_F { r: c(16), g: c(8), b: c(0), a: 1.0 }
-}
-
-fn mix(a: u32, b: u32, t: f32) -> D2D1_COLOR_F {
-    let (a, b) = (rgb(a), rgb(b));
-    let l = |x: f32, y: f32| x + (y - x) * t.clamp(0.0, 1.0);
-    D2D1_COLOR_F { r: l(a.r, b.r), g: l(a.g, b.g), b: l(a.b, b.b), a: 1.0 }
-}
-
-fn v(x: f32, y: f32) -> Vector2 {
-    Vector2 { X: x, Y: y }
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Knob {
+    Tone,
+    Volume,
+    Mix,
+    Gain,
+    Gate,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Which {
+enum Switch {
+    Effect,
+    Gate,
+    Monitor,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Pick {
     Mic,
     Out,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum Pane {
+    Gallery,
+    Settings,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Hit {
     None,
-    Preset(usize),
-    Tone,
-    Volume,
-    Combo(Which),
-    Item(Which, usize),
-    Monitor,
-    Link,
+    Tile(usize),
+    Tab(Option<Category>),
+    Slider(Knob),
+    Toggle(Switch),
+    Pick(Pick),
+    Help,
+    Scrollbar(Pane),
 }
 
-struct Fonts {
-    body: IDWriteTextFormat,
-    strong: IDWriteTextFormat,
-    small: IDWriteTextFormat,
-    readout: IDWriteTextFormat,
-    field: IDWriteTextFormat,
-    mark: IDWriteTextFormat,
-    preset: IDWriteTextFormat,
-    watermark: IDWriteTextFormat,
+impl Knob {
+    /// (minimum, maximum, step, reset value)
+    fn range(self) -> (f32, f32, f32, f32) {
+        match self {
+            Knob::Tone => (-12.0, 12.0, 1.0, 0.0),
+            Knob::Volume => (0.0, 2.0, 0.05, 1.0),
+            Knob::Mix => (0.0, 1.0, 0.05, 0.0),
+            Knob::Gain => (-12.0, 24.0, 1.0, 0.0),
+            Knob::Gate => (-80.0, -10.0, 1.0, -50.0),
+        }
+    }
 }
 
-struct Gfx {
-    rt: ID2D1HwndRenderTarget,
-    brush: ID2D1SolidColorBrush,
+struct Drag {
+    hit: Hit,
+    /// For scrollbars: pointer y and scroll offset when the drag started.
+    from: (f32, f32),
+}
+
+/// Eases towards a target each frame; reports whether it is still moving.
+#[derive(Clone, Copy, Default)]
+struct Anim {
+    value: f32,
+    target: f32,
+}
+
+impl Anim {
+    fn step(&mut self, rate: f32) -> bool {
+        let d = self.target - self.value;
+        if d.abs() < 0.001 {
+            self.value = self.target;
+            return false;
+        }
+        self.value += d * rate;
+        true
+    }
 }
 
 struct App {
     hwnd: HWND,
-    d2d: ID2D1Factory,
-    dw: IDWriteFactory,
-    fonts: Fonts,
-    round: ID2D1StrokeStyle,
     gfx: Option<Gfx>,
+    theme: Theme,
+    mica: bool,
+    ru: bool,
     dpi: f32,
 
     settings: Settings,
@@ -151,7 +132,8 @@ struct App {
     outputs: Vec<Endpoint>,
     input: usize,
     output: usize,
-    preset: usize,
+    voice: usize,
+    filter: Option<Category>,
 
     shared: Arc<Shared>,
     engine: Option<Engine>,
@@ -161,112 +143,146 @@ struct App {
 
     mouse: (f32, f32),
     hover: Hit,
-    drag: Option<Hit>,
-    open: Option<Which>,
-    scroll: usize,
-    /// Width of the "sound settings" link text, measured once; its hit area hangs off it.
-    link_w: f32,
-    glow: [f32; 6],
-    knob: f32,
+    drag: Option<Drag>,
+    hits: Vec<(R, Hit)>,
+    tracks: Vec<(Knob, R)>,
+    gallery_scroll: Anim,
+    settings_scroll: Anim,
+    gallery_max: f32,
+    settings_max: f32,
+    switches: [Anim; 3],
+    tab_x: Anim,
+    tab_w: Anim,
+    tab_widths: Vec<f32>,
     latency: f32,
-    glyphs: Vec<Vec<(f32, f32)>>,
+    glyphs: Vec<Vec<f32>>,
     raw: Box<[f32; SCOPE_LEN]>,
     voiced: Box<[f32; SCOPE_LEN]>,
-}
-
-/// The window shows the six basic voices; the rest of the catalog arrives with the gallery.
-const SHOWN: usize = 6;
-
-fn name_of(voice: usize) -> &'static str {
-    voices::ALL[voice].en
-}
-
-/// Each voice is drawn as the waveform it actually makes, in a 44x18 box.
-fn glyph(voice: usize) -> Vec<(f32, f32)> {
-    let wave = voices::glyph(&voices::ALL[voice], 97);
-    wave.iter().enumerate().map(|(i, s)| (i as f32 * 44.0 / 96.0, 9.0 - s * 7.0)).collect()
+    dirty: bool,
+    quiet_frames: u32,
 }
 
 fn short(name: &str) -> &str {
     name.split(" (").next().unwrap_or(name)
 }
 
-impl App {
-    fn new(hwnd: HWND) -> Result<App> {
-        unsafe {
-            let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let dw: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
-            let fonts = make_fonts(&dw)?;
-            let round = d2d.CreateStrokeStyle(
-                &D2D1_STROKE_STYLE_PROPERTIES {
-                    startCap: D2D1_CAP_STYLE_ROUND,
-                    endCap: D2D1_CAP_STYLE_ROUND,
-                    dashCap: D2D1_CAP_STYLE_ROUND,
-                    lineJoin: D2D1_LINE_JOIN_ROUND,
-                    miterLimit: 1.0,
-                    dashStyle: D2D1_DASH_STYLE_SOLID,
-                    dashOffset: 0.0,
-                },
-                None,
-            )?;
+#[link(name = "kernel32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn GetUserDefaultUILanguage() -> u16;
+}
 
-            let settings = Settings::load();
-            let mut app = App {
-                hwnd,
-                d2d,
-                dw,
-                fonts,
-                round,
-                gfx: None,
-                dpi: GetDpiForWindow(hwnd) as f32,
-                preset: voices::index_of(&settings.voice).unwrap_or(1).min(SHOWN - 1),
-                settings,
-                inputs: Vec::new(),
-                outputs: Vec::new(),
-                input: 0,
-                output: 0,
-                shared: Arc::new(Shared::default()),
-                engine: None,
-                status: String::new(),
-                healthy: true,
-                retry_at: None,
-                mouse: (-1.0, -1.0),
-                hover: Hit::None,
-                drag: None,
-                open: None,
-                scroll: 0,
-                link_w: 0.0,
-                glow: [0.0; 6],
-                knob: 0.0,
-                latency: 0.0,
-                glyphs: (0..SHOWN).map(glyph).collect(),
-                raw: Box::new([0.0; SCOPE_LEN]),
-                voiced: Box::new([0.0; SCOPE_LEN]),
-            };
-            app.knob = if app.settings.monitor { 1.0 } else { 0.0 };
-            app.link_w = app.measure(LINK_TEXT, &app.fonts.strong)?;
-            app.refresh_devices();
-            app.apply_voice();
-            app.restart();
-            Ok(app)
+#[repr(C)]
+struct Margins {
+    left: i32,
+    right: i32,
+    top: i32,
+    bottom: i32,
+}
+
+#[link(name = "dwmapi", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn DwmExtendFrameIntoClientArea(hwnd: HWND, margins: *const Margins) -> HRESULT;
+}
+
+/// Lets Win32 menus follow the dark theme. uxtheme exports these by ordinal only; they have
+/// been stable since Windows 10 1903 and are what Explorer and Notepad use.
+fn allow_dark_menus(hwnd: HWND) {
+    unsafe {
+        let Ok(ux) = LoadLibraryW(w!("uxtheme.dll")) else { return };
+        if let Some(f) = GetProcAddress(ux, PCSTR(135 as *const u8)) {
+            let set_preferred_app_mode: extern "system" fn(i32) -> i32 = std::mem::transmute(f);
+            set_preferred_app_mode(1); // AllowDark: follow the system setting
+        }
+        if let Some(f) = GetProcAddress(ux, PCSTR(133 as *const u8)) {
+            let allow_for_window: extern "system" fn(HWND, BOOL) -> BOOL = std::mem::transmute(f);
+            let _ = allow_for_window(hwnd, true.into());
+        }
+        if let Some(f) = GetProcAddress(ux, PCSTR(136 as *const u8)) {
+            let flush_menu_themes: extern "system" fn() = std::mem::transmute(f);
+            flush_menu_themes();
         }
     }
+}
+
+impl App {
+    fn new(hwnd: HWND) -> App {
+        let settings = Settings::load();
+        let ru = unsafe { GetUserDefaultUILanguage() } & 0x3ff == 0x19;
+        let mut app = App {
+            hwnd,
+            gfx: None,
+            theme: Theme::system(),
+            mica: false,
+            ru,
+            dpi: unsafe { GetDpiForWindow(hwnd) } as f32,
+            voice: voices::index_of(&settings.voice).unwrap_or(1),
+            settings,
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            input: 0,
+            output: 0,
+            filter: None,
+            shared: Arc::new(Shared::default()),
+            engine: None,
+            status: String::new(),
+            healthy: true,
+            retry_at: None,
+            mouse: (-1.0, -1.0),
+            hover: Hit::None,
+            drag: None,
+            hits: Vec::new(),
+            tracks: Vec::new(),
+            gallery_scroll: Anim::default(),
+            settings_scroll: Anim::default(),
+            gallery_max: 0.0,
+            settings_max: 0.0,
+            switches: [Anim::default(); 3],
+            tab_x: Anim::default(),
+            tab_w: Anim::default(),
+            tab_widths: Vec::new(),
+            latency: 0.0,
+            glyphs: voices::ALL.iter().map(|v| voices::glyph(v, 48)).collect(),
+            raw: Box::new([0.0; SCOPE_LEN]),
+            voiced: Box::new([0.0; SCOPE_LEN]),
+            dirty: true,
+            quiet_frames: 0,
+        };
+        for (i, on) in [app.settings.enabled, app.settings.gate, app.settings.monitor].into_iter().enumerate() {
+            let v = if on { 1.0 } else { 0.0 };
+            app.switches[i] = Anim { value: v, target: v };
+        }
+        app.refresh_devices();
+        app.apply();
+        app.restart();
+        app
+    }
+
+    fn t(&self, ru: &'static str, en: &'static str) -> &'static str {
+        if self.ru { ru } else { en }
+    }
+
+    // ---------- state ----------
 
     fn refresh_devices(&mut self) {
+        let keep_in = self.inputs.get(self.input).map(|e| e.id.clone()).unwrap_or(self.settings.input.clone());
+        let keep_out = self.outputs.get(self.output).map(|e| e.id.clone()).unwrap_or(self.settings.output.clone());
         self.inputs = engine::list(true);
         self.outputs = engine::list(false);
         let pick = |list: &[Endpoint], id: &str| list.iter().position(|e| e.id == id);
-        self.input = pick(&self.inputs, &self.settings.input)
+        self.input = pick(&self.inputs, &keep_in)
             .or_else(|| engine::default_endpoint(true).and_then(|d| pick(&self.inputs, &d.id)))
             .unwrap_or(0);
-        self.output = pick(&self.outputs, &self.settings.output)
+        self.output = pick(&self.outputs, &keep_out)
             .or_else(|| self.outputs.iter().position(|e| e.name.to_ascii_lowercase().contains("cable input")))
             .unwrap_or(0);
     }
 
-    fn apply_voice(&mut self) {
-        self.settings.voice = voices::ALL[self.preset].id.to_string();
-        self.shared.set(self.preset, self.settings.semitones, self.settings.volume);
+    fn apply(&mut self) {
+        let s = &mut self.settings;
+        s.voice = voices::ALL[self.voice].id.to_string();
+        self.shared.set(self.voice, s.semitones, s.volume);
+        self.shared.set_mic(s.mic_gain_db, s.gate.then_some(s.gate_db), s.dry_mix, s.enabled);
+        self.dirty = true;
     }
 
     fn restart(&mut self) {
@@ -277,9 +293,9 @@ impl App {
         let (Some(mic), Some(out)) = (self.inputs.get(self.input), self.outputs.get(self.output)) else {
             self.healthy = false;
             self.status = if self.inputs.is_empty() {
-                "Микрофон не найден".into()
+                self.t("Микрофон не найден", "No microphone found").into()
             } else {
-                "Нет выходов звука".into()
+                self.t("Нет устройств вывода", "No output devices").into()
             };
             return;
         };
@@ -294,7 +310,7 @@ impl App {
         match Engine::start(&mic.id, &targets, self.shared.clone()) {
             Ok(e) => {
                 self.healthy = true;
-                self.status = format!("Голос идёт в {}", short(&out.name));
+                self.status.clear();
                 self.engine = Some(e);
             }
             Err(e) => {
@@ -304,155 +320,171 @@ impl App {
             }
         }
         self.settings.save();
+        self.dirty = true;
+    }
+
+    fn knob(&self, k: Knob) -> f32 {
+        let s = &self.settings;
+        match k {
+            Knob::Tone => s.semitones,
+            Knob::Volume => s.volume,
+            Knob::Mix => s.dry_mix,
+            Knob::Gain => s.mic_gain_db,
+            Knob::Gate => s.gate_db,
+        }
+    }
+
+    fn set_knob(&mut self, k: Knob, v: f32) {
+        let (lo, hi, step, _) = k.range();
+        let v = ((v / step).round() * step).clamp(lo, hi);
+        let s = &mut self.settings;
+        match k {
+            Knob::Tone => s.semitones = v,
+            Knob::Volume => s.volume = v,
+            Knob::Mix => s.dry_mix = v,
+            Knob::Gain => s.mic_gain_db = v,
+            Knob::Gate => s.gate_db = v,
+        }
+        self.apply();
+    }
+
+    fn readout(&self, k: Knob) -> String {
+        let v = self.knob(k);
+        let signed = |v: f32| if v > 0.0 { format!("+{v}") } else { format!("{v}").replace('-', "−") };
+        match k {
+            Knob::Tone => format!("{} {}", signed(v), self.t("пт", "st")),
+            Knob::Volume | Knob::Mix => format!("{} %", (v * 100.0).round()),
+            Knob::Gain | Knob::Gate => format!("{} {}", signed(v), self.t("дБ", "dB")),
+        }
+    }
+
+    fn filtered(&self) -> Vec<usize> {
+        (0..voices::ALL.len()).filter(|i| self.filter.is_none_or(|c| voices::ALL[*i].category == c)).collect()
     }
 
     fn tick(&mut self) {
         if self.shared.failed.load(Relaxed) && self.retry_at.is_none() {
             self.engine = None;
             self.healthy = false;
-            self.status = "Устройство пропало, переподключаюсь…".into();
+            self.status = self.t("Устройство пропало, переподключаюсь…", "Device lost, reconnecting…").into();
             self.retry_at = Some(Instant::now() + Duration::from_secs(2));
+            self.dirty = true;
         }
         if self.retry_at.is_some_and(|t| Instant::now() >= t) {
             self.refresh_devices();
             self.restart();
         }
-        for (i, g) in self.glow.iter_mut().enumerate() {
-            let target = if i == self.preset {
-                1.0
-            } else if self.hover == Hit::Preset(i) {
-                0.45
-            } else {
-                0.0
-            };
-            *g += (target - *g) * 0.35;
+        let on = [self.settings.enabled, self.settings.gate, self.settings.monitor];
+        let mut moving = false;
+        for (a, on) in self.switches.iter_mut().zip(on) {
+            a.target = if on { 1.0 } else { 0.0 };
+            moving |= a.step(0.35);
         }
-        let k = if self.settings.monitor { 1.0 } else { 0.0 };
-        self.knob += (k - self.knob) * 0.4;
-        // The live figure jitters by a packet; ease it so the readout does not flicker.
+        moving |= self.tab_x.step(0.3) | self.tab_w.step(0.3);
+        moving |= self.gallery_scroll.step(0.3) | self.settings_scroll.step(0.3);
+        self.dirty |= moving;
+
         let measured = self.shared.latency_ms();
         self.latency = if self.latency == 0.0 { measured } else { self.latency + (measured - self.latency) * 0.05 };
+
+        // Only redraw the scope while there is something to see.
+        self.shared.scope(&mut self.raw, &mut self.voiced);
+        let loud = |x: &[f32]| x.iter().any(|s| s.abs() > 0.003);
+        let active = loud(&self.raw[SCOPE_LEN - 960..]) || loud(&self.voiced[SCOPE_LEN - 960..]);
+        self.quiet_frames = if active { 0 } else { self.quiet_frames + 1 };
+        if self.quiet_frames < 3 {
+            self.dirty = true;
+        }
     }
 
     // ---------- input ----------
 
-    fn list_rect(&self, which: Which) -> (R, usize) {
-        let (y, count) = match which {
-            Which::Mic => (MIC_Y, self.inputs.len()),
-            Which::Out => (OUT_Y, self.outputs.len()),
-        };
-        let shown = count.min(LIST_MAX);
-        let h = shown as f32 * ITEM_H + 8.0;
-        let below = y + COMBO_H + 4.0;
-        let top = if below + h <= HEIGHT - 8.0 { below } else { y - 4.0 - h };
-        (R { l: COMBO_X, t: top, r: RIGHT, b: top + h }, shown)
+    fn hit_at(&self, p: (f32, f32)) -> Hit {
+        self.hits.iter().rev().find(|(r, _)| r.has(p)).map_or(Hit::None, |(_, h)| *h)
     }
 
-    fn hit(&self, p: (f32, f32)) -> Hit {
-        if let Some(which) = self.open {
-            let (r, shown) = self.list_rect(which);
-            if r.has(p) {
-                let i = ((p.1 - r.t - 4.0) / ITEM_H).floor().max(0.0) as usize;
-                return Hit::Item(which, (i.min(shown.saturating_sub(1))) + self.scroll);
-            }
-            return Hit::None;
-        }
-        if PRESETS.has(p) {
-            let i = ((p.0 - PRESETS.l) / (PRESETS.w() / 6.0)) as usize;
-            return Hit::Preset(i.min(5));
-        }
-        if R::new(LEFT - 6.0, TONE_Y + 20.0, RIGHT - LEFT + 12.0, RULER_H - 14.0).has(p) {
-            return Hit::Tone;
-        }
-        if R::new(LEFT - 6.0, VOLUME_Y + 20.0, RIGHT - LEFT + 12.0, RULER_H - 14.0).has(p) {
-            return Hit::Volume;
-        }
-        if R::new(COMBO_X, MIC_Y, RIGHT - COMBO_X, COMBO_H).has(p) {
-            return Hit::Combo(Which::Mic);
-        }
-        if R::new(COMBO_X, OUT_Y, RIGHT - COMBO_X, COMBO_H).has(p) {
-            return Hit::Combo(Which::Out);
-        }
-        if R::new(COMBO_X, MONITOR_Y, 260.0, 24.0).has(p) {
-            return Hit::Monitor;
-        }
-        if (R { l: RIGHT - 18.0 - self.link_w, t: FOOT_Y + 4.0, r: RIGHT + 4.0, b: FOOT_Y + 32.0 }).has(p) {
-            return Hit::Link;
-        }
-        Hit::None
-    }
-
-    fn ruler_value(&mut self, which: Hit, x: f32) {
-        let t = ((x - LEFT) / (RIGHT - LEFT)).clamp(0.0, 1.0);
-        match which {
-            Hit::Tone => self.settings.semitones = (t * 24.0 - 12.0).round(),
-            Hit::Volume => self.settings.volume = (t * 2.0 / 0.05).round() * 0.05,
-            _ => return,
-        }
-        self.apply_voice();
+    fn slider_from_x(&mut self, k: Knob, x: f32) {
+        let Some((_, track)) = self.tracks.iter().find(|(kk, _)| *kk == k) else { return };
+        let (lo, hi, _, _) = k.range();
+        let t = ((x - track.l) / track.w()).clamp(0.0, 1.0);
+        self.set_knob(k, lo + t * (hi - lo));
     }
 
     fn press(&mut self, double: bool) {
-        let hit = self.hit(self.mouse);
-        if let Some(which) = self.open.take() {
-            if let Hit::Item(_, i) = hit {
-                match which {
-                    Which::Mic => self.input = i,
-                    Which::Out => self.output = i,
-                }
-                self.restart();
-            }
-            return;
-        }
+        let hit = self.hit_at(self.mouse);
         match hit {
-            Hit::Preset(i) => {
-                self.preset = i;
+            Hit::Tile(i) => {
+                self.voice = i;
                 self.settings.semitones = 0.0;
-                self.apply_voice();
+                self.apply();
                 self.settings.save();
             }
-            Hit::Tone | Hit::Volume if double => {
-                if hit == Hit::Tone {
-                    self.settings.semitones = 0.0;
-                } else {
-                    self.settings.volume = 1.0;
-                }
-                self.apply_voice();
+            Hit::Tab(c) => {
+                self.filter = c;
+                self.gallery_scroll.target = 0.0;
+                self.dirty = true;
+            }
+            Hit::Slider(k) if double => {
+                self.set_knob(k, k.range().3);
                 self.settings.save();
             }
-            Hit::Tone | Hit::Volume => {
-                self.drag = Some(hit);
+            Hit::Slider(k) => {
+                self.drag = Some(Drag { hit, from: self.mouse });
                 unsafe { SetCapture(self.hwnd) };
-                self.ruler_value(hit, self.mouse.0);
+                self.slider_from_x(k, self.mouse.0);
             }
-            Hit::Combo(which) => {
-                // Devices come and go; re-read them every time a list opens.
-                self.refresh_devices_keep();
-                self.open = Some(which);
-                let (sel, count) = match which {
-                    Which::Mic => (self.input, self.inputs.len()),
-                    Which::Out => (self.output, self.outputs.len()),
-                };
-                self.scroll = sel.saturating_sub(LIST_MAX - 1).min(count.saturating_sub(LIST_MAX));
+            Hit::Toggle(s) => {
+                match s {
+                    Switch::Effect => self.settings.enabled = !self.settings.enabled,
+                    Switch::Gate => self.settings.gate = !self.settings.gate,
+                    Switch::Monitor => self.settings.monitor = !self.settings.monitor,
+                }
+                self.apply();
+                if s == Switch::Monitor {
+                    self.restart();
+                }
+                self.settings.save();
             }
-            Hit::Monitor => {
-                self.settings.monitor = !self.settings.monitor;
-                self.restart();
-            }
-            Hit::Link => {
+            Hit::Pick(p) => self.menu(p),
+            Hit::Help => {
                 let _ = std::process::Command::new("control.exe").arg("mmsys.cpl,,1").spawn();
             }
-            Hit::None | Hit::Item(..) => {}
+            Hit::Scrollbar(pane) => {
+                let at = match pane {
+                    Pane::Gallery => self.gallery_scroll.value,
+                    Pane::Settings => self.settings_scroll.value,
+                };
+                self.drag = Some(Drag { hit, from: (self.mouse.1, at) });
+                unsafe { SetCapture(self.hwnd) };
+            }
+            Hit::None => {}
         }
     }
 
-    fn refresh_devices_keep(&mut self) {
-        let (mic, out) =
-            (self.inputs.get(self.input).map(|e| e.id.clone()), self.outputs.get(self.output).map(|e| e.id.clone()));
-        self.inputs = engine::list(true);
-        self.outputs = engine::list(false);
-        self.input = mic.and_then(|id| self.inputs.iter().position(|e| e.id == id)).unwrap_or(0);
-        self.output = out.and_then(|id| self.outputs.iter().position(|e| e.id == id)).unwrap_or(0);
+    fn moved(&mut self) {
+        match self.drag.as_ref().map(|d| (d.hit, d.from)) {
+            Some((Hit::Slider(k), _)) => self.slider_from_x(k, self.mouse.0),
+            Some((Hit::Scrollbar(pane), (y0, s0))) => {
+                let (view, max) = match pane {
+                    Pane::Gallery => (GALLERY.h(), self.gallery_max),
+                    Pane::Settings => (PANE.h(), self.settings_max),
+                };
+                let content = view + max;
+                let to = (s0 + (self.mouse.1 - y0) * content / view).clamp(0.0, max);
+                let a = match pane {
+                    Pane::Gallery => &mut self.gallery_scroll,
+                    Pane::Settings => &mut self.settings_scroll,
+                };
+                *a = Anim { value: to, target: to };
+                self.dirty = true;
+            }
+            _ => {}
+        }
+        let hover = self.hit_at(self.mouse);
+        if hover != self.hover {
+            self.hover = hover;
+            self.dirty = true;
+        }
     }
 
     fn release(&mut self) {
@@ -461,465 +493,464 @@ impl App {
                 let _ = ReleaseCapture();
             }
             self.settings.save();
+            self.dirty = true;
         }
     }
 
-    fn wheel(&mut self, up: bool) {
-        if let Some(which) = self.open {
-            let count = match which {
-                Which::Mic => self.inputs.len(),
-                Which::Out => self.outputs.len(),
-            };
-            let max = count.saturating_sub(LIST_MAX);
-            self.scroll = if up { self.scroll.saturating_sub(1) } else { (self.scroll + 1).min(max) };
-            return;
+    fn wheel(&mut self, notches: f32) {
+        if GALLERY.has(self.mouse) {
+            let a = &mut self.gallery_scroll;
+            a.target = (a.target - notches * (TILE_H + TILE_GAP)).clamp(0.0, self.gallery_max);
+        } else if PANE.has(self.mouse) {
+            let a = &mut self.settings_scroll;
+            a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
         }
-        match self.hit(self.mouse) {
-            Hit::Tone => {
-                self.settings.semitones = (self.settings.semitones + if up { 1.0 } else { -1.0 }).clamp(-12.0, 12.0);
-            }
-            Hit::Volume => {
-                let v = self.settings.volume + if up { 0.05 } else { -0.05 };
-                self.settings.volume = ((v / 0.05).round() * 0.05).clamp(0.0, 2.0);
-            }
-            _ => return,
+        self.dirty = true;
+    }
+
+    /// Arrow keys walk the gallery like a native grid view.
+    fn key(&mut self, vk: u16) -> bool {
+        let list = self.filtered();
+        if list.is_empty() {
+            return false;
         }
-        self.apply_voice();
+        let pos = list.iter().position(|i| *i == self.voice).unwrap_or(0);
+        let next = match VIRTUAL_KEY(vk) {
+            VK_LEFT => pos.saturating_sub(1),
+            VK_RIGHT => (pos + 1).min(list.len() - 1),
+            VK_UP => pos.saturating_sub(COLS),
+            VK_DOWN => (pos + COLS).min(list.len() - 1),
+            VK_HOME => 0,
+            VK_END => list.len() - 1,
+            _ => return false,
+        };
+        self.voice = list[next];
+        self.settings.semitones = 0.0;
+        self.apply();
         self.settings.save();
+        // Keep the selection in view.
+        let row = (next / COLS) as f32 * (TILE_H + TILE_GAP);
+        let a = &mut self.gallery_scroll;
+        if row < a.target {
+            a.target = row;
+        } else if row + TILE_H > a.target + GALLERY.h() {
+            a.target = (row + TILE_H - GALLERY.h()).min(self.gallery_max);
+        }
+        true
+    }
+
+    /// A real Win32 popup menu under the card: native look, keyboard and accessibility.
+    fn menu(&mut self, pick: Pick) {
+        self.refresh_devices();
+        let (items, selected) = match pick {
+            Pick::Mic => (&self.inputs, self.input),
+            Pick::Out => (&self.outputs, self.output),
+        };
+        let Some(card) = self.hits.iter().find(|(_, h)| *h == Hit::Pick(pick)).map(|(r, _)| *r) else { return };
+        let scale = self.dpi / 96.0;
+        let chosen = unsafe {
+            let Ok(menu) = CreatePopupMenu() else { return };
+            for (i, e) in items.iter().enumerate() {
+                let flags = if i == selected { MF_STRING | MF_CHECKED } else { MF_STRING };
+                let _ = AppendMenuW(menu, flags, i + 1, &HSTRING::from(e.name.as_str()));
+            }
+            let mut p = POINT { x: ((card.l + 52.0) * scale) as i32, y: (card.b * scale) as i32 };
+            let _ = ClientToScreen(self.hwnd, &mut p);
+            let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN;
+            let id = TrackPopupMenuEx(menu, flags.0, p.x, p.y, self.hwnd, None);
+            let _ = DestroyMenu(menu);
+            id.0 as usize
+        };
+        if chosen > 0 {
+            match pick {
+                Pick::Mic => self.input = chosen - 1,
+                Pick::Out => self.output = chosen - 1,
+            }
+            self.restart();
+        }
+        self.dirty = true;
     }
 
     // ---------- drawing ----------
 
-    fn ensure_gfx(&mut self) -> Result<()> {
-        if self.gfx.is_some() {
-            return Ok(());
-        }
-        unsafe {
-            let mut rc = RECT::default();
-            GetClientRect(self.hwnd, &mut rc)?;
-            let props = D2D1_RENDER_TARGET_PROPERTIES {
-                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
-                pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_UNKNOWN, alphaMode: D2D1_ALPHA_MODE_UNKNOWN },
-                dpiX: self.dpi,
-                dpiY: self.dpi,
-                usage: D2D1_RENDER_TARGET_USAGE_NONE,
-                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-            };
-            let hwnd_props = D2D1_HWND_RENDER_TARGET_PROPERTIES {
-                hwnd: self.hwnd,
-                pixelSize: D2D_SIZE_U { width: rc.right as u32, height: rc.bottom as u32 },
-                presentOptions: D2D1_PRESENT_OPTIONS_NONE,
-            };
-            let rt = self.d2d.CreateHwndRenderTarget(&props, &hwnd_props)?;
-            let brush = rt.CreateSolidColorBrush(&rgb(INK), None)?;
-            self.gfx = Some(Gfx { rt, brush });
-        }
-        Ok(())
-    }
-
     fn paint(&mut self) -> Result<()> {
-        self.ensure_gfx()?;
-        let g = self.gfx.as_ref().unwrap();
-        // Behind a fullscreen game nobody sees the window; skip the GPU work entirely.
-        if unsafe { g.rt.CheckWindowState() } == D2D1_WINDOW_STATE_OCCLUDED {
-            return Ok(());
+        if self.gfx.is_none() {
+            let mut rc = RECT::default();
+            unsafe { GetClientRect(self.hwnd, &mut rc)? };
+            self.gfx = Some(Gfx::new(self.hwnd, rc.right as u32, rc.bottom as u32, self.dpi)?);
         }
-        let result = unsafe {
-            g.rt.BeginDraw();
-            g.rt.Clear(Some(&rgb(BASE)));
-            self.draw(g)?;
-            g.rt.EndDraw(None, None)
+        let g = self.gfx.take().unwrap();
+        let background = if self.mica { D2D1_COLOR_F::default() } else { self.theme.solid_background() };
+        g.begin(background);
+        let drawn = self.draw(&g);
+        let presented = g.end();
+        self.gfx = Some(g);
+        drawn?;
+        if presented.is_err() {
+            // Device lost (driver update, GPU reset): rebuild on the next frame.
+            self.gfx = None;
+        }
+        self.dirty = false;
+        Ok(())
+    }
+
+    fn draw(&mut self, g: &Gfx) -> Result<()> {
+        self.hits.clear();
+        self.tracks.clear();
+        self.draw_scope(g)?;
+        self.draw_tabs(g)?;
+        self.draw_gallery(g)?;
+        self.draw_settings(g)?;
+        Ok(())
+    }
+
+    fn card(&self, g: &Gfx, r: R, radius: f32, hovered: bool) {
+        let th = &self.theme;
+        g.fill(r, radius, if hovered { th.control_hover() } else { th.card() });
+        g.stroke(r, radius, th.card_stroke(), 1.0);
+    }
+
+    /// WinUI ToggleSwitch: 40x20 track, 12 px knob that slides and recolours.
+    fn toggle(&self, g: &Gfx, x: f32, y: f32, which: Switch) {
+        let th = &self.theme;
+        let t = self.switches[which as usize].value;
+        let track = R::new(x, y, 40.0, 20.0);
+        if t < 1.0 {
+            g.fill(track, 10.0, with_alpha(th.control_alt(), 1.0 - t));
+            g.stroke(track, 10.0, with_alpha(th.strong_stroke(), 1.0 - t), 1.0);
+        }
+        if t > 0.0 {
+            g.fill(track, 10.0, with_alpha(th.accent(), t));
+        }
+        let radius = if self.hover == Hit::Toggle(which) { 7.0 } else { 6.0 };
+        let knob = if t > 0.5 { th.on_accent() } else { th.text_secondary() };
+        g.circle(x + 10.0 + 20.0 * t, y + 10.0, radius, knob);
+    }
+
+    /// WinUI Slider: 4 px rail, accent fill from the origin, raised thumb with an accent dot.
+    fn slider(&mut self, g: &Gfx, k: Knob, track: R) {
+        let th = self.theme;
+        let (lo, hi, _, _) = k.range();
+        let origin = if k == Knob::Tone { 0.0 } else { lo };
+        let at = |v: f32| track.l + (v - lo) / (hi - lo) * track.w();
+        let (x0, x1) = (at(origin), at(self.knob(k)));
+        let yc = track.t + track.h() / 2.0;
+        let dim = match k {
+            Knob::Gate => !self.settings.gate,
+            Knob::Gain => false,
+            _ => !self.settings.enabled,
         };
-        if let Err(e) = result {
-            if e.code() == D2DERR_RECREATE_TARGET {
-                self.gfx = None;
+        let accent = if dim { th.text_tertiary() } else { th.accent() };
+        g.fill(R::new(track.l, yc - 2.0, track.w(), 4.0), 2.0, th.strong_stroke());
+        g.fill(R { l: x0.min(x1), t: yc - 2.0, r: x0.max(x1), b: yc + 2.0 }, 2.0, accent);
+        g.circle(x1, yc, 10.0, th.control_stroke());
+        g.circle(x1, yc, 9.0, th.control_solid());
+        let pressed = self.drag.as_ref().is_some_and(|d| d.hit == Hit::Slider(k));
+        let hovered = self.hover == Hit::Slider(k);
+        g.circle(
+            x1,
+            yc,
+            if pressed {
+                5.0
+            } else if hovered {
+                7.0
             } else {
-                return Err(e);
-            }
-        }
+                6.0
+            },
+            accent,
+        );
+        self.tracks.push((k, track));
+        self.hits.push((R { l: track.l - 10.0, t: yc - 12.0, r: track.r + 10.0, b: yc + 12.0 }, Hit::Slider(k)));
+    }
+
+    fn draw_scope(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let r = SCOPE;
+        self.card(g, r, 8.0, false);
+        let def = &voices::ALL[self.voice];
+        g.text(
+            def.name(self.ru),
+            Font::Subtitle,
+            R::new(r.l + 20.0, r.t + 12.0, 380.0, 28.0),
+            Align::Start,
+            th.text(),
+        )?;
+        let (line, color) = if !self.healthy {
+            (self.status.clone(), argb(if th.dark { 0xFFFF99A4 } else { 0xFFC42B1C }))
+        } else if !self.settings.enabled {
+            let off = self.t("Эффект выключен: в игру идёт ваш голос", "Effect off: your own voice goes through");
+            (off.into(), th.text_secondary())
+        } else {
+            let lat = format!("{} {} {}", self.t("задержка", "latency"), self.latency.round(), self.t("мс", "ms"));
+            (format!("{} · {}", def.category.name(self.ru), lat), th.text_secondary())
+        };
+        g.text(&line, Font::Caption, R::new(r.l + 20.0, r.t + 40.0, 420.0, 18.0), Align::Start, color)?;
+
+        let label = self.t("Эффект", "Effect");
+        g.text(label, Font::Body, R::new(r.r - 160.0, r.t + 14.0, 88.0, 24.0), Align::End, th.text())?;
+        self.toggle(g, r.r - 60.0, r.t + 16.0, Switch::Effect);
+        self.hits.push((R::new(r.r - 170.0, r.t + 8.0, 156.0, 36.0), Hit::Toggle(Switch::Effect)));
+
+        let area = R::new(r.l + 20.0, r.t + 64.0, r.w() - 40.0, r.h() - 76.0);
+        g.line(&trace(&self.raw, area), th.text_tertiary(), 1.2)?;
+        g.line(&trace(&self.voiced, area), th.accent(), 2.0)?;
         Ok(())
     }
 
-    fn fill(&self, g: &Gfx, r: R, radius: f32, c: D2D1_COLOR_F) {
-        unsafe {
-            g.brush.SetColor(&c);
-            g.rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, &g.brush);
+    fn draw_tabs(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let mut items: Vec<(Option<Category>, &'static str)> = vec![(None, self.t("Все", "All"))];
+        items.extend(Category::ALL.iter().map(|c| (Some(*c), c.name(self.ru))));
+        if self.tab_widths.len() != items.len() {
+            self.tab_widths = items.iter().map(|(_, s)| g.measure(s, Font::Strong).unwrap_or(60.0)).collect();
         }
+        let mut x = SCOPE.l;
+        for (i, (cat, label)) in items.iter().enumerate() {
+            let w = self.tab_widths[i] + 24.0;
+            let r = R::new(x, TABS_Y, w, 36.0);
+            let selected = self.filter == *cat;
+            let color = if selected || self.hover == Hit::Tab(*cat) { th.text() } else { th.text_secondary() };
+            g.text(label, if selected { Font::Strong } else { Font::Body }, r, Align::Center, color)?;
+            if selected {
+                let (cx, iw) = (x + w / 2.0, 16.0);
+                if self.tab_w.target == 0.0 {
+                    self.tab_x = Anim { value: cx, target: cx };
+                    self.tab_w = Anim { value: iw, target: iw };
+                }
+                self.tab_x.target = cx;
+                self.tab_w.target = iw;
+            }
+            self.hits.push((r, Hit::Tab(*cat)));
+            x += w;
+        }
+        // The SelectorBar indicator slides to the chosen category.
+        let (cx, iw) = (self.tab_x.value, self.tab_w.value);
+        g.fill(R::new(cx - iw / 2.0, TABS_Y + 33.0, iw, 3.0), 1.5, th.accent());
+        Ok(())
     }
 
-    fn outline(&self, g: &Gfx, r: R, radius: f32, c: D2D1_COLOR_F) {
-        unsafe {
-            g.brush.SetColor(&c);
-            let half = R { l: r.l + 0.5, t: r.t + 0.5, r: r.r - 0.5, b: r.b - 0.5 };
-            g.rt.DrawRoundedRectangle(
-                &D2D1_ROUNDED_RECT { rect: half.d2d(), radiusX: radius, radiusY: radius },
-                &g.brush,
-                1.0,
-                None,
+    fn draw_gallery(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let list = self.filtered();
+        let tile_w = (GALLERY.w() - GUTTER - TILE_GAP * (COLS - 1) as f32) / COLS as f32;
+        let rows = list.len().div_ceil(COLS);
+        let content = rows as f32 * (TILE_H + TILE_GAP) - TILE_GAP;
+        self.gallery_max = (content - GALLERY.h()).max(0.0);
+        self.gallery_scroll.target = self.gallery_scroll.target.min(self.gallery_max);
+        let scroll = self.gallery_scroll.value.min(self.gallery_max);
+
+        g.clip(GALLERY);
+        for (n, &i) in list.iter().enumerate() {
+            let (row, col) = (n / COLS, n % COLS);
+            let r = R::new(
+                GALLERY.l + col as f32 * (tile_w + TILE_GAP),
+                GALLERY.t + row as f32 * (TILE_H + TILE_GAP) - scroll,
+                tile_w,
+                TILE_H,
             );
-        }
-    }
-
-    fn line(&self, g: &Gfx, pts: &[(f32, f32)], c: D2D1_COLOR_F, width: f32) -> Result<()> {
-        if pts.len() < 2 {
-            return Ok(());
-        }
-        unsafe {
-            let geo = self.d2d.CreatePathGeometry()?;
-            let sink = geo.Open()?;
-            sink.BeginFigure(v(pts[0].0, pts[0].1), D2D1_FIGURE_BEGIN_HOLLOW);
-            for p in &pts[1..] {
-                sink.AddLine(v(p.0, p.1));
+            if !r.intersects(&GALLERY) {
+                continue;
             }
-            sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            sink.Close()?;
-            g.brush.SetColor(&c);
-            g.rt.DrawGeometry(&geo, &g.brush, width, &self.round);
-        }
-        Ok(())
-    }
-
-    fn measure(&self, s: &str, f: &IDWriteTextFormat) -> Result<f32> {
-        unsafe {
-            let wide: Vec<u16> = s.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&wide, f, 4096.0, 256.0)?;
-            let mut m = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut m)?;
-            Ok(m.width)
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn text(
-        &self,
-        g: &Gfx,
-        s: &str,
-        f: &IDWriteTextFormat,
-        r: R,
-        h: DWRITE_TEXT_ALIGNMENT,
-        vert: DWRITE_PARAGRAPH_ALIGNMENT,
-        c: D2D1_COLOR_F,
-    ) -> Result<()> {
-        unsafe {
-            let wide: Vec<u16> = s.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&wide, f, r.w().max(1.0), r.h().max(1.0))?;
-            layout.SetTextAlignment(h)?;
-            layout.SetParagraphAlignment(vert)?;
-            g.brush.SetColor(&c);
-            g.rt.DrawTextLayout(v(r.l, r.t), &layout, &g.brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
-        }
-        Ok(())
-    }
-
-    fn draw(&self, g: &Gfx) -> Result<()> {
-        use DWRITE_PARAGRAPH_ALIGNMENT_CENTER as MID;
-        use DWRITE_PARAGRAPH_ALIGNMENT_NEAR as TOP;
-        use DWRITE_TEXT_ALIGNMENT_CENTER as CENTER;
-        use DWRITE_TEXT_ALIGNMENT_LEADING as START;
-        use DWRITE_TEXT_ALIGNMENT_TRAILING as END;
-        let f = &self.fonts;
-
-        // Header: wordmark and live status share one baseline row.
-        self.text(g, "goby", &f.mark, R::new(LEFT, 14.0, 200.0, 48.0), START, MID, rgb(INK))?;
-        let status_color = if self.healthy { rgb(MUTED) } else { rgb(WARN) };
-        self.text(g, &self.status, &f.small, R { l: 200.0, t: 14.0, r: RIGHT, b: 62.0 }, END, MID, status_color)?;
-
-        // Scope: the signature. Raw voice faint, transformed voice bright, name underneath.
-        self.fill(g, SCOPE, 16.0, rgb(SURFACE));
-        self.outline(g, SCOPE, 16.0, rgb(EDGE));
-        self.text(
-            g,
-            name_of(self.preset),
-            &f.watermark,
-            R { l: SCOPE.l + 24.0, t: SCOPE.b - 92.0, r: SCOPE.r - 24.0, b: SCOPE.b - 14.0 },
-            START,
-            DWRITE_PARAGRAPH_ALIGNMENT_FAR,
-            rgb(WATERMARK),
-        )?;
-        let meta = match &self.engine {
-            Some(_) => format!("48 кГц · {} мс", self.latency.round()),
-            None => "нет звука".into(),
-        };
-        self.text(
-            g,
-            &meta,
-            &f.small,
-            R { l: SCOPE.l, t: SCOPE.t + 14.0, r: SCOPE.r - 20.0, b: SCOPE.t + 34.0 },
-            END,
-            TOP,
-            rgb(MUTED),
-        )?;
-        self.line(g, &trace(&self.raw), rgb(FAINT), 1.4)?;
-        self.line(g, &trace(&self.voiced), rgb(ACCENT), 2.2)?;
-
-        // Presets as a typographic row; each glyph is the waveform it produces.
-        let cell = PRESETS.w() / 6.0;
-        for i in 0..SHOWN {
-            let x = PRESETS.l + cell * i as f32;
-            let glow = self.glow[i];
+            let selected = i == self.voice;
+            let hovered = self.hover == Hit::Tile(i);
+            g.fill(r, 4.0, if hovered { th.control_hover() } else { th.card() });
+            if selected {
+                g.stroke(r, 4.0, th.accent(), 2.0);
+            } else {
+                g.stroke(r, 4.0, th.card_stroke(), 1.0);
+            }
+            // The icon is the voice's own waveform.
+            let wave = &self.glyphs[i];
+            let (gl, gw, gy) = (r.l + 14.0, r.w() - 28.0, r.t + 24.0);
+            let last = (wave.len() - 1) as f32;
             let pts: Vec<(f32, f32)> =
-                self.glyphs[i].iter().map(|(gx, gy)| (x + cell / 2.0 - 22.0 + gx, PRESETS.t + 8.0 + gy)).collect();
-            self.line(g, &pts, mix(FAINT, ACCENT, glow), 1.7)?;
-            self.text(
-                g,
-                name_of(i),
-                &f.preset,
-                R::new(x, PRESETS.t + 32.0, cell, 28.0),
-                CENTER,
-                MID,
-                mix(FAINT, INK, glow),
-            )?;
+                wave.iter().enumerate().map(|(k, s)| (gl + gw * k as f32 / last, gy - s * 11.0)).collect();
+            g.line(&pts, if selected { th.accent() } else { th.text_secondary() }, 1.4)?;
+            let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0, 22.0);
+            g.text(voices::ALL[i].name(self.ru), Font::Body, name, Align::Start, th.text())?;
+            let visible = R { l: r.l, t: r.t.max(GALLERY.t), r: r.r, b: r.b.min(GALLERY.b) };
+            self.hits.push((visible, Hit::Tile(i)));
         }
-
-        let semis = self.settings.semitones;
-        let tone = format!("{}{} пт", if semis > 0.0 { "+" } else { "" }, semis.round());
-        self.ruler(g, TONE_Y, "Тон", &tone, (semis + 12.0) / 24.0, 0.5, 24, 6)?;
-        let vol = self.settings.volume;
-        self.ruler(g, VOLUME_Y, "Громкость", &format!("{} %", (vol * 100.0).round()), vol / 2.0, 0.0, 20, 5)?;
-
-        // Routing.
-        self.text(g, "Микрофон", &f.body, R::new(LEFT, MIC_Y, 130.0, COMBO_H), START, MID, rgb(MUTED))?;
-        self.combo(g, Which::Mic, MIC_Y)?;
-        self.text(g, "Куда отдавать", &f.body, R::new(LEFT, OUT_Y, 130.0, COMBO_H), START, MID, rgb(MUTED))?;
-        self.combo(g, Which::Out, OUT_Y)?;
-
-        let track = R::new(COMBO_X, MONITOR_Y + 2.0, 36.0, 20.0);
-        self.fill(g, track, 10.0, mix(EDGE, ACCENT, self.knob));
-        let kx = track.l + 10.0 + self.knob * 16.0;
-        unsafe {
-            g.brush.SetColor(&mix(MUTED, BASE, self.knob));
-            g.rt.FillEllipse(&D2D1_ELLIPSE { point: v(kx, track.t + 10.0), radiusX: 7.0, radiusY: 7.0 }, &g.brush);
-        }
-        let monitor_color = if self.hover == Hit::Monitor { rgb(INK) } else { mix(MUTED, INK, 0.5) };
-        self.text(
-            g,
-            "Слышать себя в наушниках",
-            &f.body,
-            R::new(COMBO_X + 48.0, MONITOR_Y, 260.0, 24.0),
-            START,
-            MID,
-            monitor_color,
-        )?;
-
-        // Footer: one plain sentence and one way out.
-        self.text(
-            g,
-            "CS2 слушает микрофон Windows по умолчанию.\nПоставьте там «CABLE Output».",
-            &f.small,
-            R { l: LEFT, t: FOOT_Y, r: 400.0, b: FOOT_Y + 36.0 },
-            START,
-            MID,
-            rgb(MUTED),
-        )?;
-        let link_color = if self.hover == Hit::Link { rgb(ACCENT) } else { rgb(INK) };
-        self.text(
-            g,
-            LINK_TEXT,
-            &f.strong,
-            R { l: 380.0, t: FOOT_Y, r: RIGHT - 16.0, b: FOOT_Y + 36.0 },
-            END,
-            MID,
-            link_color,
-        )?;
-        let (ax, ay) = (RIGHT - 9.0, FOOT_Y + 14.0);
-        self.line(g, &[(ax, ay + 8.0), (ax + 8.0, ay)], link_color, 1.6)?;
-        self.line(g, &[(ax + 2.0, ay), (ax + 8.0, ay), (ax + 8.0, ay + 6.0)], link_color, 1.6)?;
-
-        if let Some(which) = self.open {
-            self.dropdown(g, which)?;
-        }
+        g.unclip();
+        self.scrollbar(g, GALLERY, scroll, self.gallery_max, Pane::Gallery);
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn ruler(
-        &self,
-        g: &Gfx,
-        y: f32,
-        label: &str,
-        readout: &str,
-        t: f32,
-        origin: f32,
-        intervals: usize,
-        major: usize,
-    ) -> Result<()> {
-        let f = &self.fonts;
-        self.text(
-            g,
-            label,
-            &f.body,
-            R { l: LEFT, t: y, r: 300.0, b: y + 20.0 },
-            DWRITE_TEXT_ALIGNMENT_LEADING,
-            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-            rgb(MUTED),
-        )?;
-        self.text(
-            g,
-            readout,
-            &f.readout,
-            R { l: 300.0, t: y - 2.0, r: RIGHT, b: y + 22.0 },
-            DWRITE_TEXT_ALIGNMENT_TRAILING,
-            DWRITE_PARAGRAPH_ALIGNMENT_NEAR,
-            rgb(INK),
-        )?;
-        let span = RIGHT - LEFT;
-        for i in 0..=intervals {
-            let x = LEFT + span * i as f32 / intervals as f32;
-            let tall = i % major == 0;
-            let top = if tall { y + 30.0 } else { y + 37.0 };
-            self.line(g, &[(x, top), (x, y + 46.0)], rgb(FAINT), 2.0)?;
+    /// Thin overlay scrollbar, wider while hovered or dragged, like WinUI's.
+    fn scrollbar(&mut self, g: &Gfx, view: R, scroll: f32, max: f32, pane: Pane) {
+        if max <= 0.0 {
+            return;
         }
-        let (x0, x1) = (LEFT + span * origin, LEFT + span * t);
-        self.line(g, &[(x0.min(x1), y + 54.0), (x0.max(x1), y + 54.0)], rgb(ACCENT), 3.0)?;
-        let active = self.drag.is_some_and(|d| (d == Hit::Tone) == (y == TONE_Y))
-            || matches!(self.hover, Hit::Tone if y == TONE_Y)
-            || matches!(self.hover, Hit::Volume if y == VOLUME_Y);
-        self.line(g, &[(x1, y + 27.0), (x1, y + 54.0)], rgb(ACCENT), if active { 5.0 } else { 4.0 })?;
-        Ok(())
+        let th = &self.theme;
+        let content = view.h() + max;
+        let thumb = (view.h() * view.h() / content).max(32.0);
+        let y = view.t + scroll / max * (view.h() - thumb);
+        let active =
+            self.hover == Hit::Scrollbar(pane) || self.drag.as_ref().is_some_and(|d| d.hit == Hit::Scrollbar(pane));
+        let w = if active { 6.0 } else { 3.0 };
+        g.fill(R::new(view.r - 4.0 - w / 2.0, y, w, thumb), w / 2.0, th.strong_stroke());
+        self.hits.push((R::new(view.r - 12.0, view.t, 12.0, view.h()), Hit::Scrollbar(pane)));
     }
 
-    fn combo(&self, g: &Gfx, which: Which, y: f32) -> Result<()> {
-        let r = R::new(COMBO_X, y, RIGHT - COMBO_X, COMBO_H);
-        let hovered = self.hover == Hit::Combo(which) || self.open == Some(which);
-        self.fill(g, r, 8.0, if hovered { mix(FIELD, EDGE, 0.6) } else { rgb(FIELD) });
-        let name = match which {
-            Which::Mic => self.inputs.get(self.input),
-            Which::Out => self.outputs.get(self.output),
-        }
-        .map(|e| e.name.as_str())
-        .unwrap_or("—");
-        self.text(
-            g,
-            name,
-            &self.fonts.field,
-            R { l: r.l + 12.0, t: r.t, r: r.r - 34.0, b: r.b },
-            DWRITE_TEXT_ALIGNMENT_LEADING,
-            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-            rgb(INK),
-        )?;
-        let (cx, cy) = (r.r - 18.0, r.t + COMBO_H / 2.0);
-        let flip = if self.open == Some(which) { -1.0 } else { 1.0 };
-        self.line(
-            g,
-            &[(cx - 4.5, cy - 2.0 * flip), (cx, cy + 2.5 * flip), (cx + 4.5, cy - 2.0 * flip)],
-            rgb(MUTED),
-            1.6,
-        )
-    }
+    fn draw_settings(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let scroll = self.settings_scroll.value.min(self.settings_max);
+        let (x, w) = (PANE.l, PANE.w() - GUTTER);
+        let mut y = PANE.t - scroll;
+        g.clip(PANE);
 
-    fn dropdown(&self, g: &Gfx, which: Which) -> Result<()> {
-        let (r, shown) = self.list_rect(which);
-        let (items, selected) = match which {
-            Which::Mic => (&self.inputs, self.input),
-            Which::Out => (&self.outputs, self.output),
+        let section = |g: &Gfx, y: &mut f32, title: &str| -> Result<()> {
+            g.text(title, Font::Strong, R::new(x + 2.0, *y, w, 20.0), Align::Start, th.text())?;
+            *y += 28.0;
+            Ok(())
         };
-        unsafe {
-            // A tight, directional shadow so the list reads as lifted off the form.
-            g.brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.35 });
-            let s = R { l: r.l + 1.0, t: r.t + 3.0, r: r.r + 1.0, b: r.b + 4.0 };
-            g.rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: s.d2d(), radiusX: 10.0, radiusY: 10.0 }, &g.brush);
-        }
-        self.fill(g, r, 10.0, mix(FIELD, EDGE, 0.35));
-        self.outline(g, r, 10.0, rgb(EDGE));
-        for row in 0..shown {
-            let i = row + self.scroll;
-            let Some(item) = items.get(i) else { break };
-            let ir = R::new(r.l + 4.0, r.t + 4.0 + row as f32 * ITEM_H, r.w() - 8.0, ITEM_H);
-            if self.hover == Hit::Item(which, i) {
-                self.fill(g, ir, 6.0, rgb(EDGE));
-            }
-            let color = if i == selected { rgb(ACCENT) } else { rgb(INK) };
-            self.text(
-                g,
-                &item.name,
-                &self.fonts.field,
-                R { l: ir.l + 10.0, t: ir.t, r: ir.r - 10.0, b: ir.b },
-                DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-                color,
-            )?;
-        }
+
+        section(g, &mut y, self.t("Голос", "Voice"))?;
+        self.slider_card(g, &mut y, Knob::Tone, glyph::TONE, self.t("Тон", "Pitch"))?;
+        self.slider_card(g, &mut y, Knob::Volume, glyph::VOLUME, self.t("Громкость", "Volume"))?;
+        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, self.t("Свой голос в миксе", "Original voice in mix"))?;
+        y += 20.0;
+
+        section(g, &mut y, self.t("Микрофон", "Microphone"))?;
+        let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
+        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
+        self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
+        let gate = self.t("Глушит клавиатуру и шум между фразами", "Mutes keys and noise between phrases");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
+        self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
+        y += 20.0;
+
+        section(g, &mut y, self.t("Вывод", "Output"))?;
+        let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
+        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, self.t("Куда отдавать", "Send to"), &out)?;
+        let mon = self.t("В наушники по умолчанию", "To your default headphones");
+        let hear = self.t("Слышать себя", "Hear myself");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Monitor), glyph::HEADPHONE, hear, mon)?;
+        let help = self.t("Выберите CABLE Output по умолчанию", "Make CABLE Output the default");
+        self.row_card(g, &mut y, Hit::Help, glyph::OPEN, self.t("Микрофон в CS2", "Mic in CS2"), help)?;
+
+        g.unclip();
+        let content = y + scroll - PANE.t;
+        self.settings_max = (content - PANE.h()).max(0.0);
+        self.scrollbar(g, PANE, scroll, self.settings_max, Pane::Settings);
         Ok(())
+    }
+
+    /// SettingsCard with an icon, a title and a value, and a slider underneath.
+    fn slider_card(&mut self, g: &Gfx, y: &mut f32, k: Knob, icon: u16, title: &str) -> Result<()> {
+        let th = self.theme;
+        let r = R::new(PANE.l, *y, PANE.w() - GUTTER, 84.0);
+        if r.intersects(&PANE) {
+            self.card(g, r, 4.0, false);
+            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text())?;
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 12.0, r.w() - 140.0, 24.0), Align::Start, th.text())?;
+            let value = R::new(r.r - 96.0, r.t + 12.0, 80.0, 24.0);
+            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary())?;
+            self.slider(g, k, R::new(r.l + 26.0, r.t + 48.0, r.w() - 52.0, 24.0));
+        }
+        *y += 84.0 + CARD_GAP;
+        Ok(())
+    }
+
+    /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
+    fn row_card(&mut self, g: &Gfx, y: &mut f32, hit: Hit, icon: u16, title: &str, desc: &str) -> Result<()> {
+        let th = self.theme;
+        let r = R::new(PANE.l, *y, PANE.w() - GUTTER, 68.0);
+        if r.intersects(&PANE) {
+            self.card(g, r, 4.0, self.hover == hit);
+            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0), th.text())?;
+            let text_w = r.w() - 52.0 - 64.0;
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
+            g.text(
+                desc,
+                Font::Caption,
+                R::new(r.l + 52.0, r.t + 35.0, text_w, 18.0),
+                Align::Start,
+                th.text_secondary(),
+            )?;
+            let side = R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0);
+            match hit {
+                Hit::Toggle(s) => self.toggle(g, r.r - 56.0, r.t + 24.0, s),
+                Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
+                _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
+            }
+            let visible = R { l: r.l, t: r.t.max(PANE.t), r: r.r, b: r.b.min(PANE.b) };
+            self.hits.push((visible, hit));
+        }
+        *y += 68.0 + CARD_GAP;
+        Ok(())
+    }
+
+    /// True while a fullscreen window of another app (a game) covers our monitor.
+    fn covered(&self) -> bool {
+        unsafe {
+            let fg = GetForegroundWindow();
+            if fg.is_invalid() || fg == self.hwnd {
+                return false;
+            }
+            let mut wr = RECT::default();
+            if GetWindowRect(fg, &mut wr).is_err() {
+                return false;
+            }
+            let monitor = MonitorFromWindow(fg, MONITOR_DEFAULTTONULL);
+            if monitor != MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) {
+                return false;
+            }
+            let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+            GetMonitorInfoW(monitor, &mut info).as_bool() && info.rcMonitor == wr
+        }
+    }
+
+    fn apply_frame(&mut self) {
+        unsafe {
+            let dark = BOOL::from(self.theme.dark);
+            let _ = DwmSetWindowAttribute(self.hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const _ as _, 4);
+            let backdrop = DWMSBT_MAINWINDOW;
+            let size = size_of_val(&backdrop) as u32;
+            self.mica =
+                DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const _ as _, size).is_ok();
+            if self.mica {
+                let all = Margins { left: -1, right: -1, top: -1, bottom: -1 };
+                self.mica = DwmExtendFrameIntoClientArea(self.hwnd, &all).is_ok();
+            }
+            for (kind, size) in [(ICON_BIG, 32), (ICON_SMALL, 16)] {
+                if let Some(icon) = make_icon(size, self.theme.accent_rgb()) {
+                    let icon = LPARAM(icon.0 as isize);
+                    let old = SendMessageW(self.hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(icon));
+                    if old.0 != 0 {
+                        let _ = DestroyIcon(HICON(old.0 as _));
+                    }
+                }
+            }
+        }
+        allow_dark_menus(self.hwnd);
     }
 }
 
-/// Oscilloscope trace: lock onto a rising zero crossing so the wave stands still,
-/// then squash through tanh so loud voices stay inside the frame.
-fn trace(samples: &[f32; SCOPE_LEN]) -> Vec<(f32, f32)> {
+/// Oscilloscope trace locked onto a rising zero crossing so the wave stands still,
+/// squashed through tanh so loud voices stay inside the card.
+fn trace(samples: &[f32; SCOPE_LEN], area: R) -> Vec<(f32, f32)> {
     const SPAN: usize = 768;
+    const POINTS: usize = 192;
     let start =
         (1..SCOPE_LEN - SPAN).rev().find(|&i| samples[i - 1] < 0.0 && samples[i] >= 0.0).unwrap_or(SCOPE_LEN - SPAN);
-    let (l, r) = (SCOPE.l + 18.0, SCOPE.r - 18.0);
-    let mid = SCOPE.t + SCOPE.h() * 0.46;
-    (0..=192)
+    let mid = area.t + area.h() / 2.0;
+    (0..=POINTS)
         .map(|k| {
-            let s = samples[start + k * SPAN / 192 - if k == 192 { 1 } else { 0 }];
-            (l + (r - l) * k as f32 / 192.0, mid - (s * 4.0).tanh() * SCOPE.h() * 0.36)
+            let s = samples[(start + k * SPAN / POINTS).min(SCOPE_LEN - 1)];
+            (area.l + area.w() * k as f32 / POINTS as f32, mid - (s * 4.0).tanh() * area.h() * 0.48)
         })
         .collect()
 }
 
-fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
-    unsafe {
-        // Basteleur ships inside the exe; load it into a private collection.
-        let dw5: IDWriteFactory5 = dw.cast()?;
-        let loader = dw5.CreateInMemoryFontFileLoader()?;
-        dw5.RegisterFontFileLoader(&loader)?;
-        let file =
-            loader.CreateInMemoryFontFileReference(&dw5, BASTELEUR.as_ptr() as _, BASTELEUR.len() as u32, None)?;
-        let builder = dw5.CreateFontSetBuilder()?;
-        builder.AddFontFile(&file)?;
-        let set = builder.CreateFontSet()?;
-        let display: IDWriteFontCollection = dw5.CreateFontCollectionFromFontSet(&set)?.cast()?;
-
-        let ui = |size: f32, weight: DWRITE_FONT_WEIGHT| -> Result<IDWriteTextFormat> {
-            dw.CreateTextFormat(
-                w!("Segoe UI Variable Text"),
-                None,
-                weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("ru-ru"),
-            )
-        };
-        let bast = |size: f32| -> Result<IDWriteTextFormat> {
-            dw.CreateTextFormat(
-                w!("Basteleur"),
-                &display,
-                DWRITE_FONT_WEIGHT_BOLD,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                size,
-                w!("en-us"),
-            )
-        };
-        let field = ui(13.0, DWRITE_FONT_WEIGHT_NORMAL)?;
-        field.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-        let ellipsis = dw.CreateEllipsisTrimmingSign(&field)?;
-        field.SetTrimming(
-            &DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, delimiter: 0, delimiterCount: 0 },
-            &ellipsis,
-        )?;
-        Ok(Fonts {
-            body: ui(13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
-            strong: ui(13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-            small: ui(12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
-            readout: ui(15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
-            field,
-            mark: bast(30.0)?,
-            preset: bast(17.0)?,
-            watermark: bast(58.0)?,
-        })
-    }
-}
-
-/// A small app icon in the same language as the preset glyphs: the Minion wave, in lemon.
-fn make_icon(size: i32) -> Option<HICON> {
+/// The app icon: the Minion voice's own waveform in the system accent colour.
+fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
     let n = size as usize;
-    let pts: Vec<(f32, f32)> = glyph(1)
+    let wave = voices::glyph(&voices::ALL[1], 64);
+    let pts: Vec<(f32, f32)> = wave
         .iter()
-        .map(|(x, y)| (x / 44.0 * (size as f32 - 4.0) + 2.0, (y - 9.0) * size as f32 / 22.0 + size as f32 / 2.0))
+        .enumerate()
+        .map(|(i, s)| (2.0 + (size as f32 - 4.0) * i as f32 / 63.0, size as f32 / 2.0 - s * size as f32 * 0.32))
         .collect();
     let half = (size as f32 / 16.0).max(1.0);
     let mut px = vec![0u32; n * n];
@@ -934,11 +965,10 @@ fn make_icon(size: i32) -> Option<HICON> {
                 ((x - ax - t * dx).powi(2) + (y - ay - t * dy).powi(2)).sqrt()
             })
             .fold(f32::MAX, f32::min);
-        let a = (half + 0.5 - d).clamp(0.0, 1.0);
-        let a8 = (a * 255.0) as u32;
+        let a8 = ((half + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u32;
         // Premultiplied BGRA.
         let c = |v: u32| v * a8 / 255;
-        *p = (a8 << 24) | (c(0xe8) << 16) | (c(0xdc) << 8) | c(0x96);
+        *p = (a8 << 24) | (c((rgb >> 16) & 0xff) << 16) | (c((rgb >> 8) & 0xff) << 8) | c(rgb & 0xff);
     }
     unsafe {
         let bitmap = CreateBitmap(size, size, 1, 32, Some(px.as_ptr() as _));
@@ -968,7 +998,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
         match msg {
             WM_PAINT => {
                 if let Err(e) = app.paint() {
-                    app.status = format!("Ошибка отрисовки: {}", e.message());
+                    app.status = e.message();
+                    app.healthy = false;
                 }
                 let _ = ValidateRect(Some(hwnd), None);
                 LRESULT(0)
@@ -976,18 +1007,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_ERASEBKGND => LRESULT(1),
             WM_TIMER => {
                 app.tick();
-                if !IsIconic(hwnd).as_bool() {
-                    app.shared.scope(&mut app.raw, &mut app.voiced);
+                if app.dirty && !IsIconic(hwnd).as_bool() && !app.covered() {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
                 app.mouse = point(lp, app.dpi);
-                if let Some(d) = app.drag {
-                    app.ruler_value(d, app.mouse.0);
-                }
-                app.hover = app.hit(app.mouse);
+                app.moved();
                 let mut tme = TRACKMOUSEEVENT {
                     cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                     dwFlags: TME_LEAVE,
@@ -999,12 +1026,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_MOUSELEAVE => {
                 app.hover = Hit::None;
+                app.dirty = true;
                 LRESULT(0)
             }
             WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
                 app.mouse = point(lp, app.dpi);
                 app.press(msg == WM_LBUTTONDBLCLK);
-                app.hover = app.hit(app.mouse);
+                app.hover = app.hit_at(app.mouse);
+                app.dirty = true;
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
@@ -1015,45 +1044,44 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let mut p = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
                 let _ = ScreenToClient(hwnd, &mut p);
                 app.mouse = (p.x as f32 * 96.0 / app.dpi, p.y as f32 * 96.0 / app.dpi);
-                app.wheel(((wp.0 >> 16) & 0xffff) as i16 > 0);
-                app.hover = app.hit(app.mouse);
+                app.wheel(((wp.0 >> 16) & 0xffff) as i16 as f32 / 120.0);
                 LRESULT(0)
             }
-            WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => {
-                app.open = None;
-                LRESULT(0)
-            }
-            WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => {
-                let cursor = if app.hover == Hit::None { IDC_ARROW } else { IDC_HAND };
-                SetCursor(LoadCursorW(None, cursor).ok());
-                LRESULT(1)
-            }
-            WM_SIZE if wp.0 as u32 == SIZE_MINIMIZED => {
-                // Give the GPU memory back while we sit in the taskbar.
-                app.gfx = None;
-                LRESULT(0)
-            }
+            WM_KEYDOWN if app.key(wp.0 as u16) => LRESULT(0),
             WM_SIZE => {
-                if let Some(g) = &app.gfx {
-                    let size = D2D_SIZE_U { width: (lp.0 & 0xffff) as u32, height: ((lp.0 >> 16) & 0xffff) as u32 };
-                    let _ = g.rt.Resize(&size);
+                let (w, h) = ((lp.0 & 0xffff) as u32, ((lp.0 >> 16) & 0xffff) as u32);
+                if wp.0 as u32 == SIZE_MINIMIZED {
+                    // Give the GPU memory back while we sit in the taskbar.
+                    app.gfx = None;
+                } else if let Some(g) = &mut app.gfx
+                    && g.resize(w, h, app.dpi).is_err()
+                {
+                    app.gfx = None;
                 }
+                app.dirty = true;
                 LRESULT(0)
             }
             WM_DPICHANGED => {
                 app.dpi = (wp.0 & 0xffff) as f32;
                 app.gfx = None;
                 let r = *(lp.0 as *const RECT);
-                let _ = SetWindowPos(
-                    hwnd,
-                    None,
-                    r.left,
-                    r.top,
-                    r.right - r.left,
-                    r.bottom - r.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
+                let (w, h) = (r.right - r.left, r.bottom - r.top);
+                let _ = SetWindowPos(hwnd, None, r.left, r.top, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
                 LRESULT(0)
+            }
+            WM_SETTINGCHANGE => {
+                // Light/dark or accent changed in Windows settings: follow it live.
+                let theme = Theme::system();
+                if theme != app.theme {
+                    app.theme = theme;
+                    app.apply_frame();
+                    app.dirty = true;
+                }
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            WM_ACTIVATE => {
+                app.dirty = true;
+                DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_DESTROY => {
                 app.settings.save();
@@ -1076,7 +1104,7 @@ fn window_size(dpi: u32, style: WINDOW_STYLE) -> (i32, i32) {
         bottom: (HEIGHT * dpi as f32 / 96.0).round() as i32,
     };
     unsafe {
-        let _ = AdjustWindowRectExForDpi(&mut r, style, false, WINDOW_EX_STYLE(0), dpi);
+        let _ = AdjustWindowRectExForDpi(&mut r, style, false, WS_EX_NOREDIRECTIONBITMAP, dpi);
     }
     (r.right - r.left, r.bottom - r.top)
 }
@@ -1098,7 +1126,7 @@ pub fn run() -> Result<()> {
         let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
         let (w, h) = window_size(GetDpiForSystem(), style);
         let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
+            WS_EX_NOREDIRECTIONBITMAP,
             w!("GobyWindow"),
             w!("Goby"),
             style,
@@ -1119,20 +1147,8 @@ pub fn run() -> Result<()> {
             let _ = SetWindowPos(hwnd, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
         }
 
-        // Dark title bar in the app's own base colour.
-        let dark: i32 = 1;
-        let caption: u32 = (BASE & 0xff) << 16 | (BASE & 0xff00) | (BASE >> 16);
-        let text: u32 = (INK & 0xff) << 16 | (INK & 0xff00) | (INK >> 16);
-        let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(20), &dark as *const _ as _, 4);
-        let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(35), &caption as *const _ as _, 4);
-        let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(36), &text as *const _ as _, 4);
-        for (kind, size) in [(ICON_BIG, 32), (ICON_SMALL, 16)] {
-            if let Some(icon) = make_icon(size) {
-                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
-            }
-        }
-
-        let app = Box::new(App::new(hwnd)?);
+        let mut app = Box::new(App::new(hwnd));
+        app.apply_frame();
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         SetTimer(Some(hwnd), 1, 33, None);
         let _ = ShowWindow(hwnd, SW_SHOW);
