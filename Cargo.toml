@@ -2,7 +2,7 @@
 name = "goby"
 version = "0.1.0"
 edition = "2024"
-description = "Lightweight real-time voice changer for Windows: your mic, a few fun voices, straight into any game through a virtual cable."
+description = "Lightweight real-time voice changer for Windows: 61 voices, straight into the games and chats you pick."
 keywords = ["voice-changer", "wasapi", "audio", "windows", "dsp"]
 categories = ["multimedia::audio"]
 license = "MIT"
