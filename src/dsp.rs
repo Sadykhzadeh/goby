@@ -19,22 +19,26 @@ pub struct PitchShifter {
     /// Delay of the incoming tap and progress of the crossfade towards it.
     fade: Option<(f32, usize)>,
     min_delay: f32,
-    max_delay: f32,
     min_lag: usize,
     max_lag: usize,
     fade_len: usize,
     corr_len: usize,
+    /// Lag of the previous jump: a good guess at the current pitch period.
+    last_lag: usize,
+    /// Samples spent waiting for a good enough match before a downward jump.
+    wait: u32,
 }
 
 impl PitchShifter {
     pub fn new(sample_rate: u32) -> Self {
         let ms = |m: f32| (sample_rate as f32 * m / 1000.0) as usize;
-        // Lag range must hold a full period of a low voice (80 Hz = 12.5 ms).
-        let (min_lag, max_lag, fade_len, corr_len) = (ms(6.0), ms(20.0), ms(5.0), ms(5.0));
+        // The lag range only has to hold one full period of a low voice (80 Hz = 12.5 ms);
+        // every extra millisecond here is a millisecond of latency.
+        let (min_lag, max_lag, fade_len, corr_len) = (ms(6.0), ms(13.5), ms(5.0), ms(5.0));
         let min_delay = 4.0;
-        // Room for the largest lag plus the drift during a fade at two octaves.
-        let max_delay = min_delay + (max_lag + 4 * fade_len) as f32;
-        let len = (max_delay as usize + corr_len + max_lag + 8).next_power_of_two();
+        // Deepest the tap can go: largest lag plus drift during a fade, twice, at two octaves.
+        let deepest = min_delay as usize + max_lag + 6 * fade_len;
+        let len = (deepest + corr_len + max_lag + 8).next_power_of_two();
         Self {
             buf: vec![0.0; len],
             mask: len - 1,
@@ -43,11 +47,12 @@ impl PitchShifter {
             delay: min_delay + max_lag as f32 / 2.0,
             fade: None,
             min_delay,
-            max_delay,
             min_lag,
             max_lag,
             fade_len,
             corr_len,
+            last_lag: max_lag,
+            wait: 0,
         }
     }
 
@@ -61,36 +66,39 @@ impl PitchShifter {
         self.buf[i as usize & self.mask]
     }
 
-    /// Lag that best lines up the audio behind `from` with the audio behind `from + sign*lag`.
-    fn best_lag(&self, from: f32, sign: isize) -> usize {
+    /// Lag (at most `longest`) that best lines up the audio behind `from` with the audio
+    /// behind `from + sign*lag`, and its normalised correlation in -1..=1.
+    fn best_lag(&self, from: f32, sign: isize, longest: usize) -> (usize, f32) {
+        let longest = longest.clamp(self.min_lag, self.max_lag);
         let base = self.write as isize - from as isize;
         let score = |lag: usize| {
             let other = base - sign * lag as isize;
-            let (mut xy, mut yy) = (0.0f32, 1e-9f32);
+            let (mut xy, mut xx, mut yy) = (0.0f32, 1e-9f32, 1e-9f32);
             for j in 0..self.corr_len as isize {
                 let (a, b) = (self.at(base - j), self.at(other - j));
                 xy += a * b;
+                xx += a * a;
                 yy += b * b;
             }
-            xy / yy.sqrt()
+            xy / (xx * yy).sqrt()
         };
         // Coarse pass every 2 samples, then refine around the winner.
         let mut best = (self.min_lag, f32::MIN);
-        for lag in (self.min_lag..=self.max_lag).step_by(2) {
+        for lag in (self.min_lag..=longest).step_by(2) {
             let s = score(lag);
             if s > best.1 {
                 best = (lag, s);
             }
         }
         for lag in [best.0.saturating_sub(1), best.0 + 1] {
-            if (self.min_lag..=self.max_lag).contains(&lag) {
+            if (self.min_lag..=longest).contains(&lag) {
                 let s = score(lag);
                 if s > best.1 {
                     best = (lag, s);
                 }
             }
         }
-        best.0
+        best
     }
 
     #[inline]
@@ -126,11 +134,27 @@ impl PitchShifter {
 
         if self.fade.is_none() {
             let room = self.fade_len as f32 * drift.abs() + 1.0;
-            if drift > 0.0 && self.delay > self.max_delay - room {
-                let lag = self.best_lag(self.delay, -1);
-                self.fade = Some((self.delay - lag as f32, 0));
+            if drift > 0.0 {
+                // Shifting down the tap falls behind. Jump forward as soon as one period
+                // (the last lag) fits, if the waveform lines up well; only when the full lag
+                // range fits is the best match taken regardless. This keeps shifting down
+                // about as cheap in latency as shifting up.
+                let reach = self.delay - self.min_delay - room;
+                let forced = reach >= self.max_lag as f32;
+                if reach >= self.last_lag as f32 {
+                    self.wait += 1;
+                    if forced || self.wait % 32 == 1 {
+                        let (lag, score) = self.best_lag(self.delay, -1, reach as usize);
+                        if forced || score > 0.6 {
+                            self.last_lag = lag;
+                            self.wait = 0;
+                            self.fade = Some((self.delay - lag as f32, 0));
+                        }
+                    }
+                }
             } else if drift < 0.0 && self.delay < self.min_delay + room {
-                let lag = self.best_lag(self.delay, 1);
+                let (lag, _) = self.best_lag(self.delay, 1, self.max_lag);
+                self.last_lag = lag;
                 self.fade = Some((self.delay + lag as f32, 0));
             }
         }
@@ -394,6 +418,41 @@ mod bench {
             }
             let secs = t.elapsed().as_secs_f64();
             println!("{preset:?}: 10 s of audio in {:.2} ms → {:.3} % of one core", secs * 1000.0, secs / 10.0 * 100.0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod latency {
+    use super::*;
+
+    /// The shifter's own delay is the part of the voice latency we control; keep it small
+    /// in both directions. Prints the numbers with `--nocapture`.
+    #[test]
+    fn pitch_shift_delay_stays_under_10_ms() {
+        let sr = 48_000u32;
+        // A rough voice: 120 Hz buzz with harmonics.
+        let input: Vec<f32> = (0..sr as usize * 2)
+            .map(|i| {
+                (1..8)
+                    .map(|h| (i as f32 * 120.0 * h as f32 * std::f32::consts::TAU / sr as f32).sin() / h as f32)
+                    .sum::<f32>()
+                    * 0.2
+            })
+            .collect();
+        for semis in [-12.0f32, -6.0, -3.0, 3.0, 8.0, 12.0] {
+            let mut p = PitchShifter::new(sr);
+            p.set_ratio(2f32.powf(semis / 12.0));
+            let mut sum = 0.0f64;
+            for (i, s) in input.iter().enumerate() {
+                p.process(*s);
+                if i > sr as usize / 2 {
+                    sum += p.delay as f64;
+                }
+            }
+            let avg = sum / (input.len() - sr as usize / 2 - 1) as f64 / sr as f64 * 1000.0;
+            println!("{semis:+} st: average delay {avg:.2} ms");
+            assert!(avg < 10.0, "{semis:+} st: {avg:.2} ms");
         }
     }
 }
