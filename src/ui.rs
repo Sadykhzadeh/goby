@@ -938,6 +938,43 @@ fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
     }
 }
 
+/// A small app icon in the same language as the preset glyphs: the Minion wave, in lemon.
+fn make_icon(size: i32) -> Option<HICON> {
+    let n = size as usize;
+    let pts: Vec<(f32, f32)> = glyph(Preset::Minion)
+        .iter()
+        .map(|(x, y)| (x / 44.0 * (size as f32 - 4.0) + 2.0, (y - 9.0) * size as f32 / 22.0 + size as f32 / 2.0))
+        .collect();
+    let half = (size as f32 / 16.0).max(1.0);
+    let mut px = vec![0u32; n * n];
+    for (i, p) in px.iter_mut().enumerate() {
+        let (x, y) = ((i % n) as f32 + 0.5, (i / n) as f32 + 0.5);
+        let d = pts
+            .windows(2)
+            .map(|s| {
+                let ((ax, ay), (bx, by)) = (s[0], s[1]);
+                let (dx, dy) = (bx - ax, by - ay);
+                let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy).max(1e-6)).clamp(0.0, 1.0);
+                ((x - ax - t * dx).powi(2) + (y - ay - t * dy).powi(2)).sqrt()
+            })
+            .fold(f32::MAX, f32::min);
+        let a = (half + 0.5 - d).clamp(0.0, 1.0);
+        let a8 = (a * 255.0) as u32;
+        // Premultiplied BGRA.
+        let c = |v: u32| v * a8 / 255;
+        *p = (a8 << 24) | (c(0xe8) << 16) | (c(0xdc) << 8) | c(0x96);
+    }
+    unsafe {
+        let bitmap = CreateBitmap(size, size, 1, 32, Some(px.as_ptr() as _));
+        let mask = CreateBitmap(size, size, 1, 1, None);
+        let info = ICONINFO { fIcon: true.into(), xHotspot: 0, yHotspot: 0, hbmMask: mask, hbmColor: bitmap };
+        let icon = CreateIconIndirect(&info).ok();
+        let _ = DeleteObject(bitmap.into());
+        let _ = DeleteObject(mask.into());
+        icon
+    }
+}
+
 unsafe fn app_of(hwnd: HWND) -> Option<&'static mut App> {
     let p = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut App;
     unsafe { p.as_mut() }
@@ -1108,6 +1145,12 @@ pub fn run() -> Result<()> {
         let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(20), &dark as *const _ as _, 4);
         let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(35), &caption as *const _ as _, 4);
         let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(36), &text as *const _ as _, 4);
+        for (kind, size) in [(ICON_BIG, 32), (ICON_SMALL, 16)] {
+            if let Some(icon) = make_icon(size) {
+                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+            }
+        }
+
         let app = Box::new(App::new(hwnd)?);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         SetTimer(Some(hwnd), 1, 33, None);
