@@ -11,6 +11,13 @@ pub struct Settings {
     pub semitones: f32,
     pub volume: f32,
     pub monitor: bool,
+    /// Effect on; off sends your own voice (still gained and gated).
+    pub enabled: bool,
+    pub mic_gain_db: f32,
+    pub gate: bool,
+    pub gate_db: f32,
+    /// Share of the original voice mixed back in, 0..1.
+    pub dry_mix: f32,
 }
 
 impl Default for Settings {
@@ -22,6 +29,11 @@ impl Default for Settings {
             semitones: 0.0,
             volume: 1.0,
             monitor: false,
+            enabled: true,
+            mic_gain_db: 0.0,
+            gate: false,
+            gate_db: -50.0,
+            dry_mix: 0.0,
         }
     }
 }
@@ -42,6 +54,11 @@ impl Settings {
                 "semitones" => s.semitones = v.parse::<f32>().unwrap_or(s.semitones).clamp(-12.0, 12.0),
                 "volume" => s.volume = v.parse::<f32>().unwrap_or(s.volume).clamp(0.0, 2.0),
                 "monitor" => s.monitor = v == "1",
+                "enabled" => s.enabled = v != "0",
+                "mic_gain_db" => s.mic_gain_db = v.parse::<f32>().unwrap_or(s.mic_gain_db).clamp(-12.0, 24.0),
+                "gate" => s.gate = v == "1",
+                "gate_db" => s.gate_db = v.parse::<f32>().unwrap_or(s.gate_db).clamp(-80.0, -10.0),
+                "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
         }
@@ -50,8 +67,18 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\n",
-            self.input, self.output, self.voice, self.semitones, self.volume, self.monitor as u8
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\n",
+            self.input,
+            self.output,
+            self.voice,
+            self.semitones,
+            self.volume,
+            self.monitor as u8,
+            self.enabled as u8,
+            self.mic_gain_db,
+            self.gate as u8,
+            self.gate_db,
+            self.dry_mix,
         )
     }
 
@@ -82,6 +109,11 @@ mod tests {
             semitones: -6.0,
             volume: 1.25,
             monitor: true,
+            enabled: false,
+            mic_gain_db: 6.0,
+            gate: true,
+            gate_db: -45.0,
+            dry_mix: 0.25,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

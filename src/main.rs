@@ -3,6 +3,7 @@
 mod dsp;
 mod engine;
 mod fx;
+mod mic;
 mod ring;
 mod settings;
 mod ui;

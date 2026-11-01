@@ -22,6 +22,7 @@ use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEve
 use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
 use crate::dsp::Voice;
+use crate::mic::Mic;
 use crate::ring::{Consumer, Producer, ring};
 use crate::voices;
 
@@ -36,6 +37,13 @@ pub struct Shared {
     voice: AtomicU32,
     semitones: AtomicU32,
     gain: AtomicU32,
+    /// Off passes the (gained, gated) mic through untouched; the chosen voice is kept.
+    enabled: AtomicBool,
+    mic_gain_db: AtomicU32,
+    /// Gate threshold in dBFS; NaN means the gate is off.
+    gate_db: AtomicU32,
+    /// Share of the original voice mixed back in, 0..1.
+    dry_mix: AtomicU32,
     pub failed: AtomicBool,
     scope_in: Box<[AtomicU32]>,
     scope_out: Box<[AtomicU32]>,
@@ -55,6 +63,10 @@ impl Default for Shared {
             voice: AtomicU32::new(0),
             semitones: AtomicU32::new(0),
             gain: AtomicU32::new(1f32.to_bits()),
+            enabled: AtomicBool::new(true),
+            mic_gain_db: AtomicU32::new(0f32.to_bits()),
+            gate_db: AtomicU32::new(f32::NAN.to_bits()),
+            dry_mix: AtomicU32::new(0f32.to_bits()),
             failed: AtomicBool::new(false),
             scope_in: taps(),
             scope_out: taps(),
@@ -68,6 +80,14 @@ impl Default for Shared {
 }
 
 impl Shared {
+    /// Mic gain in dB, gate threshold in dBFS (`None` = off), and how much dry voice to keep.
+    pub fn set_mic(&self, gain_db: f32, gate_db: Option<f32>, dry_mix: f32, enabled: bool) {
+        self.mic_gain_db.store(gain_db.to_bits(), Relaxed);
+        self.gate_db.store(gate_db.unwrap_or(f32::NAN).to_bits(), Relaxed);
+        self.dry_mix.store(dry_mix.to_bits(), Relaxed);
+        self.enabled.store(enabled, Relaxed);
+    }
+
     /// `voice` indexes `voices::ALL`; `tone` shifts it in semitones.
     pub fn set(&self, voice: usize, tone: f32, gain: f32) {
         self.voice.store(voice as u32, Relaxed);
@@ -345,7 +365,9 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
         let s = Stream::open(id, 1)?;
         let cap: IAudioCaptureClient = s.client.GetService()?;
         let mut voice = Voice::new(RATE);
+        let mut mic = Mic::new(RATE);
         let mut block = vec![0.0f32; MAX_BLOCK];
+        let mut dry = vec![0.0f32; MAX_BLOCK];
         s.client.Start()?;
         started();
         while !stop.load(Relaxed) {
@@ -359,8 +381,13 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                 let packet: &[f32] =
                     if silent { &[] } else { std::slice::from_raw_parts(data as *const f32, n as usize) };
 
-                let def = voices::ALL.get(shared.voice.load(Relaxed) as usize).unwrap_or(&voices::ALL[0]);
-                let semis = f32::from_bits(shared.semitones.load(Relaxed));
+                let enabled = shared.enabled.load(Relaxed);
+                let chosen = if enabled { shared.voice.load(Relaxed) as usize } else { 0 };
+                let def = voices::ALL.get(chosen).unwrap_or(&voices::ALL[0]);
+                let semis = if enabled { f32::from_bits(shared.semitones.load(Relaxed)) } else { 0.0 };
+                let mic_gain = f32::from_bits(shared.mic_gain_db.load(Relaxed));
+                let gate = Some(f32::from_bits(shared.gate_db.load(Relaxed))).filter(|g| !g.is_nan());
+                let mix = if enabled { f32::from_bits(shared.dry_mix.load(Relaxed)) } else { 0.0 };
                 let gain = f32::from_bits(shared.gain.load(Relaxed));
                 voice.set(&def.recipe, semis, gain);
 
@@ -375,11 +402,20 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                     }
                     done += len;
 
+                    mic.process(chunk, mic_gain, gate);
+                    if mix > 0.0 {
+                        dry[..len].copy_from_slice(chunk);
+                    }
                     let start = shared.scope_pos.load(Relaxed);
                     for (i, s) in chunk.iter().enumerate() {
                         shared.scope_in[(start + i) % SCOPE_LEN].store(s.to_bits(), Relaxed);
                     }
                     voice.process(chunk);
+                    if mix > 0.0 {
+                        for (s, d) in chunk.iter_mut().zip(&dry[..len]) {
+                            *s = *s * (1.0 - mix) + d * mix;
+                        }
+                    }
                     for (i, s) in chunk.iter().enumerate() {
                         shared.scope_out[(start + i) % SCOPE_LEN].store(s.to_bits(), Relaxed);
                     }
