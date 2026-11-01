@@ -119,7 +119,7 @@ fn app_policy() -> Result<IAudioPolicyConfigFactory> {
 
 /// The device-interface path the per-app API expects for a capture endpoint id.
 pub fn capture_interface_path(endpoint_id: &str) -> String {
-    format!(r"\?\SWD#MMDEVAPI#{endpoint_id}#{{2eef81be-33fa-4800-9670-1cd474972c3f}}")
+    format!("\\\\?\\SWD#MMDEVAPI#{endpoint_id}#{{2eef81be-33fa-4800-9670-1cd474972c3f}}")
 }
 
 /// Points one running program's microphone at `endpoint` (an endpoint id), or back at the
@@ -152,10 +152,13 @@ mod tests {
 
     #[test]
     fn interface_path_matches_what_windows_stores() {
-        assert_eq!(
-            capture_interface_path("{0.0.1.00000000}.{8df855d0-fe30-4b2b-8d8d-53b0deb0c59c}"),
-            r"\?\SWD#MMDEVAPI#{0.0.1.00000000}.{8df855d0-fe30-4b2b-8d8d-53b0deb0c59c}#{2eef81be-33fa-4800-9670-1cd474972c3f}"
-        );
+        let path = capture_interface_path("{0.0.1.00000000}.{8df855d0-fe30-4b2b-8d8d-53b0deb0c59c}");
+        // Built from characters, not a copy of the same literal: a lost backslash once
+        // slipped through both sides of this test.
+        let prefix: String = ['\u{5c}', '\u{5c}', '?', '\u{5c}'].iter().collect();
+        assert!(path.starts_with(&prefix), "{path}");
+        assert_eq!(path.len(), 111, "Windows' own path for an endpoint is 111 characters");
+        assert!(path.ends_with("#{2eef81be-33fa-4800-9670-1cd474972c3f}"));
     }
 
     /// Reads (never writes) the routing of the processes in GOBY_PIDS, or of this test.
