@@ -22,6 +22,7 @@ use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEve
 use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
 use crate::dsp::Voice;
+use crate::lang::pick;
 use crate::mic::Mic;
 use crate::ring::{Consumer, Producer, ring};
 use crate::voices;
@@ -237,6 +238,7 @@ struct Stream {
     frames: u32,
     channels: usize,
     sample: Sample,
+    exclusive: bool,
 }
 
 impl Stream {
@@ -288,7 +290,9 @@ impl Stream {
                 client = dev.Activate(CLSCTX_ALL, None)?;
                 client.Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, flags, period, period, &fmt, None)?;
             }
-            Stream::finish(client, channels as usize, sample).map(Some)
+            let mut s = Stream::finish(client, channels as usize, sample)?;
+            s.exclusive = true;
+            Ok(Some(s))
         }
     }
 
@@ -324,7 +328,7 @@ impl Stream {
             let event = CreateEventW(None, false, false, None)?;
             client.SetEventHandle(event)?;
             let frames = client.GetBufferSize()?;
-            Ok(Stream { client, event, frames, channels, sample })
+            Ok(Stream { client, event, frames, channels, sample, exclusive: false })
         }
     }
 
@@ -382,10 +386,11 @@ impl Engine {
         engine.threads.push(std::thread::spawn(move || capture(&id, exclusive, producers, &stop2, &shared2, tx)));
 
         for _ in 0..outputs.len() + 1 {
-            match ready_rx.recv_timeout(Duration::from_secs(3)) {
+            // Bluetooth headsets can take several seconds to open.
+            match ready_rx.recv_timeout(Duration::from_secs(8)) {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
-                Err(_) => return Err("Аудиоустройство не ответило".into()),
+                Err(_) => return Err(pick("Аудиоустройство не ответило", "The audio device did not respond").into()),
             }
         }
         Ok(engine)
@@ -403,9 +408,11 @@ impl Drop for Engine {
 
 fn friendly(e: windows::core::Error) -> String {
     match e.code() {
-        AUDCLNT_E_DEVICE_IN_USE => "Устройство занято другой программой в монопольном режиме".into(),
-        AUDCLNT_E_DEVICE_INVALIDATED => "Устройство отключено".into(),
-        _ => format!("Ошибка звука: {}", e.message()),
+        AUDCLNT_E_DEVICE_IN_USE => {
+            pick("Устройство занято другой программой", "Another program holds the device exclusively").into()
+        }
+        AUDCLNT_E_DEVICE_INVALIDATED => pick("Устройство отключено", "The device was unplugged").into(),
+        _ => format!("{}: {}", pick("Ошибка звука", "Audio error"), e.message()),
     }
 }
 
@@ -468,7 +475,7 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
             Some(Ok(Some(s))) => s,
             _ => Stream::open(id, 1)?,
         };
-        let is_exclusive = s.sample != Sample::F32 || s.channels != 1 || s.frames < 400;
+        let is_exclusive = s.exclusive;
         shared.mic_exclusive.store(is_exclusive, Relaxed);
         // The outputs need one mic packet in hand plus 2 ms of slack for scheduling jitter.
         let packet = if is_exclusive { s.frames } else { (RATE as f64 * TARGET_MS / 1000.0) as u32 - RATE / 500 };
