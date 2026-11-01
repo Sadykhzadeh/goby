@@ -1,6 +1,6 @@
-//! What the Windows Sound control panel does behind its buttons: renaming an endpoint and
-//! making one the default. `IPolicyConfig` is undocumented but has kept this exact layout
-//! since Windows 7; the Sound panel, EarTrumpet and SoundSwitch all rely on it.
+//! What the Windows Sound control panel does behind its buttons: renaming an endpoint, and
+//! what the Volume mixer does for one program: choosing its microphone. Both interfaces are
+//! undocumented, but the Sound panel and the mixer themselves depend on these exact layouts.
 
 // The COM methods below keep their Windows names; order must match the vtable exactly.
 #![allow(non_snake_case)]
@@ -65,7 +65,7 @@ pub fn name_cable(render: &str, capture: &str) -> Result<()> {
 }
 
 /// Per-app default devices: what Settings > Sound > Volume mixer sets for each program.
-/// Activated through WinRT; the layout is the one EarTrumpet uses. Windows remembers the
+/// Activated through WinRT, with the vtable of current Windows 10 and 11. Windows remembers the
 /// choice per program, so it survives restarts of the program (and of Goby).
 #[interface("ab3d4648-e242-459f-b02f-541c70306324")]
 unsafe trait IAudioPolicyConfigFactory: IUnknown {

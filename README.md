@@ -111,17 +111,11 @@ microphone ──WASAPI (exclusive, 3 ms)──▶ gain + gate ─▶ voice reci
   microphone privacy page. Pinning a program uses the per-app audio policy behind the
   Volume mixer (`IAudioPolicyConfigFactory`), and the cable is renamed through
   `IPolicyConfig`, the interface behind the Sound control panel. Both are undocumented
-  but stable; EarTrumpet and SoundSwitch rely on them too.
+  but have kept their layout across Windows 10 and 11.
 
 ## Inspiration
 
-Goby was inspired by [Clownfish Voice Changer](https://clownfish-translator.com/voicechanger/).
-Clownfish takes a different route: it installs an Audio Processing Object into the Windows
-audio engine on the microphone itself, so every app hears the effect with no setup. That
-works without a cable, but it means rewriting protected registry keys and asking Windows to
-load unsigned code into `audiodg.exe`, and it tends to break after Windows updates. Goby
-stays an ordinary program you can close at any time; it never touches the system audio
-pipeline.
+Inspired by [Clownfish Voice Changer](https://clownfish-translator.com/voicechanger/).
 
 ## Building
 

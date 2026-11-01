@@ -327,7 +327,7 @@ unsafe extern "system" {
 }
 
 /// Lets Win32 menus follow the dark theme. uxtheme exports these by ordinal only; they have
-/// been stable since Windows 10 1903 and are what Explorer and Notepad use.
+/// been stable since Windows 10 1903 and are what Windows' own apps use for dark menus.
 fn allow_dark_menus(hwnd: HWND) {
     unsafe {
         let Ok(ux) = LoadLibraryW(w!("uxtheme.dll")) else { return };
