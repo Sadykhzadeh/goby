@@ -375,6 +375,7 @@ pub mod glyph {
     pub const OPEN: u16 = 0xE8A7;
     pub const CHAT: u16 = 0xE8BD;
     pub const ADD: u16 = 0xE710;
+    pub const INFO: u16 = 0xE946;
     pub const REMOVE: u16 = 0xE711;
     pub const GLOBE: u16 = 0xE774;
     pub const VIDEO: u16 = 0xE714;

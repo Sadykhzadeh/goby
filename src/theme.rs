@@ -112,10 +112,6 @@ impl Theme {
     pub fn on_accent(&self) -> D2D1_COLOR_F {
         self.pick(0xFF000000, 0xFFFFFFFF)
     }
-    /// The raw accent (for the app icon).
-    pub fn accent_rgb(&self) -> u32 {
-        self.palette[3]
-    }
 }
 
 #[cfg(test)]

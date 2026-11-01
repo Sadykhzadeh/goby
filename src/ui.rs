@@ -8,20 +8,24 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Dwm::{
-    DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+    DWMSBT_MAINWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea,
+    DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
+use windows::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
+use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 
 use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
 use crate::icon;
+use crate::lang;
 use crate::policy;
 use crate::settings::Settings;
 use crate::theme::{Theme, argb, with_alpha};
@@ -41,7 +45,6 @@ const GUTTER: f32 = 12.0;
 const TILE_H: f32 = 76.0;
 const CARD_GAP: f32 = 4.0;
 
-const WM_MOUSELEAVE: u32 = 0x02A3;
 const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x0020_0000);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -81,6 +84,8 @@ enum Hit {
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
+    /// The author's site.
+    About,
     /// Take a chosen program (index into `settings.routed`) off the list.
     Remove(usize),
     /// Choose another program that should hear Goby.
@@ -232,24 +237,6 @@ fn short(name: &str) -> &str {
     name.split(" (").next().unwrap_or(name)
 }
 
-#[link(name = "kernel32", kind = "raw-dylib")]
-unsafe extern "system" {
-    fn GetUserDefaultUILanguage() -> u16;
-}
-
-#[repr(C)]
-struct Margins {
-    left: i32,
-    right: i32,
-    top: i32,
-    bottom: i32,
-}
-
-#[link(name = "shell32", kind = "raw-dylib")]
-unsafe extern "system" {
-    fn ShellExecuteW(hwnd: HWND, op: PCWSTR, file: PCWSTR, params: PCWSTR, dir: PCWSTR, show: i32) -> HINSTANCE;
-}
-
 #[repr(C)]
 struct OpenFileName {
     struct_size: u32,
@@ -322,11 +309,6 @@ fn browse_exe(owner: HWND, title: &str) -> Option<String> {
     name.ends_with(".exe").then_some(name)
 }
 
-#[link(name = "dwmapi", kind = "raw-dylib")]
-unsafe extern "system" {
-    fn DwmExtendFrameIntoClientArea(hwnd: HWND, margins: *const Margins) -> HRESULT;
-}
-
 /// Lets Win32 menus follow the dark theme. uxtheme exports these by ordinal only; they have
 /// been stable since Windows 10 1903 and are what Windows' own apps use for dark menus.
 fn allow_dark_menus(hwnd: HWND) {
@@ -350,7 +332,7 @@ fn allow_dark_menus(hwnd: HWND) {
 impl App {
     fn new(hwnd: HWND) -> App {
         let settings = Settings::load();
-        let ru = unsafe { GetUserDefaultUILanguage() } & 0x3ff == 0x19;
+        let ru = lang::russian();
         let mut app = App {
             hwnd,
             lay: Layout::new(WIDTH, HEIGHT),
@@ -446,7 +428,14 @@ impl App {
         let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
         let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
         unsafe {
-            ShellExecuteW(self.hwnd, w!("runas"), PCWSTR(exe.as_ptr()), PCWSTR(args.as_ptr()), PCWSTR::null(), 0);
+            ShellExecuteW(
+                Some(self.hwnd),
+                w!("runas"),
+                PCWSTR(exe.as_ptr()),
+                PCWSTR(args.as_ptr()),
+                PCWSTR::null(),
+                SW_HIDE,
+            );
         }
         self.recheck_at = Some(Instant::now() + Duration::from_secs(4));
     }
@@ -748,6 +737,16 @@ impl App {
                 }
             }
             Hit::AddApp => self.add_app_menu(),
+            Hit::About => unsafe {
+                ShellExecuteW(
+                    Some(self.hwnd),
+                    w!("open"),
+                    w!("https://azer.one"),
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    SW_SHOWNORMAL,
+                );
+            },
             Hit::Scrollbar(pane) => {
                 let at = match pane {
                     Pane::Gallery => self.gallery_scroll.value,
@@ -1170,6 +1169,10 @@ impl App {
         };
         self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
 
+        y += 20.0;
+        let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
+        self.row_card(g, &mut y, Hit::About, glyph::INFO, &about, "Azer Sadykhzadeh · azer.one")?;
+
         g.unclip();
         let content = y + scroll - self.lay.pane.t;
         self.settings_max = (content - self.lay.pane.h()).max(0.0);
@@ -1262,11 +1265,11 @@ impl App {
             self.mica =
                 DwmSetWindowAttribute(self.hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop as *const _ as _, size).is_ok();
             if self.mica {
-                let all = Margins { left: -1, right: -1, top: -1, bottom: -1 };
+                let all = MARGINS { cxLeftWidth: -1, cxRightWidth: -1, cyTopHeight: -1, cyBottomHeight: -1 };
                 self.mica = DwmExtendFrameIntoClientArea(self.hwnd, &all).is_ok();
             }
             for (kind, size) in [(ICON_BIG, 32), (ICON_SMALL, 16)] {
-                if let Some(icon) = make_icon(size, self.theme.accent_rgb()) {
+                if let Some(icon) = make_icon(size, icon::RGB) {
                     let icon = LPARAM(icon.0 as isize);
                     let old = SendMessageW(self.hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(icon));
                     if old.0 != 0 {
@@ -1295,7 +1298,7 @@ fn trace(samples: &[f32; SCOPE_LEN], area: R) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The window icon: the same wave as the executable's, in the system accent colour.
+/// The window icon, identical to the executable's so the title bar matches the taskbar.
 fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
     let px = icon::premultiplied(size as usize, rgb);
     unsafe {
