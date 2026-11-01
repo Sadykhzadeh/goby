@@ -140,6 +140,145 @@ impl PitchShifter {
     }
 }
 
+/// RBJ biquad, transposed direct form II.
+#[derive(Clone, Copy)]
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    fn new(sample_rate: u32, freq: f32, q: f32, highpass: bool) -> Self {
+        let w = 2.0 * PI * freq / sample_rate as f32;
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        let (b0, b1, b2) = if highpass {
+            ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0)
+        } else {
+            ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0)
+        };
+        Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2.0 * cos / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        y
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    Off,
+    Minion,
+    Helium,
+    Giant,
+    Robot,
+    Radio,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 6] =
+        [Preset::Off, Preset::Minion, Preset::Helium, Preset::Giant, Preset::Robot, Preset::Radio];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|p| *p == self).unwrap()
+    }
+
+    pub fn from_index(i: usize) -> Preset {
+        Self::ALL.get(i).copied().unwrap_or(Preset::Off)
+    }
+
+    /// Pitch the preset starts from, in semitones. The user can still move it.
+    pub fn semitones(self) -> f32 {
+        match self {
+            Preset::Minion => 8.0,
+            Preset::Helium => 12.0,
+            Preset::Giant => -6.0,
+            Preset::Off | Preset::Robot | Preset::Radio => 0.0,
+        }
+    }
+}
+
+/// The full chain: pitch → robot → radio → gain.
+pub struct Voice {
+    sample_rate: f32,
+    pitch: PitchShifter,
+    robot_phase: f32,
+    comb: Vec<f32>,
+    comb_pos: usize,
+    hp: Biquad,
+    lp: Biquad,
+    lp2: Biquad,
+    preset: Preset,
+    semitones: f32,
+    gain: f32,
+}
+
+impl Voice {
+    pub fn new(sample_rate: u32) -> Self {
+        Self {
+            sample_rate: sample_rate as f32,
+            pitch: PitchShifter::new(sample_rate),
+            robot_phase: 0.0,
+            // 6 ms metallic comb for the robot.
+            comb: vec![0.0; (sample_rate as f32 * 0.006) as usize],
+            comb_pos: 0,
+            hp: Biquad::new(sample_rate, 450.0, 0.707, true),
+            lp: Biquad::new(sample_rate, 2800.0, 0.707, false),
+            lp2: Biquad::new(sample_rate, 2800.0, 0.707, false),
+            preset: Preset::Off,
+            semitones: 0.0,
+            gain: 1.0,
+        }
+    }
+
+    pub fn set(&mut self, preset: Preset, semitones: f32, gain: f32) {
+        self.preset = preset;
+        self.gain = gain;
+        if semitones != self.semitones {
+            self.semitones = semitones;
+            self.pitch.set_ratio(2f32.powf(semitones / 12.0));
+        }
+    }
+
+    pub fn process(&mut self, block: &mut [f32]) {
+        let off = self.preset == Preset::Off;
+        let shift = !off && self.semitones.abs() > 0.01;
+        for s in block.iter_mut() {
+            let mut x = *s;
+            if shift {
+                x = self.pitch.process(x);
+            }
+            match self.preset {
+                Preset::Robot => {
+                    self.robot_phase = (self.robot_phase + 55.0 / self.sample_rate) % 1.0;
+                    x *= (2.0 * PI * self.robot_phase).sin() * 1.6;
+                    let delayed = self.comb[self.comb_pos];
+                    x += delayed * 0.55;
+                    self.comb[self.comb_pos] = x;
+                    self.comb_pos = (self.comb_pos + 1) % self.comb.len();
+                }
+                Preset::Radio => {
+                    x = self.lp2.process(self.lp.process(self.hp.process(x)));
+                    x = (x * 4.0).tanh() * 0.6;
+                }
+                _ => {}
+            }
+            // Soft limit so a loud scream never clips hard in voice chat.
+            *s = if off { x * self.gain } else { (x * self.gain).tanh() };
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +343,27 @@ mod tests {
         let out: Vec<f32> = input.iter().map(|s| p.process(*s)).collect();
         let peak = out[SR as usize / 10..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!((peak - 0.5).abs() < 0.02, "peak {peak}");
+    }
+
+    #[test]
+    fn every_preset_stays_finite_and_bounded() {
+        for preset in Preset::ALL {
+            let mut v = Voice::new(SR);
+            v.set(preset, preset.semitones(), 1.0);
+            let mut block = sine(180.0, 0.5);
+            block.iter_mut().for_each(|s| *s *= 2.0);
+            v.process(&mut block);
+            assert!(block.iter().all(|s| s.is_finite() && s.abs() <= 1.0 + f32::EPSILON), "{preset:?}");
+        }
+    }
+
+    #[test]
+    fn radio_cuts_lows() {
+        let mut v = Voice::new(SR);
+        v.set(Preset::Radio, 0.0, 1.0);
+        let mut low = sine(80.0, 0.5);
+        v.process(&mut low);
+        let peak = low[SR as usize / 10..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak < 0.15, "80 Hz leaked at {peak}");
     }
 }
