@@ -5,6 +5,7 @@ mod dsp;
 mod engine;
 mod fx;
 mod gfx;
+mod icon;
 mod mic;
 mod policy;
 mod ring;

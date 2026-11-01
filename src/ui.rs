@@ -21,6 +21,7 @@ use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
+use crate::icon;
 use crate::policy;
 use crate::settings::Settings;
 use crate::theme::{Theme, argb, with_alpha};
@@ -1294,33 +1295,9 @@ fn trace(samples: &[f32; SCOPE_LEN], area: R) -> Vec<(f32, f32)> {
         .collect()
 }
 
-/// The app icon: the Minion voice's own waveform in the system accent colour.
+/// The window icon: the same wave as the executable's, in the system accent colour.
 fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
-    let n = size as usize;
-    let wave = voices::glyph(&voices::ALL[1], 64);
-    let pts: Vec<(f32, f32)> = wave
-        .iter()
-        .enumerate()
-        .map(|(i, s)| (2.0 + (size as f32 - 4.0) * i as f32 / 63.0, size as f32 / 2.0 - s * size as f32 * 0.32))
-        .collect();
-    let half = (size as f32 / 16.0).max(1.0);
-    let mut px = vec![0u32; n * n];
-    for (i, p) in px.iter_mut().enumerate() {
-        let (x, y) = ((i % n) as f32 + 0.5, (i / n) as f32 + 0.5);
-        let d = pts
-            .windows(2)
-            .map(|s| {
-                let ((ax, ay), (bx, by)) = (s[0], s[1]);
-                let (dx, dy) = (bx - ax, by - ay);
-                let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy).max(1e-6)).clamp(0.0, 1.0);
-                ((x - ax - t * dx).powi(2) + (y - ay - t * dy).powi(2)).sqrt()
-            })
-            .fold(f32::MAX, f32::min);
-        let a8 = ((half + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u32;
-        // Premultiplied BGRA.
-        let c = |v: u32| v * a8 / 255;
-        *p = (a8 << 24) | (c((rgb >> 16) & 0xff) << 16) | (c((rgb >> 8) & 0xff) << 8) | c(rgb & 0xff);
-    }
+    let px = icon::premultiplied(size as usize, rgb);
     unsafe {
         let bitmap = CreateBitmap(size, size, 1, 32, Some(px.as_ptr() as _));
         let mask = CreateBitmap(size, size, 1, 1, None);
