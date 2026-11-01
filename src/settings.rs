@@ -20,6 +20,12 @@ pub struct Settings {
     pub dry_mix: f32,
     /// Take the mic in exclusive mode for shorter packets (falls back if refused).
     pub exclusive: bool,
+    /// Programs (lower-case exe names) whose microphone is pinned to Goby.
+    pub routed: Vec<String>,
+    /// Programs to hand back to the default mic the next time they run.
+    pub unroute: Vec<String>,
+    /// The cable was offered a rename once; never prompt for it again.
+    pub cable_named_tried: bool,
 }
 
 impl Default for Settings {
@@ -37,8 +43,16 @@ impl Default for Settings {
             gate_db: -50.0,
             dry_mix: 0.0,
             exclusive: true,
+            routed: Vec::new(),
+            unroute: Vec::new(),
+            cable_named_tried: false,
         }
     }
+}
+
+/// Comma-separated executable names, lower-cased, empty entries dropped.
+fn list(v: &str) -> Vec<String> {
+    v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect()
 }
 
 fn path() -> Option<PathBuf> {
@@ -62,6 +76,9 @@ impl Settings {
                 "gate" => s.gate = v == "1",
                 "gate_db" => s.gate_db = v.parse::<f32>().unwrap_or(s.gate_db).clamp(-80.0, -10.0),
                 "exclusive" => s.exclusive = v != "0",
+                "routed" => s.routed = list(v),
+                "unroute" => s.unroute = list(v),
+                "cable_named_tried" => s.cable_named_tried = v == "1",
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -76,7 +93,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\n",
             self.input,
             self.output,
             self.voice,
@@ -89,6 +106,9 @@ impl Settings {
             self.gate_db,
             self.dry_mix,
             self.exclusive as u8,
+            self.routed.join(","),
+            self.unroute.join(","),
+            self.cable_named_tried as u8,
         )
     }
 
@@ -125,6 +145,9 @@ mod tests {
             gate_db: -45.0,
             dry_mix: 0.25,
             exclusive: false,
+            routed: vec!["cs2.exe".into(), "discord.exe".into()],
+            unroute: vec!["obs64.exe".into()],
+            cable_named_tried: true,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

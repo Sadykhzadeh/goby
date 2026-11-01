@@ -373,8 +373,9 @@ pub mod glyph {
     pub const HEADPHONE: u16 = 0xE7F6;
     pub const CHEVRON_DOWN: u16 = 0xE70D;
     pub const OPEN: u16 = 0xE8A7;
-    pub const CHECK: u16 = 0xE73E;
-    pub const RENAME: u16 = 0xE8AC;
+    pub const CHAT: u16 = 0xE8BD;
+    pub const GLOBE: u16 = 0xE774;
+    pub const VIDEO: u16 = 0xE714;
     pub const GAME: u16 = 0xE7FC;
     pub const SPEED: u16 = 0xEC4A;
     pub const VOLUME: u16 = 0xE767;

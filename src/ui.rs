@@ -18,6 +18,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, Result, w};
 
+use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
 use crate::policy;
@@ -79,10 +80,8 @@ enum Hit {
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
-    /// Make the cable the Windows default microphone.
-    MakeDefault,
-    /// Rename the cable to Goby (elevated).
-    NameCable,
+    /// A program from the microphone list: pin it to Goby or give it back.
+    App(usize),
     Scrollbar(Pane),
 }
 
@@ -147,7 +146,12 @@ struct App {
     retry_at: Option<Instant>,
     /// The virtual cable (play side, record side), if installed.
     cable: Option<(Endpoint, Endpoint)>,
-    cable_is_default: bool,
+    /// Programs that use the mic, and whether each now records from Goby.
+    mic_apps: Vec<apps::MicApp>,
+    app_state: Vec<AppState>,
+    apps_at: Instant,
+    /// Processes already pinned to Goby, so each is asked only once.
+    pinned: Vec<u32>,
     /// Re-read device names a moment after the elevated rename was started.
     recheck_at: Option<Instant>,
 
@@ -170,6 +174,30 @@ struct App {
     voiced: Box<[f32; SCOPE_LEN]>,
     dirty: bool,
     quiet_frames: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AppState {
+    /// Pinned to Goby and running with it.
+    OnGoby,
+    /// Pinned to Goby, applies when the program starts.
+    Waiting,
+    /// Pinned, but Windows refused (the program has not opened any audio yet).
+    Failed,
+    /// Not pinned and recording from its own mic right now.
+    Listening,
+    /// Not pinned.
+    Own,
+}
+
+/// A Segoe Fluent icon for well-known programs; a game pad for everything else.
+fn app_glyph(exe: &str) -> u16 {
+    match exe {
+        "discord.exe" | "telegram.exe" | "teams.exe" | "ms-teams.exe" | "zoom.exe" | "skype.exe" => glyph::CHAT,
+        "chrome.exe" | "msedge.exe" | "firefox.exe" | "opera.exe" | "brave.exe" | "steamwebhelper.exe" => glyph::GLOBE,
+        "obs64.exe" | "obs32.exe" => glyph::VIDEO,
+        _ => glyph::GAME,
+    }
 }
 
 fn short(name: &str) -> &str {
@@ -243,7 +271,10 @@ impl App {
             healthy: true,
             retry_at: None,
             cable: None,
-            cable_is_default: false,
+            mic_apps: Vec::new(),
+            app_state: Vec::new(),
+            apps_at: Instant::now(),
+            pinned: Vec::new(),
             recheck_at: None,
             mouse: (-1.0, -1.0),
             hover: Hit::None,
@@ -271,6 +302,8 @@ impl App {
             app.switches[i] = Anim { value: v, target: v };
         }
         app.refresh_devices();
+        app.name_cable_once();
+        app.sync_apps();
         app.apply();
         app.restart();
         app
@@ -288,8 +321,6 @@ impl App {
         self.inputs = engine::list(true);
         self.outputs = engine::list(false);
         self.cable = engine::cable();
-        self.cable_is_default =
-            self.cable.as_ref().is_some_and(|(_, rec)| engine::default_endpoint(true).is_some_and(|d| d.id == rec.id));
         let pick = |list: &[Endpoint], id: &str| list.iter().position(|e| e.id == id);
         self.input = pick(&self.inputs, &keep_in)
             .or_else(|| engine::default_endpoint(true).and_then(|d| pick(&self.inputs, &d.id)))
@@ -297,6 +328,86 @@ impl App {
         self.output = pick(&self.outputs, &keep_out)
             .or_else(|| self.cable.as_ref().and_then(|(play, _)| pick(&self.outputs, &play.id)))
             .unwrap_or(0);
+    }
+
+    /// First run with an unnamed cable: rename it to Goby once, behind one UAC prompt,
+    /// so CS2, Discord and OBS list "Goby Mic" instead of "CABLE Output".
+    fn name_cable_once(&mut self) {
+        let Some((play, record)) = &self.cable else { return };
+        if play.name.starts_with("Goby") || self.settings.cable_named_tried {
+            return;
+        }
+        self.settings.cable_named_tried = true;
+        self.settings.save();
+        let exe = std::env::current_exe().unwrap_or_default();
+        let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
+        let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
+        unsafe {
+            ShellExecuteW(self.hwnd, w!("runas"), PCWSTR(exe.as_ptr()), PCWSTR(args.as_ptr()), PCWSTR::null(), 0);
+        }
+        self.recheck_at = Some(Instant::now() + Duration::from_secs(4));
+    }
+
+    /// Re-reads which programs use the mic and pins the chosen ones to Goby (or hands
+    /// them back). Windows keeps the choice per program, so it outlives this process.
+    fn sync_apps(&mut self) {
+        self.apps_at = Instant::now();
+        let mut list: Vec<apps::MicApp> = apps::recent().into_iter().take(8).collect();
+        // Chosen programs stay listed even after they drop out of the recent eight.
+        for exe in &self.settings.routed {
+            if !list.iter().any(|a| &a.exe == exe) {
+                list.push(apps::MicApp {
+                    name: apps::display_name(exe),
+                    exe: exe.clone(),
+                    last_used: 0,
+                    active: false,
+                });
+            }
+        }
+        let record = self.cable.as_ref().map(|(_, r)| r.id.clone());
+        let ours = record.as_deref().map(policy::capture_interface_path).unwrap_or_default();
+        let snapshot = apps::processes();
+        self.pinned.retain(|pid| snapshot.iter().any(|(_, p)| p == pid));
+        let mut states = Vec::with_capacity(list.len());
+        for app in &list {
+            let pids = apps::pids_of(&snapshot, &app.exe);
+            let wanted = self.settings.routed.contains(&app.exe);
+            let unroute = self.settings.unroute.contains(&app.exe);
+            let mut pinned = wanted && pids.iter().any(|p| self.pinned.contains(p));
+            // Only programs being changed are asked about; one success covers the program.
+            for pid in pids.iter().filter(|_| (wanted && !pinned) || unroute) {
+                let now = policy::app_route(*pid).unwrap_or_default();
+                if wanted && !now.eq_ignore_ascii_case(&ours) {
+                    if let Some(id) = &record
+                        && policy::route_app(*pid, Some(id)).is_ok()
+                    {
+                        pinned = true;
+                        self.pinned.push(*pid);
+                        break;
+                    }
+                } else if wanted {
+                    pinned = true;
+                    self.pinned.push(*pid);
+                    break;
+                } else if unroute && now.eq_ignore_ascii_case(&ours) && policy::route_app(*pid, None).is_ok() {
+                    self.settings.unroute.retain(|e| *e != app.exe);
+                    self.settings.save();
+                    break;
+                }
+            }
+            states.push(match (wanted, pids.is_empty(), pinned) {
+                (true, true, _) => AppState::Waiting,
+                (true, false, true) => AppState::OnGoby,
+                (true, false, false) => AppState::Failed,
+                (false, _, _) if app.active => AppState::Listening,
+                _ => AppState::Own,
+            });
+        }
+        if list != self.mic_apps || states != self.app_state {
+            self.dirty = true;
+        }
+        self.mic_apps = list;
+        self.app_state = states;
     }
 
     fn apply(&mut self) {
@@ -392,6 +503,9 @@ impl App {
             self.retry_at = Some(Instant::now() + Duration::from_secs(2));
             self.dirty = true;
         }
+        if self.apps_at.elapsed() >= Duration::from_secs(2) {
+            self.sync_apps();
+        }
         if self.recheck_at.is_some_and(|t| Instant::now() >= t) {
             self.recheck_at = None;
             self.refresh_devices();
@@ -474,33 +588,20 @@ impl App {
                 self.settings.save();
             }
             Hit::Pick(p) => self.menu(p),
-            Hit::MakeDefault => {
-                if let Some((_, record)) = &self.cable
-                    && let Err(e) = policy::set_default(&record.id)
-                {
-                    self.status = e.message();
-                    self.healthy = false;
-                }
-                self.refresh_devices();
-                self.dirty = true;
-            }
-            Hit::NameCable => {
-                if let Some((play, record)) = &self.cable {
-                    let exe = std::env::current_exe().unwrap_or_default();
-                    let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
-                    // A UAC prompt: the names live under HKLM like every endpoint setting.
-                    let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
-                    unsafe {
-                        ShellExecuteW(
-                            self.hwnd,
-                            w!("runas"),
-                            PCWSTR(exe.as_ptr()),
-                            PCWSTR(args.as_ptr()),
-                            PCWSTR::null(),
-                            0,
-                        );
+            Hit::App(i) => {
+                if let Some(app) = self.mic_apps.get(i) {
+                    let exe = app.exe.clone();
+                    let s = &mut self.settings;
+                    if let Some(at) = s.routed.iter().position(|e| *e == exe) {
+                        s.routed.remove(at);
+                        s.unroute.push(exe);
+                    } else {
+                        s.unroute.retain(|e| *e != exe);
+                        s.routed.push(exe);
                     }
-                    self.recheck_at = Some(Instant::now() + Duration::from_secs(4));
+                    self.settings.save();
+                    self.pinned.clear();
+                    self.sync_apps();
                 }
             }
             Hit::Scrollbar(pane) => {
@@ -664,10 +765,14 @@ impl App {
         g.stroke(r, radius, th.card_stroke(), 1.0);
     }
 
-    /// WinUI ToggleSwitch: 40x20 track, 12 px knob that slides and recolours.
     fn toggle(&self, g: &Gfx, x: f32, y: f32, which: Switch) {
-        let th = &self.theme;
         let t = self.switches[which as usize].value;
+        self.toggle_at(g, x, y, t, self.hover == Hit::Toggle(which));
+    }
+
+    /// WinUI ToggleSwitch: 40x20 track, 12 px knob that slides and recolours.
+    fn toggle_at(&self, g: &Gfx, x: f32, y: f32, t: f32, hovered: bool) {
+        let th = &self.theme;
         let track = R::new(x, y, 40.0, 20.0);
         if t < 1.0 {
             g.fill(track, 10.0, with_alpha(th.control_alt(), 1.0 - t));
@@ -676,7 +781,7 @@ impl App {
         if t > 0.0 {
             g.fill(track, 10.0, with_alpha(th.accent(), t));
         }
-        let radius = if self.hover == Hit::Toggle(which) { 7.0 } else { 6.0 };
+        let radius = if hovered { 7.0 } else { 6.0 };
         let knob = if t > 0.5 { th.on_accent() } else { th.text_secondary() };
         g.circle(x + 10.0 + 20.0 * t, y + 10.0, radius, knob);
     }
@@ -889,24 +994,27 @@ impl App {
         let mon = self.t("В наушники по умолчанию", "To your default headphones");
         let hear = self.t("Слышать себя", "Hear myself");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Monitor), glyph::HEADPHONE, hear, mon)?;
-        if let Some((play, record)) = self.cable.clone() {
-            let games = self.t("Микрофон для игр", "Mic for games");
-            if self.cable_is_default {
-                let done = self.t("Готово: CS2 и чаты слышат Goby", "Done: CS2 and chats hear Goby");
-                self.row_card(g, &mut y, Hit::None, glyph::GAME, games, done)?;
-            } else {
-                let how = format!("{} «{}»", self.t("Сделать по умолчанию:", "Make default:"), short(&record.name));
-                self.row_card(g, &mut y, Hit::MakeDefault, glyph::GAME, games, &how)?;
-            }
-            if !play.name.starts_with("Goby") {
-                let name = self.t("Назвать кабель «Goby»", "Name the cable Goby");
-                let why = self.t("Чтобы не путаться в устройствах", "So it is easy to spot in device lists");
-                self.row_card(g, &mut y, Hit::NameCable, glyph::RENAME, name, why)?;
-            }
-        } else {
+        y += 20.0;
+
+        section(g, &mut y, self.t("Кто слышит Goby", "Who hears Goby"))?;
+        if self.cable.is_none() {
             let none =
                 self.t("Установите VB-Cable, чтобы голос шёл в игры", "Install VB-Cable to route the voice into games");
             self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Виртуальный кабель", "Virtual cable"), none)?;
+        } else if self.mic_apps.is_empty() {
+            let none = self.t("Программы с микрофоном появятся здесь", "Programs that use the mic show up here");
+            self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Пока никого", "Nobody yet"), none)?;
+        }
+        for i in 0..self.mic_apps.len() {
+            let (name, icon) = (self.mic_apps[i].name.clone(), app_glyph(&self.mic_apps[i].exe));
+            let desc = match self.app_state.get(i).copied().unwrap_or(AppState::Own) {
+                AppState::OnGoby => self.t("Слышит Goby", "Hears Goby"),
+                AppState::Waiting => self.t("Услышит Goby, когда запустится", "Will hear Goby when it starts"),
+                AppState::Failed => self.t("Не вышло: откройте в ней микрофон", "Did not take: open the mic in it"),
+                AppState::Listening => self.t("Слушает обычный микрофон сейчас", "Listening to your mic right now"),
+                AppState::Own => self.t("Обычный микрофон", "Your own mic"),
+            };
+            self.row_card(g, &mut y, Hit::App(i), icon, &name, desc)?;
         }
 
         g.unclip();
@@ -951,8 +1059,11 @@ impl App {
             let side = R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0);
             match hit {
                 Hit::Toggle(s) => self.toggle(g, r.r - 56.0, r.t + 24.0, s),
+                Hit::App(i) => {
+                    let on = self.settings.routed.contains(&self.mic_apps[i].exe);
+                    self.toggle_at(g, r.r - 56.0, r.t + 24.0, if on { 1.0 } else { 0.0 }, self.hover == hit);
+                }
                 Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
-                Hit::None if self.cable_is_default => g.icon(glyph::CHECK, Font::Icon12, side, th.accent())?,
                 Hit::None => {}
                 _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
             }
