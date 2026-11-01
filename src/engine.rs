@@ -141,21 +141,32 @@ fn describe(dev: &IMMDevice) -> WinResult<Endpoint> {
     }
 }
 
-/// The cable's own capture side would loop our output back in, so it is never offered as a mic.
-fn is_cable_capture(name: &str) -> bool {
-    name.to_ascii_lowercase().contains("cable output")
+/// VB-Cable endpoints carry the driver name in brackets, which survives renaming them.
+fn is_cable(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.contains("virtual cable") && !n.contains("16ch")
 }
 
-pub fn list(capture: bool) -> Vec<Endpoint> {
+/// Every active endpoint of one direction, cable included.
+fn list_all(capture: bool) -> Vec<Endpoint> {
     let flow = if capture { eCapture } else { eRender };
     let Ok(e) = enumerator() else { return Vec::new() };
     let Ok(all) = (unsafe { e.EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE) }) else { return Vec::new() };
     let count = unsafe { all.GetCount() }.unwrap_or(0);
-    (0..count)
-        .filter_map(|i| unsafe { all.Item(i) }.ok())
-        .filter_map(|d| describe(&d).ok())
-        .filter(|ep| !(capture && is_cable_capture(&ep.name)))
-        .collect()
+    (0..count).filter_map(|i| unsafe { all.Item(i) }.ok()).filter_map(|d| describe(&d).ok()).collect()
+}
+
+/// Endpoints to offer. The cable's own capture side would loop our output back in, so it is
+/// never offered as a microphone.
+pub fn list(capture: bool) -> Vec<Endpoint> {
+    list_all(capture).into_iter().filter(|ep| !(capture && is_cable(&ep.name))).collect()
+}
+
+/// The virtual cable as (where Goby plays, what games record from).
+pub fn cable() -> Option<(Endpoint, Endpoint)> {
+    let play = list_all(false).into_iter().find(|e| is_cable(&e.name))?;
+    let record = list_all(true).into_iter().find(|e| is_cable(&e.name))?;
+    Some((play, record))
 }
 
 pub fn default_endpoint(capture: bool) -> Option<Endpoint> {
@@ -524,6 +535,7 @@ mod tests {
             println!("{} | {}", ep.name, ep.id);
         }
         println!("default mic: {:?}", default_endpoint(true));
+        println!("cable: {:?}", cable());
     }
 }
 
