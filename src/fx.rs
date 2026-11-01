@@ -61,6 +61,47 @@ impl Wander {
     }
 }
 
+/// RBJ biquad, transposed direct form II.
+#[derive(Clone, Copy, Default)]
+pub struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+pub enum Shape {
+    LowPass,
+    HighPass,
+    BandPass,
+}
+
+impl Biquad {
+    pub fn new(shape: Shape, sample_rate: f32, freq: f32, q: f32) -> Self {
+        let w = TAU * (freq / sample_rate).min(0.49);
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        let a0 = 1.0 + alpha;
+        let (b0, b1, b2) = match shape {
+            Shape::LowPass => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0),
+            Shape::HighPass => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0),
+            Shape::BandPass => (alpha, 0.0, -alpha),
+        };
+        Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2.0 * cos / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: f32) -> f32 {
+        let y = self.b0 * x + self.z1;
+        self.z1 = self.b1 * x - self.a1 * y + self.z2;
+        self.z2 = self.b2 * x - self.a2 * y;
+        y
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -76,6 +117,12 @@ pub fn ratio(semitones: f32) -> f32 {
 #[inline]
 pub fn db(gain_db: f32) -> f32 {
     10f32.powf(gain_db / 20.0)
+}
+
+/// A unit sine of `hz` at sample `i`, for tests.
+#[cfg(test)]
+pub fn sine(hz: f32, i: usize, sample_rate: f32) -> f32 {
+    (i as f32 * hz * TAU / sample_rate).sin()
 }
 
 #[cfg(test)]
@@ -98,5 +145,17 @@ mod tests {
             assert!(n.next().abs() <= 1.0);
             assert!(w.next(3.0, SR).abs() <= 1.0);
         }
+    }
+
+    #[test]
+    fn filters_pass_and_cut_where_expected() {
+        let level = |shape: fn() -> Biquad, hz: f32| {
+            let mut f = shape();
+            peak((0..SR as usize / 2).map(|i| f.process(sine(hz, i, SR))).skip(SR as usize / 10))
+        };
+        let lp = || Biquad::new(Shape::LowPass, SR, 1000.0, 0.707);
+        let hp = || Biquad::new(Shape::HighPass, SR, 1000.0, 0.707);
+        assert!(level(lp, 100.0) > 0.9 && level(lp, 8000.0) < 0.05);
+        assert!(level(hp, 8000.0) > 0.9 && level(hp, 100.0) < 0.05);
     }
 }
