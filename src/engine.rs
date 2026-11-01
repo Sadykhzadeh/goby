@@ -43,6 +43,8 @@ pub struct Shared {
     mic_frames: AtomicU32,
     effect_frames: AtomicU32,
     queued_frames: AtomicU32,
+    /// Times the cable ran dry and had to wait (each one is an audible gap).
+    pub underruns: AtomicU32,
 }
 
 impl Default for Shared {
@@ -59,6 +61,7 @@ impl Default for Shared {
             mic_frames: AtomicU32::new(0),
             effect_frames: AtomicU32::new(0),
             queued_frames: AtomicU32::new(0),
+            underruns: AtomicU32::new(0),
         }
     }
 }
@@ -328,6 +331,7 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
             if measure {
                 // Right after a write the device queue is full: ring + whole buffer.
                 shared.queued_frames.store(reader.ring.len() as u32 + s.frames, Relaxed);
+                shared.underruns.store(reader.underruns, Relaxed);
             }
         }
         Ok(())
@@ -406,12 +410,13 @@ pub struct Reader {
     target: f64,
     fill: f64,
     priming: bool,
+    underruns: u32,
 }
 
 impl Reader {
     fn new(ring: Consumer) -> Self {
         let target = RATE as f64 * TARGET_MS / 1000.0;
-        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, priming: true }
+        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, priming: true, underruns: 0 }
     }
 
     fn next(&mut self) -> f32 {
@@ -437,6 +442,7 @@ impl Reader {
                 Some(s) => self.s1 = s,
                 None => {
                     self.priming = true;
+                    self.underruns += 1;
                     return 0.0;
                 }
             }
@@ -535,9 +541,10 @@ mod live {
         let avg = samples.iter().sum::<f32>() / samples.len() as f32;
         let (min, max) = samples.iter().fold((f32::MAX, 0f32), |(a, b), s| (a.min(*s), b.max(*s)));
         println!(
-            "{} → {}: latency min {min:.1} avg {avg:.1} max {max:.1} ms, failed={}",
+            "{} → {}: latency min {min:.1} avg {avg:.1} max {max:.1} ms, underruns {}, failed={}",
             mic.name,
             cable.name,
+            shared.underruns.load(Relaxed),
             shared.failed.load(Relaxed)
         );
         assert!(!shared.failed.load(Relaxed));
