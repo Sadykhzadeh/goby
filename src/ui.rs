@@ -1354,3 +1354,38 @@ pub fn run() -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_scope_stays_inside_its_card() {
+        let area = R::new(10.0, 20.0, 300.0, 100.0);
+        let mut loud = Box::new([0.0f32; SCOPE_LEN]);
+        for (i, s) in loud.iter_mut().enumerate() {
+            *s = ((i as f32) * 0.05).sin() * 5.0;
+        }
+        for samples in [&*loud, &[0.0f32; SCOPE_LEN]] {
+            let pts = trace(samples, area);
+            assert!(pts.iter().all(|(x, y)| area.has((*x, *y)) || (*x - area.r).abs() < 1e-3), "trace left the card");
+        }
+    }
+
+    #[test]
+    fn knob_ranges_hold_their_reset_values() {
+        for k in [Knob::Tone, Knob::Volume, Knob::Mix, Knob::Gain, Knob::Gate] {
+            let (lo, hi, step, reset) = k.range();
+            assert!(lo < hi && step > 0.0 && (lo..=hi).contains(&reset), "{k:?}");
+            let steps = (hi - lo) / step;
+            assert!((steps - steps.round()).abs() < 1e-3, "{k:?} range is not a whole number of steps");
+        }
+    }
+
+    #[test]
+    fn known_programs_get_their_own_icons() {
+        assert_eq!(app_glyph("discord.exe"), glyph::CHAT);
+        assert_eq!(app_glyph("obs64.exe"), glyph::VIDEO);
+        assert_eq!(app_glyph("cs2.exe"), glyph::GAME);
+    }
+}
