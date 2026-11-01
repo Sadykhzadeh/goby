@@ -39,6 +39,10 @@ pub struct Shared {
     scope_in: Box<[AtomicU32]>,
     scope_out: Box<[AtomicU32]>,
     scope_pos: AtomicUsize,
+    /// Live latency parts, in frames: mic period, effect delay, and ring + device queue on the cable.
+    mic_frames: AtomicU32,
+    effect_frames: AtomicU32,
+    queued_frames: AtomicU32,
 }
 
 impl Default for Shared {
@@ -52,6 +56,9 @@ impl Default for Shared {
             scope_in: taps(),
             scope_out: taps(),
             scope_pos: AtomicUsize::new(0),
+            mic_frames: AtomicU32::new(0),
+            effect_frames: AtomicU32::new(0),
+            queued_frames: AtomicU32::new(0),
         }
     }
 }
@@ -61,6 +68,14 @@ impl Shared {
         self.preset.store(preset.index() as u32, Relaxed);
         self.semitones.store(semitones.to_bits(), Relaxed);
         self.gain.store(gain.to_bits(), Relaxed);
+    }
+
+    /// Measured mic-to-cable latency in milliseconds; the mic period counts in full
+    /// because a sample can arrive at the start of a packet.
+    pub fn latency_ms(&self) -> f32 {
+        let frames =
+            self.mic_frames.load(Relaxed) + self.effect_frames.load(Relaxed) + self.queued_frames.load(Relaxed);
+        frames as f32 * 1000.0 / RATE as f32
     }
 
     /// The most recent `SCOPE_LEN` samples before and after the effect, oldest first.
@@ -224,17 +239,18 @@ pub struct Engine {
 }
 
 impl Engine {
+    /// `outputs[0]` is the cable; the rest (your headphones) do not count towards latency.
     pub fn start(input: &str, outputs: &[String], shared: Arc<Shared>) -> std::result::Result<Engine, String> {
         let stop = Arc::new(AtomicBool::new(false));
         let mut engine = Engine { stop: stop.clone(), threads: Vec::new() };
         let mut producers = Vec::new();
         let (ready_tx, ready_rx) = mpsc::channel();
 
-        for id in outputs {
+        for (i, id) in outputs.iter().enumerate() {
             let (prod, cons) = ring(RATE as usize);
             producers.push(prod);
             let (id, stop, shared, tx) = (id.clone(), stop.clone(), shared.clone(), ready_tx.clone());
-            engine.threads.push(std::thread::spawn(move || render(&id, Reader::new(cons), &stop, &shared, tx)));
+            engine.threads.push(std::thread::spawn(move || render(&id, Reader::new(cons), i == 0, &stop, &shared, tx)));
         }
         let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready_tx);
         engine.threads.push(std::thread::spawn(move || capture(&id, producers, &stop2, &shared2, tx)));
@@ -284,7 +300,7 @@ fn run(shared: &Shared, ready: Ready, body: impl FnOnce(&mut dyn FnMut()) -> Win
     }
 }
 
-fn render(id: &str, mut reader: Reader, stop: &AtomicBool, shared: &Shared, ready: Ready) {
+fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared: &Shared, ready: Ready) {
     run(shared, ready, |started| unsafe {
         let s = match Stream::open_low_latency(id) {
             Ok(Some(s)) => s,
@@ -309,6 +325,10 @@ fn render(id: &str, mut reader: Reader, stop: &AtomicBool, shared: &Shared, read
                 frame.fill(reader.next());
             }
             out.ReleaseBuffer(n, 0)?;
+            if measure {
+                // Right after a write the device queue is full: ring + whole buffer.
+                shared.queued_frames.store(reader.ring.len() as u32 + s.frames, Relaxed);
+            }
         }
         Ok(())
     });
@@ -369,6 +389,8 @@ fn capture(id: &str, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared
                     }
                 }
                 cap.ReleaseBuffer(n)?;
+                shared.mic_frames.store(n, Relaxed);
+                shared.effect_frames.store(voice.delay() as u32, Relaxed);
             }
         }
         Ok(())
@@ -486,5 +508,38 @@ mod probe {
             })();
             println!("{:<45} {}", ep.name, r.unwrap_or_else(|e| e.to_string()));
         }
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// `cargo test --release live_latency -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs real audio devices"]
+    fn live_latency() {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+        let mic = default_endpoint(true).expect("no mic");
+        let cable = list(false).into_iter().find(|e| e.name.contains("CABLE Input")).expect("no VB-Cable");
+        let shared = Arc::new(Shared::default());
+        shared.set(Preset::Minion, 8.0, 1.0);
+        let engine = Engine::start(&mic.id, std::slice::from_ref(&cable.id), shared.clone()).expect("start");
+        std::thread::sleep(Duration::from_secs(1));
+        let mut samples = Vec::new();
+        for _ in 0..300 {
+            std::thread::sleep(Duration::from_millis(100));
+            samples.push(shared.latency_ms());
+        }
+        drop(engine);
+        let avg = samples.iter().sum::<f32>() / samples.len() as f32;
+        let (min, max) = samples.iter().fold((f32::MAX, 0f32), |(a, b), s| (a.min(*s), b.max(*s)));
+        println!(
+            "{} → {}: latency min {min:.1} avg {avg:.1} max {max:.1} ms, failed={}",
+            mic.name,
+            cable.name,
+            shared.failed.load(Relaxed)
+        );
+        assert!(!shared.failed.load(Relaxed));
     }
 }

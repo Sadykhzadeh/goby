@@ -250,6 +250,11 @@ impl Voice {
         }
     }
 
+    /// How far behind the input the output currently is, in samples.
+    pub fn delay(&self) -> f32 {
+        if self.preset != Preset::Off && self.semitones.abs() > 0.01 { self.pitch.delay } else { 0.0 }
+    }
+
     pub fn process(&mut self, block: &mut [f32]) {
         let off = self.preset == Preset::Off;
         let shift = !off && self.semitones.abs() > 0.01;
