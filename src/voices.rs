@@ -164,6 +164,17 @@ pub fn glyph(def: &VoiceDef, points: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_name_exists_in_both_languages() {
+        for v in ALL {
+            assert!(!v.ru.trim().is_empty() && !v.en.trim().is_empty(), "{}", v.id);
+            assert!(v.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "id {}", v.id);
+        }
+        for c in Category::ALL {
+            assert!(!c.name(true).is_empty() && !c.name(false).is_empty());
+        }
+    }
     use std::f32::consts::TAU;
 
     const SR: u32 = 48_000;
