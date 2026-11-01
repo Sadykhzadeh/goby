@@ -126,7 +126,11 @@ impl Settings {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            let _ = std::fs::write(p, self.render());
+            // Write then rename, so a crash mid-write never leaves a half file behind.
+            let tmp = p.with_extension("ini.tmp");
+            if std::fs::write(&tmp, self.render()).is_ok() {
+                let _ = std::fs::rename(&tmp, &p);
+            }
         }
     }
 }
