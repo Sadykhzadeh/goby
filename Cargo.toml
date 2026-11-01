@@ -39,3 +39,9 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+[profile.release]
+# One small binary that is as fast as the compiler can make it.
+lto = "fat"
+codegen-units = 1
+strip = true
