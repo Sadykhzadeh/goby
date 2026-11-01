@@ -111,11 +111,19 @@ unsafe extern "system" {
 
 fn app_policy() -> Result<IAudioPolicyConfigFactory> {
     let class = HSTRING::from("Windows.Media.Internal.AudioPolicyConfig");
-    let mut factory = std::ptr::null_mut();
-    unsafe {
-        RoGetActivationFactory(std::mem::transmute_copy(&class), &IAudioPolicyConfigFactory::IID, &mut factory).ok()?;
-        Ok(IAudioPolicyConfigFactory::from_raw(factory))
+    // Windows 11 and 10 21H2+ answer to the first IID, older Windows 10 to the second;
+    // the vtable is the same.
+    const DOWNLEVEL: GUID = GUID::from_u128(0x2a59116d_6c4f_45e0_a74f_707e3fef9258);
+    let mut last = Ok(());
+    for iid in [IAudioPolicyConfigFactory::IID, DOWNLEVEL] {
+        let mut factory = std::ptr::null_mut();
+        let hr = unsafe { RoGetActivationFactory(std::mem::transmute_copy(&class), &iid, &mut factory) };
+        if hr.is_ok() && !factory.is_null() {
+            return Ok(unsafe { IAudioPolicyConfigFactory::from_raw(factory) });
+        }
+        last = hr.ok();
     }
+    last.and(Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_NOINTERFACE)))
 }
 
 /// The device-interface path the per-app API expects for a capture endpoint id.
@@ -128,12 +136,14 @@ pub fn capture_interface_path(endpoint_id: &str) -> String {
 pub fn route_app(pid: u32, endpoint: Option<&str>) -> Result<()> {
     let factory = app_policy()?;
     let device = HSTRING::from(endpoint.map(capture_interface_path).unwrap_or_default());
+    // Every role is attempted before reporting, so one refusal never leaves a half-set route.
+    let mut result = Ok(());
     for role in [eConsole, eMultimedia, eCommunications] {
-        unsafe {
-            factory.SetPersistedDefaultAudioEndpoint(pid, eCapture, role, std::mem::transmute_copy(&device)).ok()?;
-        }
+        let hr =
+            unsafe { factory.SetPersistedDefaultAudioEndpoint(pid, eCapture, role, std::mem::transmute_copy(&device)) };
+        result = result.and(hr.ok());
     }
-    Ok(())
+    result
 }
 
 /// The microphone a running program is pinned to, as Windows reports it ("" = default).
