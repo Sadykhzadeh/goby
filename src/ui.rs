@@ -55,7 +55,9 @@ const COMBO_H: f32 = 34.0;
 const MIC_Y: f32 = 564.0;
 const OUT_Y: f32 = 608.0;
 const MONITOR_Y: f32 = 658.0;
+const FOOT_Y: f32 = 708.0;
 const ITEM_H: f32 = 32.0;
+const LINK_TEXT: &str = "Настройки звука";
 // Lives in Win32_UI_Controls; not worth pulling that whole feature in for one number.
 const WM_MOUSELEAVE: u32 = 0x02A3;
 const LIST_MAX: usize = 7;
@@ -116,10 +118,12 @@ enum Hit {
     Combo(Which),
     Item(Which, usize),
     Monitor,
+    Link,
 }
 
 struct Fonts {
     body: IDWriteTextFormat,
+    strong: IDWriteTextFormat,
     small: IDWriteTextFormat,
     readout: IDWriteTextFormat,
     field: IDWriteTextFormat,
@@ -160,6 +164,8 @@ struct App {
     drag: Option<Hit>,
     open: Option<Which>,
     scroll: usize,
+    /// Width of the "sound settings" link text, measured once; its hit area hangs off it.
+    link_w: f32,
     glow: [f32; 6],
     knob: f32,
     latency: f32,
@@ -257,6 +263,7 @@ impl App {
                 drag: None,
                 open: None,
                 scroll: 0,
+                link_w: 0.0,
                 glow: [0.0; 6],
                 knob: 0.0,
                 latency: 0.0,
@@ -265,6 +272,7 @@ impl App {
                 voiced: Box::new([0.0; SCOPE_LEN]),
             };
             app.knob = if app.settings.monitor { 1.0 } else { 0.0 };
+            app.link_w = app.measure(LINK_TEXT, &app.fonts.strong)?;
             app.refresh_devices();
             app.apply_voice();
             app.restart();
@@ -396,6 +404,9 @@ impl App {
         if R::new(COMBO_X, MONITOR_Y, 260.0, 24.0).has(p) {
             return Hit::Monitor;
         }
+        if (R { l: RIGHT - 18.0 - self.link_w, t: FOOT_Y + 4.0, r: RIGHT + 4.0, b: FOOT_Y + 32.0 }).has(p) {
+            return Hit::Link;
+        }
         Hit::None
     }
 
@@ -455,6 +466,9 @@ impl App {
             Hit::Monitor => {
                 self.settings.monitor = !self.settings.monitor;
                 self.restart();
+            }
+            Hit::Link => {
+                let _ = std::process::Command::new("control.exe").arg("mmsys.cpl,,1").spawn();
             }
             Hit::None | Hit::Item(..) => {}
         }
@@ -589,6 +603,16 @@ impl App {
         Ok(())
     }
 
+    fn measure(&self, s: &str, f: &IDWriteTextFormat) -> Result<f32> {
+        unsafe {
+            let wide: Vec<u16> = s.encode_utf16().collect();
+            let layout = self.dw.CreateTextLayout(&wide, f, 4096.0, 256.0)?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m)?;
+            Ok(m.width)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn text(
         &self,
@@ -700,6 +724,30 @@ impl App {
             MID,
             monitor_color,
         )?;
+
+        // Footer: one plain sentence and one way out.
+        self.text(
+            g,
+            "CS2 слушает микрофон Windows по умолчанию.\nПоставьте там «CABLE Output».",
+            &f.small,
+            R { l: LEFT, t: FOOT_Y, r: 400.0, b: FOOT_Y + 36.0 },
+            START,
+            MID,
+            rgb(MUTED),
+        )?;
+        let link_color = if self.hover == Hit::Link { rgb(ACCENT) } else { rgb(INK) };
+        self.text(
+            g,
+            LINK_TEXT,
+            &f.strong,
+            R { l: 380.0, t: FOOT_Y, r: RIGHT - 16.0, b: FOOT_Y + 36.0 },
+            END,
+            MID,
+            link_color,
+        )?;
+        let (ax, ay) = (RIGHT - 9.0, FOOT_Y + 14.0);
+        self.line(g, &[(ax, ay + 8.0), (ax + 8.0, ay)], link_color, 1.6)?;
+        self.line(g, &[(ax + 2.0, ay), (ax + 8.0, ay), (ax + 8.0, ay + 6.0)], link_color, 1.6)?;
 
         if let Some(which) = self.open {
             self.dropdown(g, which)?;
@@ -879,6 +927,7 @@ fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
         )?;
         Ok(Fonts {
             body: ui(13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
+            strong: ui(13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             small: ui(12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             readout: ui(15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
             field,
