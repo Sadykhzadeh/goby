@@ -289,6 +289,49 @@ impl Envelope {
     }
 }
 
+/// Channel vocoder: the voice's spectral envelope, measured in 16 bands, shapes a buzzy
+/// synth (one note or a chord). The classic "talking synth" robot.
+pub struct Vocoder {
+    analysis: [Biquad; 16],
+    synthesis: [Biquad; 16],
+    envelopes: [Envelope; 16],
+    phases: [f32; 3],
+    sample_rate: f32,
+}
+
+impl Vocoder {
+    pub fn new(sample_rate: f32) -> Self {
+        let band = |i: usize| 120.0 * (6000.0f32 / 120.0).powf(i as f32 / 15.0);
+        let make = || std::array::from_fn(|i| Biquad::new(Shape::BandPass, sample_rate, band(i), 6.0));
+        Self {
+            analysis: make(),
+            synthesis: make(),
+            envelopes: [Envelope::default(); 16],
+            phases: [0.0; 3],
+            sample_rate,
+        }
+    }
+
+    /// `note_hz` is the carrier root; with `chord` a major triad is played on top.
+    #[inline]
+    pub fn process(&mut self, x: f32, note_hz: f32, chord: bool) -> f32 {
+        let ratios = [1.0, 1.26, 1.5];
+        let voices = if chord { 3 } else { 1 };
+        let mut carrier = 0.0;
+        for (phase, ratio) in self.phases.iter_mut().zip(ratios).take(voices) {
+            *phase = (*phase + note_hz * ratio / self.sample_rate).fract();
+            carrier += *phase * 2.0 - 1.0; // sawtooth: rich in harmonics for every band
+        }
+        carrier /= voices as f32;
+        let mut out = 0.0;
+        for i in 0..16 {
+            let level = self.envelopes[i].next(self.analysis[i].process(x), 0.05, 0.002);
+            out += self.synthesis[i].process(carrier) * level;
+        }
+        out * 6.0
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -371,6 +414,15 @@ mod tests {
             let y = c.process(sine(100.0, i, SR), 8000.0, 3, SR);
             assert!(((y * 4.0).round() - y * 4.0).abs() < 1e-5, "{y} is not on a 3-bit step");
         }
+    }
+
+    #[test]
+    fn vocoder_speaks_only_when_the_voice_does() {
+        let mut v = Vocoder::new(SR);
+        let silent = peak((0..SR as usize / 4).map(|_| v.process(0.0, 110.0, false)));
+        let voiced = peak((0..SR as usize / 4).map(|i| v.process(sine(300.0, i, SR) * 0.5, 110.0, true)));
+        assert!(silent < 1e-6);
+        assert!(voiced > 0.01 && voiced.is_finite(), "{voiced}");
     }
 
     #[test]
