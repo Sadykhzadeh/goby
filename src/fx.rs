@@ -102,6 +102,41 @@ impl Biquad {
     }
 }
 
+/// Power-of-two delay line with fractional (linear) reads.
+pub struct Delay {
+    buf: Vec<f32>,
+    mask: usize,
+    write: usize,
+}
+
+impl Delay {
+    pub fn new(max_samples: usize) -> Self {
+        let len = (max_samples + 2).next_power_of_two();
+        Self { buf: vec![0.0; len], mask: len - 1, write: 0 }
+    }
+
+    #[inline]
+    pub fn push(&mut self, x: f32) {
+        self.write = (self.write + 1) & self.mask;
+        self.buf[self.write] = x;
+    }
+
+    /// The sample `delay` samples ago (0 = the one just pushed).
+    #[inline]
+    pub fn read(&self, delay: f32) -> f32 {
+        let d = delay.clamp(0.0, self.mask as f32 - 1.0);
+        let i = d as usize;
+        let t = d - i as f32;
+        let a = self.buf[(self.write.wrapping_sub(i)) & self.mask];
+        let b = self.buf[(self.write.wrapping_sub(i + 1)) & self.mask];
+        a + (b - a) * t
+    }
+
+    pub fn clear(&mut self) {
+        self.buf.fill(0.0);
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -145,6 +180,17 @@ mod tests {
             assert!(n.next().abs() <= 1.0);
             assert!(w.next(3.0, SR).abs() <= 1.0);
         }
+    }
+
+    #[test]
+    fn delay_reads_back_what_it_was_given() {
+        let mut d = Delay::new(100);
+        for i in 0..50 {
+            d.push(i as f32);
+        }
+        assert_eq!(d.read(0.0), 49.0);
+        assert_eq!(d.read(10.0), 39.0);
+        assert!((d.read(10.5) - 38.5).abs() < 1e-6);
     }
 
     #[test]
