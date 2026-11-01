@@ -374,6 +374,8 @@ pub mod glyph {
     pub const CHEVRON_DOWN: u16 = 0xE70D;
     pub const OPEN: u16 = 0xE8A7;
     pub const CHAT: u16 = 0xE8BD;
+    pub const ADD: u16 = 0xE710;
+    pub const REMOVE: u16 = 0xE711;
     pub const GLOBE: u16 = 0xE774;
     pub const VIDEO: u16 = 0xE714;
     pub const GAME: u16 = 0xE7FC;

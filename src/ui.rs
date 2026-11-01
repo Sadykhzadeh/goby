@@ -16,7 +16,7 @@ use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, Lo
 use windows::Win32::UI::HiDpi::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, Result, w};
+use windows::core::{BOOL, HRESULT, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 
 use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
@@ -27,17 +27,17 @@ use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
 
 // Layout, in DIPs.
-const WIDTH: f32 = 920.0;
+/// Default and smallest client sizes, in DIPs.
+const WIDTH: f32 = 1000.0;
 const HEIGHT: f32 = 720.0;
-const SCOPE: R = R::new(24.0, 16.0, 560.0, 164.0);
-const TABS_Y: f32 = 192.0;
-const GALLERY: R = R::new(24.0, 236.0, 560.0, 468.0);
-const COLS: usize = 4;
+const MIN_W: f32 = 820.0;
+const MIN_H: f32 = 560.0;
+/// Gallery tiles never get narrower than this; extra width buys more columns.
+const TILE_MIN_W: f32 = 140.0;
 const TILE_GAP: f32 = 8.0;
 /// Room on the right of a scrolling pane for its scrollbar.
 const GUTTER: f32 = 12.0;
 const TILE_H: f32 = 76.0;
-const PANE: R = R::new(604.0, 16.0, 292.0, 688.0);
 const CARD_GAP: f32 = 4.0;
 
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -80,8 +80,10 @@ enum Hit {
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
-    /// A program from the microphone list: pin it to Goby or give it back.
-    App(usize),
+    /// Take a chosen program (index into `settings.routed`) off the list.
+    Remove(usize),
+    /// Choose another program that should hear Goby.
+    AddApp,
     Scrollbar(Pane),
 }
 
@@ -95,6 +97,31 @@ impl Knob {
             Knob::Gain => (-12.0, 24.0, 1.0, 0.0),
             Knob::Gate => (-80.0, -10.0, 1.0, -50.0),
         }
+    }
+}
+
+/// Where everything goes for the current window size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Layout {
+    scope: R,
+    tabs: R,
+    gallery: R,
+    pane: R,
+    cols: usize,
+}
+
+impl Layout {
+    fn new(w: f32, h: f32) -> Layout {
+        let (w, h) = (w.max(MIN_W), h.max(MIN_H));
+        // The settings pane grows with the window, within reason.
+        let pane_w = (w * 0.34).clamp(300.0, 440.0);
+        let pane = R::new(w - 24.0 - pane_w, 16.0, pane_w, h - 32.0);
+        let left_w = pane.l - 20.0 - 24.0;
+        let scope = R::new(24.0, 16.0, left_w, 164.0);
+        let tabs = R::new(24.0, scope.b + 12.0, left_w, 36.0);
+        let gallery = R { l: 24.0, t: tabs.b + 8.0, r: 24.0 + left_w, b: h - 16.0 };
+        let cols = (((gallery.w() - GUTTER + TILE_GAP) / (TILE_MIN_W + TILE_GAP)) as usize).clamp(2, 8);
+        Layout { scope, tabs, gallery, pane, cols }
     }
 }
 
@@ -125,6 +152,9 @@ impl Anim {
 
 struct App {
     hwnd: HWND,
+    lay: Layout,
+    tab_scroll: f32,
+    tab_max: f32,
     gfx: Option<Gfx>,
     theme: Theme,
     mica: bool,
@@ -146,7 +176,8 @@ struct App {
     retry_at: Option<Instant>,
     /// The virtual cable (play side, record side), if installed.
     cable: Option<(Endpoint, Endpoint)>,
-    /// Programs that use the mic, and whether each now records from Goby.
+    /// Recent microphone users not chosen yet (offered by "Add"), and the state of each
+    /// chosen program, in `settings.routed` order.
     mic_apps: Vec<apps::MicApp>,
     app_state: Vec<AppState>,
     apps_at: Instant,
@@ -178,16 +209,12 @@ struct App {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum AppState {
-    /// Pinned to Goby and running with it.
+    /// Running and recording from Goby.
     OnGoby,
-    /// Pinned to Goby, applies when the program starts.
+    /// Not running; it will be pinned when it starts.
     Waiting,
-    /// Pinned, but Windows refused (the program has not opened any audio yet).
-    Failed,
-    /// Not pinned and recording from its own mic right now.
-    Listening,
-    /// Not pinned.
-    Own,
+    /// Running, but Windows will only pin it once it has opened audio.
+    Pending,
 }
 
 /// A Segoe Fluent icon for well-known programs; a game pad for everything else.
@@ -222,6 +249,78 @@ unsafe extern "system" {
     fn ShellExecuteW(hwnd: HWND, op: PCWSTR, file: PCWSTR, params: PCWSTR, dir: PCWSTR, show: i32) -> HINSTANCE;
 }
 
+#[repr(C)]
+struct OpenFileName {
+    struct_size: u32,
+    owner: HWND,
+    instance: HINSTANCE,
+    filter: PCWSTR,
+    custom_filter: PWSTR,
+    max_custom_filter: u32,
+    filter_index: u32,
+    file: PWSTR,
+    max_file: u32,
+    file_title: PWSTR,
+    max_file_title: u32,
+    initial_dir: PCWSTR,
+    title: PCWSTR,
+    flags: u32,
+    file_offset: u16,
+    file_extension: u16,
+    default_ext: PCWSTR,
+    custom_data: LPARAM,
+    hook: *mut std::ffi::c_void,
+    template_name: PCWSTR,
+    reserved: *mut std::ffi::c_void,
+    reserved2: u32,
+    flags_ex: u32,
+}
+
+#[link(name = "comdlg32", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn GetOpenFileNameW(ofn: *mut OpenFileName) -> BOOL;
+}
+
+/// The standard Open dialog, filtered to programs; returns the lower-case exe name.
+fn browse_exe(owner: HWND, title: &str) -> Option<String> {
+    let mut file = [0u16; 1024];
+    let filter: Vec<u16> = "Programs (*.exe)\0*.exe\0\0".encode_utf16().collect();
+    let title = HSTRING::from(title);
+    let mut ofn = OpenFileName {
+        struct_size: size_of::<OpenFileName>() as u32,
+        owner,
+        instance: HINSTANCE::default(),
+        filter: PCWSTR(filter.as_ptr()),
+        custom_filter: PWSTR::null(),
+        max_custom_filter: 0,
+        filter_index: 1,
+        file: PWSTR(file.as_mut_ptr()),
+        max_file: file.len() as u32,
+        file_title: PWSTR::null(),
+        max_file_title: 0,
+        initial_dir: PCWSTR::null(),
+        title: PCWSTR(title.as_ptr()),
+        // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
+        flags: 0x0008_0000 | 0x1000 | 0x0800 | 0x0008,
+        file_offset: 0,
+        file_extension: 0,
+        default_ext: PCWSTR::null(),
+        custom_data: LPARAM(0),
+        hook: std::ptr::null_mut(),
+        template_name: PCWSTR::null(),
+        reserved: std::ptr::null_mut(),
+        reserved2: 0,
+        flags_ex: 0,
+    };
+    if !unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+        return None;
+    }
+    let len = file.iter().position(|c| *c == 0).unwrap_or(file.len());
+    let path = String::from_utf16_lossy(&file[..len]);
+    let name = path.rsplit('\\').next()?.to_ascii_lowercase();
+    name.ends_with(".exe").then_some(name)
+}
+
 #[link(name = "dwmapi", kind = "raw-dylib")]
 unsafe extern "system" {
     fn DwmExtendFrameIntoClientArea(hwnd: HWND, margins: *const Margins) -> HRESULT;
@@ -253,6 +352,9 @@ impl App {
         let ru = unsafe { GetUserDefaultUILanguage() } & 0x3ff == 0x19;
         let mut app = App {
             hwnd,
+            lay: Layout::new(WIDTH, HEIGHT),
+            tab_scroll: 0.0,
+            tab_max: 0.0,
             gfx: None,
             theme: Theme::system(),
             mica: false,
@@ -352,62 +454,109 @@ impl App {
     /// them back). Windows keeps the choice per program, so it outlives this process.
     fn sync_apps(&mut self) {
         self.apps_at = Instant::now();
-        let mut list: Vec<apps::MicApp> = apps::recent().into_iter().take(8).collect();
-        // Chosen programs stay listed even after they drop out of the recent eight.
-        for exe in &self.settings.routed {
-            if !list.iter().any(|a| &a.exe == exe) {
-                list.push(apps::MicApp {
-                    name: apps::display_name(exe),
-                    exe: exe.clone(),
-                    last_used: 0,
-                    active: false,
-                });
-            }
-        }
         let record = self.cable.as_ref().map(|(_, r)| r.id.clone());
         let ours = record.as_deref().map(policy::capture_interface_path).unwrap_or_default();
         let snapshot = apps::processes();
         self.pinned.retain(|pid| snapshot.iter().any(|(_, p)| p == pid));
-        let mut states = Vec::with_capacity(list.len());
-        for app in &list {
-            let pids = apps::pids_of(&snapshot, &app.exe);
-            let wanted = self.settings.routed.contains(&app.exe);
-            let unroute = self.settings.unroute.contains(&app.exe);
-            let mut pinned = wanted && pids.iter().any(|p| self.pinned.contains(p));
-            // Only programs being changed are asked about; one success covers the program.
-            for pid in pids.iter().filter(|_| (wanted && !pinned) || unroute) {
-                let now = policy::app_route(*pid).unwrap_or_default();
-                if wanted && !now.eq_ignore_ascii_case(&ours) {
-                    if let Some(id) = &record
-                        && policy::route_app(*pid, Some(id)).is_ok()
-                    {
-                        pinned = true;
-                        self.pinned.push(*pid);
-                        break;
-                    }
-                } else if wanted {
+
+        let mut states = Vec::with_capacity(self.settings.routed.len());
+        for exe in &self.settings.routed {
+            let pids = apps::pids_of(&snapshot, exe);
+            let mut pinned = pids.iter().any(|p| self.pinned.contains(p));
+            // One success covers the whole program; Windows stores the choice per program.
+            for pid in pids.iter().filter(|_| !pinned) {
+                let already = policy::app_route(*pid).is_ok_and(|now| now.eq_ignore_ascii_case(&ours));
+                if already || record.as_deref().is_some_and(|id| policy::route_app(*pid, Some(id)).is_ok()) {
                     pinned = true;
                     self.pinned.push(*pid);
                     break;
-                } else if unroute && now.eq_ignore_ascii_case(&ours) && policy::route_app(*pid, None).is_ok() {
-                    self.settings.unroute.retain(|e| *e != app.exe);
-                    self.settings.save();
-                    break;
                 }
             }
-            states.push(match (wanted, pids.is_empty(), pinned) {
-                (true, true, _) => AppState::Waiting,
-                (true, false, true) => AppState::OnGoby,
-                (true, false, false) => AppState::Failed,
-                (false, _, _) if app.active => AppState::Listening,
-                _ => AppState::Own,
+            states.push(match (pids.is_empty(), pinned) {
+                (true, _) => AppState::Waiting,
+                (false, true) => AppState::OnGoby,
+                (false, false) => AppState::Pending,
             });
         }
-        if list != self.mic_apps || states != self.app_state {
+
+        // Hand removed programs back to the default mic once they run; a program that is
+        // no longer on Goby has nothing to undo.
+        let before = self.settings.unroute.len();
+        let mut unroute = std::mem::take(&mut self.settings.unroute);
+        unroute.retain(|exe| {
+            for pid in apps::pids_of(&snapshot, exe) {
+                match policy::app_route(pid) {
+                    Ok(now) if !now.eq_ignore_ascii_case(&ours) => return false,
+                    Ok(_) if policy::route_app(pid, None).is_ok() => return false,
+                    _ => {}
+                }
+            }
+            true
+        });
+        self.settings.unroute = unroute;
+        if self.settings.unroute.len() != before {
+            self.settings.save();
+        }
+
+        let offered: Vec<apps::MicApp> =
+            apps::recent().into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
+        if offered != self.mic_apps || states != self.app_state {
             self.dirty = true;
         }
-        self.mic_apps = list;
+        self.mic_apps = offered;
         self.app_state = states;
+    }
+
+    /// Adds a program to the list (or does nothing if it is already there).
+    fn route(&mut self, exe: String) {
+        let s = &mut self.settings;
+        s.unroute.retain(|e| *e != exe);
+        if !s.routed.contains(&exe) {
+            s.routed.push(exe);
+        }
+        self.settings.save();
+        self.pinned.clear();
+        self.sync_apps();
+    }
+
+    /// Native menu of recent microphone users, plus "Other program..." for anything else.
+    fn add_app_menu(&mut self) {
+        const BROWSE: usize = 10_000;
+        let Some(row) = self.hits.iter().find(|(_, h)| *h == Hit::AddApp).map(|(r, _)| *r) else { return };
+        let scale = self.dpi / 96.0;
+        let chosen = unsafe {
+            let Ok(menu) = CreatePopupMenu() else { return };
+            for (i, a) in self.mic_apps.iter().enumerate() {
+                let label = if a.active {
+                    format!("{}\t{}", a.name, self.t("слушает сейчас", "listening now"))
+                } else {
+                    a.name.clone()
+                };
+                let _ = AppendMenuW(menu, MF_STRING, i + 1, &HSTRING::from(label));
+            }
+            if !self.mic_apps.is_empty() {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            }
+            let other = HSTRING::from(self.t("Другая программа…", "Other program…"));
+            let _ = AppendMenuW(menu, MF_STRING, BROWSE, &other);
+            let mut p = POINT { x: ((row.l + 52.0) * scale) as i32, y: (row.b * scale) as i32 };
+            let _ = ClientToScreen(self.hwnd, &mut p);
+            let flags = TPM_RETURNCMD | TPM_NONOTIFY | TPM_LEFTALIGN | TPM_TOPALIGN;
+            let id = TrackPopupMenuEx(menu, flags.0, p.x, p.y, self.hwnd, None);
+            let _ = DestroyMenu(menu);
+            id.0 as usize
+        };
+        let exe = match chosen {
+            0 => None,
+            BROWSE => {
+                browse_exe(self.hwnd, self.t("Какая программа должна слышать Goby?", "Which program should hear Goby?"))
+            }
+            i => self.mic_apps.get(i - 1).map(|a| a.exe.clone()),
+        };
+        if let Some(exe) = exe {
+            self.route(exe);
+        }
+        self.dirty = true;
     }
 
     fn apply(&mut self) {
@@ -588,22 +737,16 @@ impl App {
                 self.settings.save();
             }
             Hit::Pick(p) => self.menu(p),
-            Hit::App(i) => {
-                if let Some(app) = self.mic_apps.get(i) {
-                    let exe = app.exe.clone();
-                    let s = &mut self.settings;
-                    if let Some(at) = s.routed.iter().position(|e| *e == exe) {
-                        s.routed.remove(at);
-                        s.unroute.push(exe);
-                    } else {
-                        s.unroute.retain(|e| *e != exe);
-                        s.routed.push(exe);
-                    }
+            Hit::Remove(i) => {
+                if i < self.settings.routed.len() {
+                    let exe = self.settings.routed.remove(i);
+                    self.settings.unroute.push(exe);
                     self.settings.save();
                     self.pinned.clear();
                     self.sync_apps();
                 }
             }
+            Hit::AddApp => self.add_app_menu(),
             Hit::Scrollbar(pane) => {
                 let at = match pane {
                     Pane::Gallery => self.gallery_scroll.value,
@@ -621,8 +764,8 @@ impl App {
             Some((Hit::Slider(k), _)) => self.slider_from_x(k, self.mouse.0),
             Some((Hit::Scrollbar(pane), (y0, s0))) => {
                 let (view, max) = match pane {
-                    Pane::Gallery => (GALLERY.h(), self.gallery_max),
-                    Pane::Settings => (PANE.h(), self.settings_max),
+                    Pane::Gallery => (self.lay.gallery.h(), self.gallery_max),
+                    Pane::Settings => (self.lay.pane.h(), self.settings_max),
                 };
                 let content = view + max;
                 let to = (s0 + (self.mouse.1 - y0) * content / view).clamp(0.0, max);
@@ -653,10 +796,12 @@ impl App {
     }
 
     fn wheel(&mut self, notches: f32) {
-        if GALLERY.has(self.mouse) {
+        if self.lay.tabs.has(self.mouse) {
+            self.tab_scroll = (self.tab_scroll - notches * 80.0).clamp(0.0, self.tab_max);
+        } else if self.lay.gallery.has(self.mouse) {
             let a = &mut self.gallery_scroll;
             a.target = (a.target - notches * (TILE_H + TILE_GAP)).clamp(0.0, self.gallery_max);
-        } else if PANE.has(self.mouse) {
+        } else if self.lay.pane.has(self.mouse) {
             let a = &mut self.settings_scroll;
             a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
         }
@@ -673,8 +818,8 @@ impl App {
         let next = match VIRTUAL_KEY(vk) {
             VK_LEFT => pos.saturating_sub(1),
             VK_RIGHT => (pos + 1).min(list.len() - 1),
-            VK_UP => pos.saturating_sub(COLS),
-            VK_DOWN => (pos + COLS).min(list.len() - 1),
+            VK_UP => pos.saturating_sub(self.lay.cols),
+            VK_DOWN => (pos + self.lay.cols).min(list.len() - 1),
             VK_HOME => 0,
             VK_END => list.len() - 1,
             _ => return false,
@@ -684,12 +829,12 @@ impl App {
         self.apply();
         self.settings.save();
         // Keep the selection in view.
-        let row = (next / COLS) as f32 * (TILE_H + TILE_GAP);
+        let row = (next / self.lay.cols) as f32 * (TILE_H + TILE_GAP);
         let a = &mut self.gallery_scroll;
         if row < a.target {
             a.target = row;
-        } else if row + TILE_H > a.target + GALLERY.h() {
-            a.target = (row + TILE_H - GALLERY.h()).min(self.gallery_max);
+        } else if row + TILE_H > a.target + self.lay.gallery.h() {
+            a.target = (row + TILE_H - self.lay.gallery.h()).min(self.gallery_max);
         }
         true
     }
@@ -824,7 +969,7 @@ impl App {
 
     fn draw_scope(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
-        let r = SCOPE;
+        let r = self.lay.scope;
         self.card(g, r, 8.0, false);
         let def = &voices::ALL[self.voice];
         g.text(
@@ -863,10 +1008,14 @@ impl App {
         if self.tab_widths.len() != items.len() {
             self.tab_widths = items.iter().map(|(_, s)| g.measure(s, Font::Strong).unwrap_or(60.0)).collect();
         }
-        let mut x = SCOPE.l;
+        let total: f32 = self.tab_widths.iter().map(|w| w + 24.0).sum();
+        self.tab_max = (total - self.lay.tabs.w()).max(0.0);
+        self.tab_scroll = self.tab_scroll.min(self.tab_max);
+        let mut x = self.lay.tabs.l - self.tab_scroll;
+        g.clip(self.lay.tabs.inset(-4.0));
         for (i, (cat, label)) in items.iter().enumerate() {
             let w = self.tab_widths[i] + 24.0;
-            let r = R::new(x, TABS_Y, w, 36.0);
+            let r = R::new(x, self.lay.tabs.t, w, self.lay.tabs.h());
             let selected = self.filter == *cat;
             let color = if selected || self.hover == Hit::Tab(*cat) { th.text() } else { th.text_secondary() };
             g.text(label, if selected { Font::Strong } else { Font::Body }, r, Align::Center, color)?;
@@ -879,35 +1028,39 @@ impl App {
                 self.tab_x.target = cx;
                 self.tab_w.target = iw;
             }
-            self.hits.push((r, Hit::Tab(*cat)));
+            if r.r > self.lay.tabs.l && r.l < self.lay.tabs.r {
+                let visible = R { l: r.l.max(self.lay.tabs.l), r: r.r.min(self.lay.tabs.r), ..r };
+                self.hits.push((visible, Hit::Tab(*cat)));
+            }
             x += w;
         }
         // The SelectorBar indicator slides to the chosen category.
         let (cx, iw) = (self.tab_x.value, self.tab_w.value);
-        g.fill(R::new(cx - iw / 2.0, TABS_Y + 33.0, iw, 3.0), 1.5, th.accent());
+        g.fill(R::new(cx - iw / 2.0, self.lay.tabs.t + 33.0, iw, 3.0), 1.5, th.accent());
+        g.unclip();
         Ok(())
     }
 
     fn draw_gallery(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
         let list = self.filtered();
-        let tile_w = (GALLERY.w() - GUTTER - TILE_GAP * (COLS - 1) as f32) / COLS as f32;
-        let rows = list.len().div_ceil(COLS);
+        let tile_w = (self.lay.gallery.w() - GUTTER - TILE_GAP * (self.lay.cols - 1) as f32) / self.lay.cols as f32;
+        let rows = list.len().div_ceil(self.lay.cols);
         let content = rows as f32 * (TILE_H + TILE_GAP) - TILE_GAP;
-        self.gallery_max = (content - GALLERY.h()).max(0.0);
+        self.gallery_max = (content - self.lay.gallery.h()).max(0.0);
         self.gallery_scroll.target = self.gallery_scroll.target.min(self.gallery_max);
         let scroll = self.gallery_scroll.value.min(self.gallery_max);
 
-        g.clip(GALLERY);
+        g.clip(self.lay.gallery);
         for (n, &i) in list.iter().enumerate() {
-            let (row, col) = (n / COLS, n % COLS);
+            let (row, col) = (n / self.lay.cols, n % self.lay.cols);
             let r = R::new(
-                GALLERY.l + col as f32 * (tile_w + TILE_GAP),
-                GALLERY.t + row as f32 * (TILE_H + TILE_GAP) - scroll,
+                self.lay.gallery.l + col as f32 * (tile_w + TILE_GAP),
+                self.lay.gallery.t + row as f32 * (TILE_H + TILE_GAP) - scroll,
                 tile_w,
                 TILE_H,
             );
-            if !r.intersects(&GALLERY) {
+            if !r.intersects(&self.lay.gallery) {
                 continue;
             }
             let selected = i == self.voice;
@@ -927,11 +1080,11 @@ impl App {
             g.line(&pts, if selected { th.accent() } else { th.text_secondary() }, 1.4)?;
             let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0, 22.0);
             g.text(voices::ALL[i].name(self.ru), Font::Body, name, Align::Start, th.text())?;
-            let visible = R { l: r.l, t: r.t.max(GALLERY.t), r: r.r, b: r.b.min(GALLERY.b) };
+            let visible = R { l: r.l, t: r.t.max(self.lay.gallery.t), r: r.r, b: r.b.min(self.lay.gallery.b) };
             self.hits.push((visible, Hit::Tile(i)));
         }
         g.unclip();
-        self.scrollbar(g, GALLERY, scroll, self.gallery_max, Pane::Gallery);
+        self.scrollbar(g, self.lay.gallery, scroll, self.gallery_max, Pane::Gallery);
         Ok(())
     }
 
@@ -954,9 +1107,9 @@ impl App {
     fn draw_settings(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
         let scroll = self.settings_scroll.value.min(self.settings_max);
-        let (x, w) = (PANE.l, PANE.w() - GUTTER);
-        let mut y = PANE.t - scroll;
-        g.clip(PANE);
+        let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
+        let mut y = self.lay.pane.t - scroll;
+        g.clip(self.lay.pane);
 
         let section = |g: &Gfx, y: &mut f32, title: &str| -> Result<()> {
             g.text(title, Font::Strong, R::new(x + 2.0, *y, w, 20.0), Align::Start, th.text())?;
@@ -975,15 +1128,13 @@ impl App {
         self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
         let fast = self.t("Низкая задержка", "Low latency");
         let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
-            (true, true) => {
-                self.t("Эксклюзивный режим: микрофон только у Goby", "Exclusive mode: only Goby uses the mic")
-            }
-            (true, false) => self.t("Микрофон не дал эксклюзивный режим", "The mic refused exclusive mode"),
-            _ => self.t("Общий режим, пакеты по 10 мс", "Shared mode, 10 ms packets"),
+            (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
+            (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
+            _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
         };
         self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
         self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
-        let gate = self.t("Глушит клавиатуру и шум между фразами", "Mutes keys and noise between phrases");
+        let gate = self.t("Тишина между фразами", "Silence between phrases");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
         self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
         y += 20.0;
@@ -991,7 +1142,7 @@ impl App {
         section(g, &mut y, self.t("Вывод", "Output"))?;
         let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
         self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, self.t("Куда отдавать", "Send to"), &out)?;
-        let mon = self.t("В наушники по умолчанию", "To your default headphones");
+        let mon = self.t("В ваши наушники", "In your headphones");
         let hear = self.t("Слышать себя", "Hear myself");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Monitor), glyph::HEADPHONE, hear, mon)?;
         y += 20.0;
@@ -1001,34 +1152,35 @@ impl App {
             let none =
                 self.t("Установите VB-Cable, чтобы голос шёл в игры", "Install VB-Cable to route the voice into games");
             self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Виртуальный кабель", "Virtual cable"), none)?;
-        } else if self.mic_apps.is_empty() {
-            let none = self.t("Программы с микрофоном появятся здесь", "Programs that use the mic show up here");
-            self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Пока никого", "Nobody yet"), none)?;
         }
-        for i in 0..self.mic_apps.len() {
-            let (name, icon) = (self.mic_apps[i].name.clone(), app_glyph(&self.mic_apps[i].exe));
-            let desc = match self.app_state.get(i).copied().unwrap_or(AppState::Own) {
+        for i in 0..self.settings.routed.len() {
+            let exe = self.settings.routed[i].clone();
+            let desc = match self.app_state.get(i).copied().unwrap_or(AppState::Waiting) {
                 AppState::OnGoby => self.t("Слышит Goby", "Hears Goby"),
-                AppState::Waiting => self.t("Услышит Goby, когда запустится", "Will hear Goby when it starts"),
-                AppState::Failed => self.t("Не вышло: откройте в ней микрофон", "Did not take: open the mic in it"),
-                AppState::Listening => self.t("Слушает обычный микрофон сейчас", "Listening to your mic right now"),
-                AppState::Own => self.t("Обычный микрофон", "Your own mic"),
+                AppState::Waiting => self.t("Услышит Goby при запуске", "Hears Goby once it starts"),
+                AppState::Pending => self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic"),
             };
-            self.row_card(g, &mut y, Hit::App(i), icon, &name, desc)?;
+            self.row_card(g, &mut y, Hit::Remove(i), app_glyph(&exe), &apps::display_name(&exe), desc)?;
         }
+        let hint = if self.settings.routed.is_empty() {
+            self.t("Например CS2 или Discord", "For example CS2 or Discord")
+        } else {
+            self.t("Остальные слышат обычный микрофон", "Everything else hears your own mic")
+        };
+        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
 
         g.unclip();
-        let content = y + scroll - PANE.t;
-        self.settings_max = (content - PANE.h()).max(0.0);
-        self.scrollbar(g, PANE, scroll, self.settings_max, Pane::Settings);
+        let content = y + scroll - self.lay.pane.t;
+        self.settings_max = (content - self.lay.pane.h()).max(0.0);
+        self.scrollbar(g, self.lay.pane, scroll, self.settings_max, Pane::Settings);
         Ok(())
     }
 
     /// SettingsCard with an icon, a title and a value, and a slider underneath.
     fn slider_card(&mut self, g: &Gfx, y: &mut f32, k: Knob, icon: u16, title: &str) -> Result<()> {
         let th = self.theme;
-        let r = R::new(PANE.l, *y, PANE.w() - GUTTER, 84.0);
-        if r.intersects(&PANE) {
+        let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 84.0);
+        if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, false);
             g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text())?;
             g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 12.0, r.w() - 140.0, 24.0), Align::Start, th.text())?;
@@ -1043,9 +1195,9 @@ impl App {
     /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
     fn row_card(&mut self, g: &Gfx, y: &mut f32, hit: Hit, icon: u16, title: &str, desc: &str) -> Result<()> {
         let th = self.theme;
-        let r = R::new(PANE.l, *y, PANE.w() - GUTTER, 68.0);
-        if r.intersects(&PANE) {
-            self.card(g, r, 4.0, self.hover == hit);
+        let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
+        if r.intersects(&self.lay.pane) {
+            self.card(g, r, 4.0, self.hover == hit && !matches!(hit, Hit::Remove(_)));
             g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0), th.text())?;
             let text_w = r.w() - 52.0 - 64.0;
             g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
@@ -1059,15 +1211,21 @@ impl App {
             let side = R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0);
             match hit {
                 Hit::Toggle(s) => self.toggle(g, r.r - 56.0, r.t + 24.0, s),
-                Hit::App(i) => {
-                    let on = self.settings.routed.contains(&self.mic_apps[i].exe);
-                    self.toggle_at(g, r.r - 56.0, r.t + 24.0, if on { 1.0 } else { 0.0 }, self.hover == hit);
+                Hit::Remove(_) => {
+                    // A small close button; the card itself does nothing.
+                    let b = R::new(r.r - 48.0, r.t + 18.0, 32.0, 32.0);
+                    if self.hover == hit {
+                        g.fill(b, 4.0, th.control_hover());
+                    }
+                    g.icon(glyph::REMOVE, Font::Icon12, b, th.text_secondary())?;
                 }
+                Hit::AddApp => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
                 Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
                 Hit::None => {}
                 _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
             }
-            let visible = R { l: r.l, t: r.t.max(PANE.t), r: r.r, b: r.b.min(PANE.b) };
+            let target = if matches!(hit, Hit::Remove(_)) { R::new(r.r - 48.0, r.t + 18.0, 32.0, 32.0) } else { r };
+            let visible = R { t: target.t.max(self.lay.pane.t), b: target.b.min(self.lay.pane.b), ..target };
             self.hits.push((visible, hit));
         }
         *y += 68.0 + CARD_GAP;
@@ -1241,8 +1399,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 LRESULT(0)
             }
             WM_KEYDOWN if app.key(wp.0 as u16) => LRESULT(0),
+            WM_GETMINMAXINFO => {
+                let info = &mut *(lp.0 as *mut MINMAXINFO);
+                let style = WINDOW_STYLE(GetWindowLongW(hwnd, GWL_STYLE) as u32);
+                let (w, h) = window_size(MIN_W, MIN_H, app.dpi as u32, style);
+                info.ptMinTrackSize = POINT { x: w, y: h };
+                LRESULT(0)
+            }
             WM_SIZE => {
                 let (w, h) = ((lp.0 & 0xffff) as u32, ((lp.0 >> 16) & 0xffff) as u32);
+                if w > 0 && h > 0 {
+                    let scale = app.dpi / 96.0;
+                    app.lay = Layout::new(w as f32 / scale, h as f32 / scale);
+                }
                 if wp.0 as u32 == SIZE_MINIMIZED {
                     // Give the GPU memory back while we sit in the taskbar.
                     app.gfx = None;
@@ -1289,12 +1458,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
     }
 }
 
-fn window_size(dpi: u32, style: WINDOW_STYLE) -> (i32, i32) {
+fn window_size(w: f32, h: f32, dpi: u32, style: WINDOW_STYLE) -> (i32, i32) {
     let mut r = RECT {
         left: 0,
         top: 0,
-        right: (WIDTH * dpi as f32 / 96.0).round() as i32,
-        bottom: (HEIGHT * dpi as f32 / 96.0).round() as i32,
+        right: (w * dpi as f32 / 96.0).round() as i32,
+        bottom: (h * dpi as f32 / 96.0).round() as i32,
     };
     unsafe {
         let _ = AdjustWindowRectExForDpi(&mut r, style, false, WS_EX_NOREDIRECTIONBITMAP, dpi);
@@ -1316,8 +1485,8 @@ pub fn run() -> Result<()> {
             ..Default::default()
         };
         RegisterClassW(&class);
-        let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-        let (w, h) = window_size(GetDpiForSystem(), style);
+        let style = WS_OVERLAPPEDWINDOW;
+        let (w, h) = window_size(WIDTH, HEIGHT, GetDpiForSystem(), style);
         let hwnd = CreateWindowExW(
             WS_EX_NOREDIRECTIONBITMAP,
             w!("GobyWindow"),
@@ -1336,7 +1505,7 @@ pub fn run() -> Result<()> {
         // The monitor the window landed on may not be the primary one.
         let dpi = GetDpiForWindow(hwnd);
         if dpi != GetDpiForSystem() {
-            let (w, h) = window_size(dpi, style);
+            let (w, h) = window_size(WIDTH, HEIGHT, dpi, style);
             let _ = SetWindowPos(hwnd, None, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
         }
 
@@ -1387,5 +1556,23 @@ mod tests {
         assert_eq!(app_glyph("discord.exe"), glyph::CHAT);
         assert_eq!(app_glyph("obs64.exe"), glyph::VIDEO);
         assert_eq!(app_glyph("cs2.exe"), glyph::GAME);
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn layout_fills_any_window_without_overlap() {
+        for (w, h) in [(MIN_W, MIN_H), (WIDTH, HEIGHT), (1600.0, 1000.0), (3000.0, 1600.0), (400.0, 300.0)] {
+            let l = Layout::new(w, h);
+            assert!(l.gallery.r < l.pane.l && l.scope.r < l.pane.l, "{w}x{h}: left column runs into the pane");
+            assert!(l.pane.r <= w.max(MIN_W) - 23.0 && l.gallery.b <= h.max(MIN_H) - 15.0, "{w}x{h}: off the window");
+            let tile_w = (l.gallery.w() - GUTTER - TILE_GAP * (l.cols - 1) as f32) / l.cols as f32;
+            assert!(tile_w >= TILE_MIN_W - 0.01 || l.cols == 2, "{w}x{h}: tiles too narrow ({tile_w})");
+            assert!(l.pane.w() >= 300.0, "{w}x{h}: settings pane too narrow");
+        }
+        assert!(Layout::new(1600.0, 1000.0).cols > Layout::new(MIN_W, MIN_H).cols, "wider windows show more columns");
     }
 }
