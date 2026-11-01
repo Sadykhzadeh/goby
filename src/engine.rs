@@ -613,6 +613,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn exclusive_formats_turn_into_mono_float() {
+        let mut out = [0.0f32; 2];
+        let i16_stereo: [i16; 4] = [16384, -16384, i16::MAX, i16::MAX];
+        unsafe { to_mono(i16_stereo.as_ptr() as *const u8, 2, 2, Sample::I16, &mut out) };
+        assert_eq!(out[0], 0.0);
+        assert!((out[1] - 1.0).abs() < 1e-4);
+
+        let i32_mono: [i32; 2] = [i32::MIN, 1 << 30];
+        unsafe { to_mono(i32_mono.as_ptr() as *const u8, 2, 1, Sample::I32, &mut out) };
+        assert_eq!(out, [-1.0, 0.5]);
+
+        let f32_stereo: [f32; 4] = [0.25, 0.75, -1.0, 0.0];
+        unsafe { to_mono(f32_stereo.as_ptr() as *const u8, 2, 2, Sample::F32, &mut out) };
+        assert_eq!(out, [0.5, -0.5]);
+    }
+
+    #[test]
+    fn pcm_formats_are_self_consistent() {
+        for (ch, sample, bits, tag) in [(1, Sample::I16, 16, 1), (2, Sample::I32, 32, 1), (1, Sample::F32, 32, 3)] {
+            let f = pcm_format(ch, sample);
+            let (format_tag, bits_per_sample, channels) = (f.wFormatTag, f.wBitsPerSample, f.nChannels);
+            assert_eq!((format_tag, bits_per_sample, channels), (tag, bits, ch));
+            // WAVEFORMATEX is packed: copy fields out before comparing.
+            let (align, rate) = (f.nBlockAlign, f.nAvgBytesPerSec);
+            assert_eq!(align, bits / 8 * ch);
+            assert_eq!(rate, RATE * align as u32);
+        }
+    }
+
+    #[test]
+    fn a_smaller_mic_packet_shrinks_the_cushion() {
+        // Exclusive mode: 3 ms packets, so the reader aims for 5 ms instead of 12.
+        let (mut prod, cons) = ring(RATE as usize);
+        let mut r = Reader::new(cons);
+        let target = RATE * 5 / 1000;
+        r.set_target(target);
+        let mut fed = 0.0f64;
+        for _ in 0..20_000 {
+            fed += RATE as f64 / 1000.0;
+            while fed >= 1.0 {
+                prod.push(0.1);
+                fed -= 1.0;
+            }
+            for _ in 0..RATE / 1000 {
+                r.next();
+            }
+        }
+        let fill = r.ring.len() as u32;
+        assert!(fill.abs_diff(target) < target / 2, "fill {fill}, target {target}");
+        assert_eq!(r.underruns, 0);
+    }
+
+    #[test]
     fn fill_stays_near_target_under_clock_drift() {
         let target = (RATE as f64 * TARGET_MS / 1000.0) as usize;
         for drift in [-0.002, 0.0, 0.002] {
