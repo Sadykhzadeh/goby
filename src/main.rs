@@ -27,8 +27,8 @@ fn main() -> windows::core::Result<()> {
         }
         // Silent install for scripts and package managers.
         ["--install", rest @ ..] => {
-            if let Err(e) = install::install(rest.contains(&"--desktop")) {
-                install::failed(&e);
+            if install::install(rest.contains(&"--desktop")).is_err() {
+                std::process::exit(1);
             }
             Ok(())
         }
@@ -37,7 +37,10 @@ fn main() -> windows::core::Result<()> {
             Ok(())
         }
         // Debug builds and `--portable` skip the setup question.
-        rest if cfg!(debug_assertions) || rest.contains(&"--portable") || install::is_installed_copy() => ui::run(),
+        rest if cfg!(debug_assertions) || rest.contains(&"--portable") || install::is_installed_copy() => {
+            install::tidy();
+            ui::run()
+        }
         _ => match install::ask() {
             install::Choice::Install { desktop } => {
                 match install::install(desktop) {

@@ -160,12 +160,25 @@ pub fn install(desktop_shortcut: bool) -> std::io::Result<PathBuf> {
     let dir = install_dir().ok_or_else(|| std::io::Error::other("no program folder"))?;
     std::fs::create_dir_all(&dir)?;
     let target = dir.join("goby.exe");
-    close_running();
-    if target.exists() && std::fs::remove_file(&target).is_err() {
-        let _ = std::fs::remove_file(dir.join("goby.old"));
-        std::fs::rename(&target, dir.join("goby.old"))?;
+    let old = dir.join("goby.old");
+    let source = std::env::current_exe()?;
+    // Run as the installed copy itself (`--install` from the Start menu copy): nothing to
+    // copy, just refresh the shortcuts and the entry.
+    if !source.parent().is_some_and(|p| same_dir(p, &dir)) {
+        close_running();
+        let _ = std::fs::remove_file(&old);
+        let moved = target.exists() && std::fs::remove_file(&target).is_err();
+        if moved {
+            std::fs::rename(&target, &old)?;
+        }
+        if let Err(e) = std::fs::copy(&source, &target) {
+            // Put the previous version back rather than leave a broken install.
+            if moved {
+                let _ = std::fs::rename(&old, &target);
+            }
+            return Err(e);
+        }
     }
-    std::fs::copy(std::env::current_exe()?, &target)?;
     let links = shortcut_paths();
     for (i, link) in links.iter().enumerate() {
         // The first is the Start menu; the second, the desktop, only when asked for.
@@ -328,7 +341,7 @@ pub fn uninstall(quiet: bool) {
     let settings = Settings::load();
     let snapshot = apps::processes();
     let mut left = Vec::new();
-    for exe in &settings.routed {
+    for exe in settings.routed.iter().chain(&settings.unroute) {
         let pids = apps::pids_of(&snapshot, exe);
         if !pids.iter().any(|pid| policy::route_app(*pid, None).is_ok()) {
             left.push(apps::display_name(exe));
@@ -350,17 +363,6 @@ pub fn uninstall(quiet: bool) {
     if let Some(dir) = Settings::dir() {
         let _ = std::fs::remove_dir_all(dir);
     }
-    // The running executable cannot delete itself; a hidden shell removes the folder once
-    // this process has exited.
-    if let Some(dir) = install_dir() {
-        let script = format!("ping -n 3 127.0.0.1 >nul & rmdir /s /q \"{}\"", dir.display());
-        let _ = std::process::Command::new("cmd.exe")
-            // Passed verbatim: escaped quotes would reach cmd.exe as \" and break the path.
-            .raw_arg(format!("/d /c {script}"))
-            .current_dir(std::env::temp_dir())
-            .creation_flags(CREATE_NO_WINDOW)
-            .spawn();
-    }
     if !quiet {
         let note = if left.is_empty() {
             pick("Goby удалён.", "Goby is uninstalled.").to_string()
@@ -375,6 +377,30 @@ pub fn uninstall(quiet: bool) {
             )
         };
         message("Goby", &note, false);
+    }
+    remove_folder_after_exit();
+}
+
+/// The running executable cannot delete itself: a hidden shell retries for up to half a
+/// minute until this process has exited and the folder can go.
+fn remove_folder_after_exit() {
+    let Some(dir) = install_dir() else { return };
+    let dir = dir.display();
+    let script = format!(
+        "for /l %i in (1,1,30) do (ping -n 2 127.0.0.1 >nul & rmdir /s /q \"{dir}\" 2>nul & if not exist \"{dir}\" exit /b)"
+    );
+    let _ = std::process::Command::new("cmd.exe")
+        // Passed verbatim: escaped quotes would reach cmd.exe as \" and break the path.
+        .raw_arg(format!("/d /c {script}"))
+        .current_dir(std::env::temp_dir())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn();
+}
+
+/// Removes the previous version an update moved aside, once it is no longer running.
+pub fn tidy() {
+    if let Some(dir) = install_dir() {
+        let _ = std::fs::remove_file(dir.join("goby.old"));
     }
 }
 
