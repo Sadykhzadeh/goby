@@ -31,6 +31,7 @@ static BASTELEUR: &[u8] = include_bytes!("../ui/fonts/Basteleur-Bold.ttf");
 // Warm graphite, not slate. The only colour is a pale, tonal lemon.
 const BASE: u32 = 0x141311;
 const SURFACE: u32 = 0x1b1916;
+const FIELD: u32 = 0x211f1b;
 const EDGE: u32 = 0x2c2924;
 const INK: u32 = 0xece8df;
 const MUTED: u32 = 0xa8a296;
@@ -49,8 +50,15 @@ const PRESETS: R = R { l: LEFT, t: 304.0, r: RIGHT, b: 368.0 };
 const TONE_Y: f32 = 392.0;
 const VOLUME_Y: f32 = 474.0;
 const RULER_H: f32 = 62.0;
+const COMBO_X: f32 = 168.0;
+const COMBO_H: f32 = 34.0;
+const MIC_Y: f32 = 564.0;
+const OUT_Y: f32 = 608.0;
+const MONITOR_Y: f32 = 658.0;
+const ITEM_H: f32 = 32.0;
 // Lives in Win32_UI_Controls; not worth pulling that whole feature in for one number.
 const WM_MOUSELEAVE: u32 = 0x02A3;
+const LIST_MAX: usize = 7;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct R {
@@ -94,17 +102,27 @@ fn v(x: f32, y: f32) -> Vector2 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+enum Which {
+    Mic,
+    Out,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum Hit {
     None,
     Preset(usize),
     Tone,
     Volume,
+    Combo(Which),
+    Item(Which, usize),
+    Monitor,
 }
 
 struct Fonts {
     body: IDWriteTextFormat,
     small: IDWriteTextFormat,
     readout: IDWriteTextFormat,
+    field: IDWriteTextFormat,
     mark: IDWriteTextFormat,
     preset: IDWriteTextFormat,
     watermark: IDWriteTextFormat,
@@ -140,7 +158,10 @@ struct App {
     mouse: (f32, f32),
     hover: Hit,
     drag: Option<Hit>,
+    open: Option<Which>,
+    scroll: usize,
     glow: [f32; 6],
+    knob: f32,
     latency: f32,
     glyphs: Vec<Vec<(f32, f32)>>,
     raw: Box<[f32; SCOPE_LEN]>,
@@ -234,12 +255,16 @@ impl App {
                 mouse: (-1.0, -1.0),
                 hover: Hit::None,
                 drag: None,
+                open: None,
+                scroll: 0,
                 glow: [0.0; 6],
+                knob: 0.0,
                 latency: 0.0,
                 glyphs: Preset::ALL.iter().map(|p| glyph(*p)).collect(),
                 raw: Box::new([0.0; SCOPE_LEN]),
                 voiced: Box::new([0.0; SCOPE_LEN]),
             };
+            app.knob = if app.settings.monitor { 1.0 } else { 0.0 };
             app.refresh_devices();
             app.apply_voice();
             app.restart();
@@ -322,6 +347,8 @@ impl App {
             };
             *g += (target - *g) * 0.35;
         }
+        let k = if self.settings.monitor { 1.0 } else { 0.0 };
+        self.knob += (k - self.knob) * 0.4;
         // The live figure jitters by a packet; ease it so the readout does not flicker.
         let measured = self.shared.latency_ms();
         self.latency = if self.latency == 0.0 { measured } else { self.latency + (measured - self.latency) * 0.05 };
@@ -329,7 +356,27 @@ impl App {
 
     // ---------- input ----------
 
+    fn list_rect(&self, which: Which) -> (R, usize) {
+        let (y, count) = match which {
+            Which::Mic => (MIC_Y, self.inputs.len()),
+            Which::Out => (OUT_Y, self.outputs.len()),
+        };
+        let shown = count.min(LIST_MAX);
+        let h = shown as f32 * ITEM_H + 8.0;
+        let below = y + COMBO_H + 4.0;
+        let top = if below + h <= HEIGHT - 8.0 { below } else { y - 4.0 - h };
+        (R { l: COMBO_X, t: top, r: RIGHT, b: top + h }, shown)
+    }
+
     fn hit(&self, p: (f32, f32)) -> Hit {
+        if let Some(which) = self.open {
+            let (r, shown) = self.list_rect(which);
+            if r.has(p) {
+                let i = ((p.1 - r.t - 4.0) / ITEM_H).floor().max(0.0) as usize;
+                return Hit::Item(which, (i.min(shown.saturating_sub(1))) + self.scroll);
+            }
+            return Hit::None;
+        }
         if PRESETS.has(p) {
             let i = ((p.0 - PRESETS.l) / (PRESETS.w() / 6.0)) as usize;
             return Hit::Preset(i.min(5));
@@ -339,6 +386,15 @@ impl App {
         }
         if R::new(LEFT - 6.0, VOLUME_Y + 20.0, RIGHT - LEFT + 12.0, RULER_H - 14.0).has(p) {
             return Hit::Volume;
+        }
+        if R::new(COMBO_X, MIC_Y, RIGHT - COMBO_X, COMBO_H).has(p) {
+            return Hit::Combo(Which::Mic);
+        }
+        if R::new(COMBO_X, OUT_Y, RIGHT - COMBO_X, COMBO_H).has(p) {
+            return Hit::Combo(Which::Out);
+        }
+        if R::new(COMBO_X, MONITOR_Y, 260.0, 24.0).has(p) {
+            return Hit::Monitor;
         }
         Hit::None
     }
@@ -355,6 +411,16 @@ impl App {
 
     fn press(&mut self, double: bool) {
         let hit = self.hit(self.mouse);
+        if let Some(which) = self.open.take() {
+            if let Hit::Item(_, i) = hit {
+                match which {
+                    Which::Mic => self.input = i,
+                    Which::Out => self.output = i,
+                }
+                self.restart();
+            }
+            return;
+        }
         match hit {
             Hit::Preset(i) => {
                 self.preset = Preset::ALL[i];
@@ -376,8 +442,31 @@ impl App {
                 unsafe { SetCapture(self.hwnd) };
                 self.ruler_value(hit, self.mouse.0);
             }
-            Hit::None => {}
+            Hit::Combo(which) => {
+                // Devices come and go; re-read them every time a list opens.
+                self.refresh_devices_keep();
+                self.open = Some(which);
+                let (sel, count) = match which {
+                    Which::Mic => (self.input, self.inputs.len()),
+                    Which::Out => (self.output, self.outputs.len()),
+                };
+                self.scroll = sel.saturating_sub(LIST_MAX - 1).min(count.saturating_sub(LIST_MAX));
+            }
+            Hit::Monitor => {
+                self.settings.monitor = !self.settings.monitor;
+                self.restart();
+            }
+            Hit::None | Hit::Item(..) => {}
         }
+    }
+
+    fn refresh_devices_keep(&mut self) {
+        let (mic, out) =
+            (self.inputs.get(self.input).map(|e| e.id.clone()), self.outputs.get(self.output).map(|e| e.id.clone()));
+        self.inputs = engine::list(true);
+        self.outputs = engine::list(false);
+        self.input = mic.and_then(|id| self.inputs.iter().position(|e| e.id == id)).unwrap_or(0);
+        self.output = out.and_then(|id| self.outputs.iter().position(|e| e.id == id)).unwrap_or(0);
     }
 
     fn release(&mut self) {
@@ -390,6 +479,15 @@ impl App {
     }
 
     fn wheel(&mut self, up: bool) {
+        if let Some(which) = self.open {
+            let count = match which {
+                Which::Mic => self.inputs.len(),
+                Which::Out => self.outputs.len(),
+            };
+            let max = count.saturating_sub(LIST_MAX);
+            self.scroll = if up { self.scroll.saturating_sub(1) } else { (self.scroll + 1).min(max) };
+            return;
+        }
         match self.hit(self.mouse) {
             Hit::Tone => {
                 self.settings.semitones = (self.settings.semitones + if up { 1.0 } else { -1.0 }).clamp(-12.0, 12.0);
@@ -579,6 +677,33 @@ impl App {
         let vol = self.settings.volume;
         self.ruler(g, VOLUME_Y, "Громкость", &format!("{} %", (vol * 100.0).round()), vol / 2.0, 0.0, 20, 5)?;
 
+        // Routing.
+        self.text(g, "Микрофон", &f.body, R::new(LEFT, MIC_Y, 130.0, COMBO_H), START, MID, rgb(MUTED))?;
+        self.combo(g, Which::Mic, MIC_Y)?;
+        self.text(g, "Куда отдавать", &f.body, R::new(LEFT, OUT_Y, 130.0, COMBO_H), START, MID, rgb(MUTED))?;
+        self.combo(g, Which::Out, OUT_Y)?;
+
+        let track = R::new(COMBO_X, MONITOR_Y + 2.0, 36.0, 20.0);
+        self.fill(g, track, 10.0, mix(EDGE, ACCENT, self.knob));
+        let kx = track.l + 10.0 + self.knob * 16.0;
+        unsafe {
+            g.brush.SetColor(&mix(MUTED, BASE, self.knob));
+            g.rt.FillEllipse(&D2D1_ELLIPSE { point: v(kx, track.t + 10.0), radiusX: 7.0, radiusY: 7.0 }, &g.brush);
+        }
+        let monitor_color = if self.hover == Hit::Monitor { rgb(INK) } else { mix(MUTED, INK, 0.5) };
+        self.text(
+            g,
+            "Слышать себя в наушниках",
+            &f.body,
+            R::new(COMBO_X + 48.0, MONITOR_Y, 260.0, 24.0),
+            START,
+            MID,
+            monitor_color,
+        )?;
+
+        if let Some(which) = self.open {
+            self.dropdown(g, which)?;
+        }
         Ok(())
     }
 
@@ -626,6 +751,70 @@ impl App {
             || matches!(self.hover, Hit::Tone if y == TONE_Y)
             || matches!(self.hover, Hit::Volume if y == VOLUME_Y);
         self.line(g, &[(x1, y + 27.0), (x1, y + 54.0)], rgb(ACCENT), if active { 5.0 } else { 4.0 })?;
+        Ok(())
+    }
+
+    fn combo(&self, g: &Gfx, which: Which, y: f32) -> Result<()> {
+        let r = R::new(COMBO_X, y, RIGHT - COMBO_X, COMBO_H);
+        let hovered = self.hover == Hit::Combo(which) || self.open == Some(which);
+        self.fill(g, r, 8.0, if hovered { mix(FIELD, EDGE, 0.6) } else { rgb(FIELD) });
+        let name = match which {
+            Which::Mic => self.inputs.get(self.input),
+            Which::Out => self.outputs.get(self.output),
+        }
+        .map(|e| e.name.as_str())
+        .unwrap_or("—");
+        self.text(
+            g,
+            name,
+            &self.fonts.field,
+            R { l: r.l + 12.0, t: r.t, r: r.r - 34.0, b: r.b },
+            DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+            rgb(INK),
+        )?;
+        let (cx, cy) = (r.r - 18.0, r.t + COMBO_H / 2.0);
+        let flip = if self.open == Some(which) { -1.0 } else { 1.0 };
+        self.line(
+            g,
+            &[(cx - 4.5, cy - 2.0 * flip), (cx, cy + 2.5 * flip), (cx + 4.5, cy - 2.0 * flip)],
+            rgb(MUTED),
+            1.6,
+        )
+    }
+
+    fn dropdown(&self, g: &Gfx, which: Which) -> Result<()> {
+        let (r, shown) = self.list_rect(which);
+        let (items, selected) = match which {
+            Which::Mic => (&self.inputs, self.input),
+            Which::Out => (&self.outputs, self.output),
+        };
+        unsafe {
+            // A tight, directional shadow so the list reads as lifted off the form.
+            g.brush.SetColor(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.35 });
+            let s = R { l: r.l + 1.0, t: r.t + 3.0, r: r.r + 1.0, b: r.b + 4.0 };
+            g.rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: s.d2d(), radiusX: 10.0, radiusY: 10.0 }, &g.brush);
+        }
+        self.fill(g, r, 10.0, mix(FIELD, EDGE, 0.35));
+        self.outline(g, r, 10.0, rgb(EDGE));
+        for row in 0..shown {
+            let i = row + self.scroll;
+            let Some(item) = items.get(i) else { break };
+            let ir = R::new(r.l + 4.0, r.t + 4.0 + row as f32 * ITEM_H, r.w() - 8.0, ITEM_H);
+            if self.hover == Hit::Item(which, i) {
+                self.fill(g, ir, 6.0, rgb(EDGE));
+            }
+            let color = if i == selected { rgb(ACCENT) } else { rgb(INK) };
+            self.text(
+                g,
+                &item.name,
+                &self.fonts.field,
+                R { l: ir.l + 10.0, t: ir.t, r: ir.r - 10.0, b: ir.b },
+                DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                color,
+            )?;
+        }
         Ok(())
     }
 }
@@ -681,10 +870,18 @@ fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
                 w!("en-us"),
             )
         };
+        let field = ui(13.0, DWRITE_FONT_WEIGHT_NORMAL)?;
+        field.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        let ellipsis = dw.CreateEllipsisTrimmingSign(&field)?;
+        field.SetTrimming(
+            &DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, delimiter: 0, delimiterCount: 0 },
+            &ellipsis,
+        )?;
         Ok(Fonts {
             body: ui(13.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             small: ui(12.0, DWRITE_FONT_WEIGHT_NORMAL)?,
             readout: ui(15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD)?,
+            field,
             mark: bast(30.0)?,
             preset: bast(17.0)?,
             watermark: bast(58.0)?,
@@ -758,6 +955,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 app.mouse = (p.x as f32 * 96.0 / app.dpi, p.y as f32 * 96.0 / app.dpi);
                 app.wheel(((wp.0 >> 16) & 0xffff) as i16 > 0);
                 app.hover = app.hit(app.mouse);
+                LRESULT(0)
+            }
+            WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize => {
+                app.open = None;
                 LRESULT(0)
             }
             WM_SETCURSOR if (lp.0 & 0xffff) as u32 == HTCLIENT => {
