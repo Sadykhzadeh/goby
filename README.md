@@ -4,7 +4,7 @@ A small, fast voice changer for Windows. It takes your real microphone, turns yo
 minion, a demon, a robot, a walkie-talkie or one of 61 voices, and hands the result to any
 game or chat app through a virtual audio cable.
 
-One ~400 KB executable. No installer, no background service, no driver of its own, no
+One ~460 KB executable. No installer, no background service, no driver of its own, no
 account, nothing sent anywhere. The window is plain Win32 in the Windows 11 style: Mica,
 the system accent colour, light or dark to match Windows, English or Russian to match
 your display language.
@@ -36,11 +36,12 @@ when the app starts and the result is drawn.
 1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free).
 2. Run `goby.exe`. On the first run Windows asks once for permission to rename the
    cable, so it shows up as **Goby Mic** everywhere instead of "CABLE Output".
-3. Under **Who hears Goby**, switch on the programs that should get the changed voice:
-   CS2, Discord, OBS. Goby lists every program that has used your microphone (the same
-   list Windows keeps for its privacy page) and pins only those to Goby Mic, the way the
-   Volume mixer's per-app settings do. Everything else keeps your real microphone, and
-   nothing system-wide changes. Switch a program off to hand it back.
+3. Under **Who hears Goby**, press **Add a program** and pick CS2, Discord or OBS from
+   the menu. It lists every program that has used your microphone (the same list Windows
+   keeps for its privacy page); **Other program…** opens the usual file picker. Goby pins
+   only the chosen programs to Goby Mic, the way the Volume mixer's per-app settings do.
+   Everything else keeps your real microphone and nothing system-wide changes. The ×
+   next to a program hands it back.
 
 CS2 has no microphone picker of its own, which is exactly why the per-program switch is
 there. Goby never offers the cable as its own microphone, so it cannot feed itself back in.
