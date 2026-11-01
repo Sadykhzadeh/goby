@@ -19,7 +19,7 @@ use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, STGM_READ,
 };
 use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
-use windows::core::{HSTRING, PWSTR, Result as WinResult, w};
+use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
 use crate::dsp::{Preset, Voice};
 use crate::ring::{Consumer, Producer, ring};
@@ -157,6 +157,33 @@ impl Stream {
         }
     }
 
+    /// Shared mode with the smallest engine period the device allows (Windows 10+).
+    /// VB-Cable goes down to 128 frames, 2.67 ms instead of the usual 10 ms. This only
+    /// works in the device's own mix format, so it is used when that is 48 kHz float.
+    fn open_low_latency(id: &str) -> WinResult<Option<Stream>> {
+        unsafe {
+            let dev = enumerator()?.GetDevice(&HSTRING::from(id))?;
+            let client: IAudioClient3 = dev.Activate(CLSCTX_ALL, None)?;
+            let fmt = client.GetMixFormat()?;
+            let mix = *fmt;
+            let float = mix.wBitsPerSample == 32 && (mix.wFormatTag == 3 || mix.wFormatTag == 0xFFFE);
+            let (mut default, mut fundamental, mut min, mut max) = (0, 0, 0, 0);
+            let periods = client.GetSharedModeEnginePeriod(fmt, &mut default, &mut fundamental, &mut min, &mut max);
+            let ok = float && mix.nSamplesPerSec == RATE && periods.is_ok() && min < default;
+            let result = if ok {
+                client.InitializeSharedAudioStream(AUDCLNT_STREAMFLAGS_EVENTCALLBACK, min, fmt, None)
+            } else {
+                Ok(())
+            };
+            CoTaskMemFree(Some(fmt as _));
+            if !ok {
+                return Ok(None);
+            }
+            result?;
+            Stream::finish(client.cast()?, mix.nChannels as usize).map(Some)
+        }
+    }
+
     fn finish(client: IAudioClient, channels: usize) -> WinResult<Stream> {
         unsafe {
             let event = CreateEventW(None, false, false, None)?;
@@ -259,7 +286,10 @@ fn run(shared: &Shared, ready: Ready, body: impl FnOnce(&mut dyn FnMut()) -> Win
 
 fn render(id: &str, mut reader: Reader, stop: &AtomicBool, shared: &Shared, ready: Ready) {
     run(shared, ready, |started| unsafe {
-        let s = Stream::open(id, 2)?;
+        let s = match Stream::open_low_latency(id) {
+            Ok(Some(s)) => s,
+            _ => Stream::open(id, 2)?,
+        };
         let out: IAudioRenderClient = s.client.GetService()?;
         // Start from silence so the first period is not garbage.
         out.GetBuffer(s.frames)?;
@@ -428,5 +458,33 @@ mod tests {
             println!("{} | {}", ep.name, ep.id);
         }
         println!("default mic: {:?}", default_endpoint(true));
+    }
+}
+
+#[cfg(test)]
+mod probe {
+    use super::*;
+
+    /// `cargo test --release engine_periods -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs real audio devices"]
+    fn engine_periods() {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+        for ep in list(true).into_iter().chain(list(false)) {
+            let r = (|| unsafe {
+                let dev = enumerator()?.GetDevice(&HSTRING::from(ep.id.as_str()))?;
+                let c: IAudioClient3 = dev.Activate(CLSCTX_ALL, None)?;
+                let fmt = c.GetMixFormat()?;
+                let (mut def, mut fund, mut min, mut max) = (0, 0, 0, 0);
+                c.GetSharedModeEnginePeriod(fmt, &mut def, &mut fund, &mut min, &mut max)?;
+                let rate = (*fmt).nSamplesPerSec;
+                CoTaskMemFree(Some(fmt as _));
+                WinResult::Ok(format!(
+                    "{rate} Hz: default {def} min {min} frames ({:.2} ms min)",
+                    min as f32 * 1000.0 / rate as f32
+                ))
+            })();
+            println!("{:<45} {}", ep.name, r.unwrap_or_else(|e| e.to_string()));
+        }
     }
 }
