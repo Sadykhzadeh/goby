@@ -54,6 +54,11 @@ keeps the chosen voice, *Hear myself* for your headphones, and *Low latency*, wh
 the microphone in exclusive mode. Arrow keys walk the gallery; double-click a slider to
 reset it.
 
+Hotkeys work from inside a game: **Ctrl+Alt+G** switches the effect on and off, and
+**Ctrl+Alt+Page Down** / **Page Up** step to the next or previous voice (which also
+switches the effect back on). Settings shows when another program already holds one of
+them, and can turn them off.
+
 Closing the window leaves Goby running in the notification area, so your voice stays on
 in the game. Click the icon to bring the window back; right-click it to switch the effect
 off or to quit. *Keep running in the tray* under Settings turns this off, and then closing

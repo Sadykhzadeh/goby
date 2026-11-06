@@ -387,4 +387,5 @@ pub mod glyph {
     pub const MIX: u16 = 0xE9D9;
     pub const MINIMIZE: u16 = 0xE921;
     pub const POWER: u16 = 0xE7E8;
+    pub const KEYBOARD: u16 = 0xE765;
 }

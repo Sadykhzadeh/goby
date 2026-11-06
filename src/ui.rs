@@ -25,6 +25,7 @@ use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
+use crate::hotkeys;
 use crate::icon;
 use crate::install;
 use crate::lang;
@@ -67,6 +68,7 @@ enum Switch {
     Exclusive,
     Tray,
     Autostart,
+    Hotkeys,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -248,9 +250,11 @@ struct App {
     settings_scroll: Anim,
     gallery_max: f32,
     settings_max: f32,
-    switches: [Anim; 6],
+    switches: [Anim; 7],
     /// Windows starts Goby at sign-in; kept in the registry, read once here.
     autostart: bool,
+    /// Every hotkey registered; false when another program holds one.
+    hotkeys_ok: bool,
     /// The notification-area icon is up, and the tip it shows.
     tray_icon: bool,
     tray_tip: String,
@@ -423,8 +427,9 @@ impl App {
             settings_scroll: Anim::default(),
             gallery_max: 0.0,
             settings_max: 0.0,
-            switches: [Anim::default(); 6],
+            switches: [Anim::default(); 7],
             autostart: install::starts_with_windows(),
+            hotkeys_ok: true,
             tray_icon: false,
             tray_tip: String::new(),
             tab_x: Anim::default(),
@@ -438,7 +443,8 @@ impl App {
             quiet_frames: 0,
         };
         let s = &app.settings;
-        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart].into_iter().enumerate() {
+        let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys];
+        for (i, on) in switched.into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
         }
@@ -516,6 +522,29 @@ impl App {
             tray::Item { label: None, checked: false, default: false },
             item(self.t("Выйти", "Quit"), false, false),
         ]
+    }
+
+    // ---------- hotkeys ----------
+
+    fn use_hotkeys(&mut self) {
+        hotkeys::unregister(self.hwnd);
+        self.hotkeys_ok = !self.settings.hotkeys || hotkeys::register(self.hwnd);
+    }
+
+    fn hotkey(&mut self, action: hotkeys::Action) {
+        match action {
+            hotkeys::Action::Toggle => self.settings.enabled = !self.settings.enabled,
+            hotkeys::Action::Next | hotkeys::Action::Previous => {
+                let step = if action == hotkeys::Action::Next { 1 } else { -1 };
+                self.voice = hotkeys::cycle(self.voice, step, voices::ALL.len());
+                self.settings.semitones = 0.0;
+                // Picking a voice means wanting to hear it.
+                self.settings.enabled = true;
+            }
+        }
+        self.apply();
+        self.settings.save();
+        self.dirty = true;
     }
 
     /// Acts on a menu item; true for Quit, which the caller carries out like `close`.
@@ -835,7 +864,7 @@ impl App {
             self.restart();
         }
         let s = &self.settings;
-        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, self.autostart];
+        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, self.autostart, s.hotkeys];
         let mut moving = false;
         for (a, on) in self.switches.iter_mut().zip(on) {
             a.target = if on { 1.0 } else { 0.0 };
@@ -912,6 +941,10 @@ impl App {
                     Switch::Autostart => {
                         install::set_start_with_windows(!self.autostart);
                         self.autostart = install::starts_with_windows();
+                    }
+                    Switch::Hotkeys => {
+                        self.settings.hotkeys = !self.settings.hotkeys;
+                        self.use_hotkeys();
                     }
                 }
                 self.apply();
@@ -1341,6 +1374,15 @@ impl App {
         let start = self.t("Запускать вместе с Windows", "Start with Windows");
         let start_desc = self.t("Сразу в трей, без окна", "Straight to the tray, no window");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Autostart), glyph::POWER, start, start_desc)?;
+        let keys = self.t("Горячие клавиши", "Hotkeys");
+        let keys_desc = match self.hotkeys_ok {
+            true => self.t(
+                "Ctrl+Alt+G — эффект, Ctrl+Alt+PgUp/PgDn — голос, даже в игре",
+                "Ctrl+Alt+G effect, Ctrl+Alt+PgUp/PgDn voice, even in a game",
+            ),
+            false => self.t("Часть клавиш занята другой программой", "Another program holds some of the keys"),
+        };
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Hotkeys), glyph::KEYBOARD, keys, keys_desc)?;
 
         y += 20.0;
         let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
@@ -1622,6 +1664,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
                 LRESULT(0)
             }
+            WM_HOTKEY => {
+                if let Some(action) = hotkeys::action(wp.0) {
+                    app.hotkey(action);
+                }
+                LRESULT(0)
+            }
             tray::WM_QUIT_GOBY => {
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
@@ -1648,6 +1696,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_DESTROY => {
                 tray::remove(hwnd);
+                hotkeys::unregister(hwnd);
                 app.settings.save();
                 let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -1736,6 +1785,7 @@ pub fn run(hidden: bool) -> Result<()> {
         let mut app = Box::new(App::new(hwnd));
         app.apply_frame();
         app.add_tray_icon();
+        app.use_hotkeys();
         let hidden = hidden && app.tray_icon;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         SetTimer(Some(hwnd), 1, 33, None);

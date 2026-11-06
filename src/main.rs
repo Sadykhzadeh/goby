@@ -5,6 +5,7 @@ mod dsp;
 mod engine;
 mod fx;
 mod gfx;
+mod hotkeys;
 mod icon;
 mod install;
 mod lang;

@@ -30,6 +30,8 @@ pub struct Settings {
     pub tray: bool,
     /// The first close to the tray said where Goby went; it says so only once.
     pub tray_told: bool,
+    /// Ctrl+Alt+G and Ctrl+Alt+Page Up/Down work from inside other programs.
+    pub hotkeys: bool,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             cable_named_tried: false,
             tray: true,
             tray_told: false,
+            hotkeys: true,
         }
     }
 }
@@ -92,6 +95,7 @@ impl Settings {
                 "cable_named_tried" => s.cable_named_tried = v == "1",
                 "tray" => s.tray = v != "0",
                 "tray_told" => s.tray_told = v == "1",
+                "hotkeys" => s.hotkeys = v != "0",
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -106,7 +110,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\n",
             self.input,
             self.output,
             self.voice,
@@ -124,6 +128,7 @@ impl Settings {
             self.cable_named_tried as u8,
             self.tray as u8,
             self.tray_told as u8,
+            self.hotkeys as u8,
         )
     }
 
@@ -169,6 +174,7 @@ mod tests {
             cable_named_tried: true,
             tray: false,
             tray_told: true,
+            hotkeys: false,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
