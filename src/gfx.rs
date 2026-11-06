@@ -395,4 +395,6 @@ pub mod glyph {
     pub const SETTINGS: u16 = 0xE713;
     pub const VOICES: u16 = 0xE76E;
     pub const APPS: u16 = 0xE71D;
+    pub const STAR: u16 = 0xE734;
+    pub const STAR_FILLED: u16 = 0xE735;
 }

@@ -43,16 +43,19 @@ pub fn action(id: usize) -> Option<Action> {
     KEYS.get(id.checked_sub(1)?).map(|(a, _)| *a)
 }
 
-/// The voice `step` places away from `voice` in a catalog of `len`, wrapping around and
-/// skipping the first entry, Off, which the toggle already covers.
-pub fn cycle(voice: usize, step: isize, len: usize) -> usize {
-    if len < 2 {
-        return voice;
+/// The entry `step` places away from `current` in `list`, wrapping around. From outside the
+/// list a step forward lands on its first entry and a step back on its last.
+pub fn step_in<T: Copy + PartialEq>(list: &[T], current: Option<T>, step: isize) -> Option<T> {
+    if list.is_empty() {
+        return None;
     }
-    let count = (len - 1) as isize;
-    let pos = voice.saturating_sub(1) as isize;
-    let from = if voice == 0 && step > 0 { -1 } else { pos };
-    1 + (from + step).rem_euclid(count) as usize
+    let len = list.len() as isize;
+    let at = match current.and_then(|c| list.iter().position(|x| *x == c)) {
+        Some(pos) => (pos as isize + step).rem_euclid(len),
+        None if step > 0 => 0,
+        None => len - 1,
+    };
+    Some(list[at as usize])
 }
 
 #[cfg(test)]
@@ -60,13 +63,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stepping_wraps_around_and_never_lands_on_off() {
-        assert_eq!(cycle(1, 1, 5), 2);
-        assert_eq!(cycle(4, 1, 5), 1);
-        assert_eq!(cycle(1, -1, 5), 4);
-        assert_eq!(cycle(0, 1, 5), 1);
-        assert_eq!(cycle(0, -1, 5), 4);
-        assert_eq!(cycle(0, 1, 1), 0);
+    fn stepping_wraps_around_and_enters_from_either_end() {
+        let list = [1, 2, 3, 4];
+        assert_eq!(step_in(&list, Some(1), 1), Some(2));
+        assert_eq!(step_in(&list, Some(4), 1), Some(1));
+        assert_eq!(step_in(&list, Some(1), -1), Some(4));
+        assert_eq!(step_in(&list, Some(0), 1), Some(1));
+        assert_eq!(step_in(&list, Some(0), -1), Some(4));
+        assert_eq!(step_in(&list, None, 1), Some(1));
+        assert_eq!(step_in::<usize>(&[], Some(1), 1), None);
     }
 
     #[test]

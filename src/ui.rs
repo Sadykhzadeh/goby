@@ -87,6 +87,24 @@ enum Pane {
     Settings,
 }
 
+/// What a line of the tray icon's menu does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TrayAct {
+    None,
+    Open,
+    Voice(usize),
+    Effect,
+    Quit,
+}
+
+/// Which voices the gallery shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Shelf {
+    All,
+    Favorites,
+    Group(Category),
+}
+
 /// The voices are the app; everything set once lives on its own page.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Page {
@@ -99,7 +117,9 @@ enum Page {
 enum Hit {
     None,
     Tile(usize),
-    Tab(Option<Category>),
+    Tab(Shelf),
+    /// The star on a voice tile.
+    Star(usize),
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
@@ -251,7 +271,7 @@ struct App {
     input: usize,
     output: usize,
     voice: usize,
-    filter: Option<Category>,
+    shelf: Shelf,
     page: Page,
 
     shared: Arc<Shared>,
@@ -439,7 +459,7 @@ impl App {
             outputs: Vec::new(),
             input: 0,
             output: 0,
-            filter: None,
+            shelf: Shelf::All,
             page: Page::Voices,
             shared: Arc::new(Shared::default()),
             engine: None,
@@ -483,6 +503,9 @@ impl App {
         for (i, on) in switched.into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
+        }
+        if !app.favorites().is_empty() {
+            app.shelf = Shelf::Favorites;
         }
         app.refresh_devices();
         app.name_cable_once();
@@ -547,17 +570,76 @@ impl App {
         false
     }
 
-    fn tray_items(&self) -> Vec<tray::Item> {
-        let item =
-            |label: &str, checked: bool, default: bool| tray::Item { label: Some(label.to_string()), checked, default };
+    /// The icon's menu: open the window, switch to a favourite, the effect switch, quit.
+    fn tray_menu(&self) -> Vec<(tray::Item, TrayAct)> {
+        let item = |label: &str, checked: bool, act: TrayAct| {
+            let default = act == TrayAct::Open;
+            (tray::Item { label: Some(label.to_string()), checked, default }, act)
+        };
+        let line = || (tray::Item { label: None, checked: false, default: false }, TrayAct::None);
+        let mut menu = vec![item(self.t("Открыть Goby", "Open Goby"), false, TrayAct::Open), line()];
+        let favorites = self.favorites();
+        for &i in favorites.iter().take(12) {
+            let on = i == self.voice && self.settings.enabled;
+            menu.push(item(voices::ALL[i].name(self.ru), on, TrayAct::Voice(i)));
+        }
+        if !favorites.is_empty() {
+            menu.push(line());
+        }
         let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
-        vec![
-            item(self.t("Открыть Goby", "Open Goby"), false, true),
-            tray::Item { label: None, checked: false, default: false },
-            item(&format!("{}: {voice}", self.t("Эффект", "Effect")), self.settings.enabled, false),
-            tray::Item { label: None, checked: false, default: false },
-            item(self.t("Выйти", "Quit"), false, false),
-        ]
+        let effect = format!("{}: {voice}", self.t("Эффект", "Effect"));
+        menu.push(item(&effect, self.settings.enabled, TrayAct::Effect));
+        menu.push(line());
+        menu.push(item(self.t("Выйти", "Quit"), false, TrayAct::Quit));
+        menu
+    }
+
+    /// Acts on a menu item; true for Quit, which the caller carries out like `close`.
+    fn tray_act(&mut self, act: TrayAct) -> bool {
+        match act {
+            TrayAct::Open => self.show(),
+            TrayAct::Voice(i) => self.pick_voice(i),
+            TrayAct::Effect => {
+                self.settings.enabled = !self.settings.enabled;
+                self.apply();
+                self.settings.save();
+                self.dirty = true;
+            }
+            TrayAct::Quit => return true,
+            TrayAct::None => {}
+        }
+        false
+    }
+
+    // ---------- favourites ----------
+
+    /// The starred voices, in the order they were starred.
+    fn favorites(&self) -> Vec<usize> {
+        self.settings.favorites.iter().filter_map(|id| voices::index_of(id)).collect()
+    }
+
+    fn is_favorite(&self, i: usize) -> bool {
+        self.settings.favorites.iter().any(|id| id == voices::ALL[i].id)
+    }
+
+    fn toggle_favorite(&mut self, i: usize) {
+        let id = voices::ALL[i].id;
+        match self.is_favorite(i) {
+            true => self.settings.favorites.retain(|f| f != id),
+            false => self.settings.favorites.push(id.to_string()),
+        }
+        self.settings.save();
+        self.dirty = true;
+    }
+
+    /// Switches to a voice from outside the gallery, which also means wanting to hear it.
+    fn pick_voice(&mut self, i: usize) {
+        self.voice = i;
+        self.settings.semitones = 0.0;
+        self.settings.enabled = true;
+        self.apply();
+        self.settings.save();
+        self.dirty = true;
     }
 
     // ---------- hotkeys ----------
@@ -568,35 +650,25 @@ impl App {
     }
 
     fn hotkey(&mut self, action: hotkeys::Action) {
-        match action {
-            hotkeys::Action::Toggle => self.settings.enabled = !self.settings.enabled,
-            hotkeys::Action::Next | hotkeys::Action::Previous => {
-                let step = if action == hotkeys::Action::Next { 1 } else { -1 };
-                self.voice = hotkeys::cycle(self.voice, step, voices::ALL.len());
-                self.settings.semitones = 0.0;
-                // Picking a voice means wanting to hear it.
-                self.settings.enabled = true;
-            }
-        }
-        self.apply();
-        self.settings.save();
-        self.dirty = true;
-    }
-
-    /// Acts on a menu item; true for Quit, which the caller carries out like `close`.
-    fn tray_chosen(&mut self, i: usize) -> bool {
-        match i {
-            0 => self.show(),
-            2 => {
+        let step = match action {
+            hotkeys::Action::Toggle => {
                 self.settings.enabled = !self.settings.enabled;
                 self.apply();
                 self.settings.save();
                 self.dirty = true;
+                return;
             }
-            4 => return true,
-            _ => {}
+            hotkeys::Action::Next => 1,
+            hotkeys::Action::Previous => -1,
+        };
+        // Favourites when there are any, otherwise every voice but Off, which the toggle covers.
+        let mut list = self.favorites();
+        if list.is_empty() {
+            list = (1..voices::ALL.len()).collect();
         }
-        false
+        if let Some(i) = hotkeys::step_in(&list, Some(self.voice), step) {
+            self.pick_voice(i);
+        }
     }
 
     // ---------- state ----------
@@ -883,7 +955,11 @@ impl App {
     }
 
     fn filtered(&self) -> Vec<usize> {
-        (0..voices::ALL.len()).filter(|i| self.filter.is_none_or(|c| voices::ALL[*i].category == c)).collect()
+        match self.shelf {
+            Shelf::All => (0..voices::ALL.len()).collect(),
+            Shelf::Favorites => self.favorites(),
+            Shelf::Group(c) => (0..voices::ALL.len()).filter(|i| voices::ALL[*i].category == c).collect(),
+        }
     }
 
     fn tick(&mut self) {
@@ -960,8 +1036,9 @@ impl App {
                 self.apply();
                 self.settings.save();
             }
+            Hit::Star(i) => self.toggle_favorite(i),
             Hit::Tab(c) => {
-                self.filter = c;
+                self.shelf = c;
                 self.gallery_scroll.target = 0.0;
                 self.dirty = true;
             }
@@ -1449,8 +1526,9 @@ impl App {
 
     fn draw_tabs(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
-        let mut items: Vec<(Option<Category>, &'static str)> = vec![(None, self.t("Все", "All"))];
-        items.extend(Category::ALL.iter().map(|c| (Some(*c), c.name(self.ru))));
+        let mut items: Vec<(Shelf, &'static str)> =
+            vec![(Shelf::All, self.t("Все", "All")), (Shelf::Favorites, self.t("Избранное", "Favorites"))];
+        items.extend(Category::ALL.iter().map(|c| (Shelf::Group(*c), c.name(self.ru))));
         if self.tab_widths.len() != items.len() {
             self.tab_widths = items.iter().map(|(_, s)| g.measure(s, Font::Strong).unwrap_or(60.0)).collect();
         }
@@ -1462,7 +1540,7 @@ impl App {
         for (i, (cat, label)) in items.iter().enumerate() {
             let w = self.tab_widths[i] + 24.0;
             let r = R::new(x, self.lay.tabs.t, w, self.lay.tabs.h());
-            let selected = self.filter == *cat;
+            let selected = self.shelf == *cat;
             let color = if selected || self.hover == Hit::Tab(*cat) { th.text() } else { th.text_secondary() };
             g.text(label, if selected { Font::Strong } else { Font::Body }, r, Align::Center, color)?;
             if selected {
@@ -1524,10 +1602,39 @@ impl App {
             let pts: Vec<(f32, f32)> =
                 wave.iter().enumerate().map(|(k, s)| (gl + gw * k as f32 / last, gy - s * 11.0)).collect();
             g.line(&pts, if selected { th.accent() } else { th.text_secondary() }, 1.4)?;
-            let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0, 22.0);
+            let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0 - 24.0, 22.0);
             g.text(voices::ALL[i].name(self.ru), Font::Body, name, Align::Start, th.text())?;
             let visible = R { l: r.l, t: r.t.max(self.lay.gallery.t), r: r.r, b: r.b.min(self.lay.gallery.b) };
             self.hits.push((visible, Hit::Tile(i)));
+            // A filled star marks a favourite; an outline one offers to make it one.
+            let star = R::new(r.r - 34.0, r.b - 34.0, 28.0, 28.0);
+            let starred = self.is_favorite(i);
+            if starred || hovered || self.hover == Hit::Star(i) {
+                if self.hover == Hit::Star(i) {
+                    g.fill(star, 4.0, th.control_hover());
+                }
+                let (icon, color) = match starred {
+                    true => (glyph::STAR_FILLED, th.accent()),
+                    false => (glyph::STAR, th.text_secondary()),
+                };
+                g.icon(icon, Font::Icon12, star, color)?;
+                if star.intersects(&self.lay.gallery) && visible.has((star.l + 14.0, star.t + 14.0)) {
+                    self.hits.push((star, Hit::Star(i)));
+                }
+            }
+        }
+        if list.is_empty() && self.shelf == Shelf::Favorites {
+            let (l, t, w) = (self.lay.gallery.l + 2.0, self.lay.gallery.t + 8.0, self.lay.gallery.w() - GUTTER);
+            let first = self.t(
+                "Отметьте голос звёздочкой или правой кнопкой мыши",
+                "Star a voice, or right-click it, to keep it here",
+            );
+            g.text(first, Font::Strong, R::new(l, t, w, 22.0), Align::Start, th.text())?;
+            let second = self.t(
+                "Избранное есть и в меню значка в трее, а Ctrl+Alt+PgUp/PgDn листают только его",
+                "Favorites are in the tray menu too, and Ctrl+Alt+PgUp/PgDn step through them only",
+            );
+            g.text(second, Font::Body, R::new(l, t + 26.0, w, 22.0), Align::Start, th.text_secondary())?;
         }
         g.unclip();
         self.scrollbar(g, self.lay.gallery, scroll, self.gallery_max, Pane::Gallery);
@@ -1819,6 +1926,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 app.dirty = true;
                 LRESULT(0)
             }
+            WM_RBUTTONUP => {
+                app.mouse = point(lp, app.dpi);
+                if let Hit::Tile(i) | Hit::Star(i) = app.hit_at(app.mouse) {
+                    app.toggle_favorite(i);
+                }
+                LRESULT(0)
+            }
             WM_LBUTTONUP => {
                 app.release();
                 LRESULT(0)
@@ -1897,10 +2011,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 match tray::event(lp) {
                     tray::SELECT | tray::KEY_SELECT => app.show(),
                     WM_CONTEXTMENU => {
-                        let items = app.tray_items();
-                        let chosen = tray::menu(hwnd, tray::anchor(wp), &items);
+                        let (items, acts): (Vec<_>, Vec<_>) = app.tray_menu().into_iter().unzip();
+                        let chosen = tray::menu(hwnd, tray::anchor(wp), &items).and_then(|i| acts.get(i).copied());
                         let Some(app) = app_of(hwnd) else { return LRESULT(0) };
-                        if chosen.is_some_and(|i| app.tray_chosen(i)) {
+                        if chosen.is_some_and(|act| app.tray_act(act)) {
                             let _ = DestroyWindow(hwnd);
                         }
                     }

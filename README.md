@@ -63,6 +63,10 @@ Hotkeys work from inside a game: **Ctrl+Alt+G** switches the effect on and off, 
 switches the effect back on). Settings shows when another program already holds one of
 them, and can turn them off.
 
+Star the voices you use (or right-click them) and they get a **Favorites** tab, which
+Goby opens on from then on. The hotkeys then step through the favorites only, and the
+tray icon's menu lists them, so a voice can be switched without opening the window.
+
 Closing the window leaves Goby running in the notification area, so your voice stays on
 in the game. Click the icon to bring the window back; right-click it to switch the effect
 off or to quit. *Keep running in the tray* under Settings turns this off, and then closing
