@@ -138,7 +138,8 @@ fn adler32(bytes: &[u8]) -> u32 {
     b << 16 | a
 }
 
-/// An RGBA PNG of the icon, as Windows expects for the large sizes.
+/// An RGBA PNG of the icon. Windows has read PNG images inside icons since Vista, at
+/// every size, and they take a tenth of the room of 32-bit bitmaps.
 fn icon_png(size: usize) -> Vec<u8> {
     let px = icon::pixels(size, icon::RGB);
     let mut raw = Vec::with_capacity(size * (1 + size * 4));
@@ -168,32 +169,6 @@ fn icon_png(size: usize) -> Vec<u8> {
     chunk(b"IDAT", &zlib);
     chunk(b"IEND", &[]);
     png
-}
-
-/// A 32-bit icon image: BITMAPINFOHEADER, bottom-up BGRA, then an all-clear AND mask.
-/// Large sizes are PNG instead, which Windows has read inside icons since Vista.
-fn icon_image(size: usize) -> Vec<u8> {
-    if size >= 64 {
-        return icon_png(size);
-    }
-    let mut b = Vec::new();
-    let mask_row = size.div_ceil(32) * 4;
-    for v in [40u32, size as u32, size as u32 * 2] {
-        b.extend(v.to_le_bytes());
-    }
-    b.extend(1u16.to_le_bytes());
-    b.extend(32u16.to_le_bytes());
-    b.extend(0u32.to_le_bytes());
-    b.extend(((size * size * 4 + mask_row * size) as u32).to_le_bytes());
-    b.extend([0u8; 16]);
-    let px = icon::pixels(size, icon::RGB);
-    for row in (0..size).rev() {
-        for p in &px[row * size..(row + 1) * size] {
-            b.extend(p.to_le_bytes());
-        }
-    }
-    b.extend(std::iter::repeat_n(0u8, mask_row * size));
-    b
 }
 
 /// One VS_VERSIONINFO node: header, key, value, children, each 32-bit aligned.
@@ -283,7 +258,7 @@ fn main() {
     let mut group = Vec::new();
     group.extend([0u16, 1, ICON_SIZES.len() as u16].iter().flat_map(|v| v.to_le_bytes()));
     for (i, size) in ICON_SIZES.iter().enumerate() {
-        let image = icon_image(*size);
+        let image = icon_png(*size);
         let id = i as u16 + 1;
         resource(&mut res, RT_ICON, id, &image);
         let dim = if *size >= 256 { 0 } else { *size as u8 };
