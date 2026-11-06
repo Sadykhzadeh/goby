@@ -361,6 +361,7 @@ fn app_glyph(exe: &str) -> u16 {
         "discord.exe" | "telegram.exe" | "teams.exe" | "ms-teams.exe" | "zoom.exe" | "skype.exe" => glyph::CHAT,
         "chrome.exe" | "msedge.exe" | "firefox.exe" | "opera.exe" | "brave.exe" | "steamwebhelper.exe" => glyph::GLOBE,
         "obs64.exe" | "obs32.exe" => glyph::VIDEO,
+        "nvidia broadcast.exe" => glyph::MIC,
         _ => glyph::GAME,
     }
 }

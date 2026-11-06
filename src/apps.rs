@@ -31,8 +31,37 @@ pub fn exe_of(key: &str) -> Option<String> {
     file.ends_with(".exe").then_some(file)
 }
 
+/// What people call a program: the product name for well-known ones, whose executables
+/// are often cryptic (`cs2.exe`, `obs64.exe`), otherwise the file name with a capital.
 pub fn display_name(exe: &str) -> String {
-    exe.strip_suffix(".exe").unwrap_or(exe).to_string()
+    let known = match exe {
+        "cs2.exe" => "Counter-Strike 2",
+        "dota2.exe" => "Dota 2",
+        "r5apex.exe" | "r5apex_dx12.exe" => "Apex Legends",
+        "valorant-win64-shipping.exe" => "Valorant",
+        "fortniteclient-win64-shipping.exe" => "Fortnite",
+        "robloxplayerbeta.exe" => "Roblox",
+        "javaw.exe" => "Minecraft",
+        "discord.exe" => "Discord",
+        "telegram.exe" => "Telegram",
+        "teams.exe" | "ms-teams.exe" => "Microsoft Teams",
+        "zoom.exe" => "Zoom",
+        "skype.exe" => "Skype",
+        "whatsapp.exe" => "WhatsApp",
+        "obs64.exe" | "obs32.exe" => "OBS Studio",
+        "chrome.exe" => "Google Chrome",
+        "msedge.exe" => "Microsoft Edge",
+        "firefox.exe" => "Firefox",
+        "steam.exe" | "steamwebhelper.exe" => "Steam",
+        "nvidia broadcast.exe" => "NVIDIA Broadcast",
+        _ => "",
+    };
+    if !known.is_empty() {
+        return known.to_string();
+    }
+    let stem = exe.strip_suffix(".exe").unwrap_or(exe);
+    let mut chars = stem.chars();
+    chars.next().map_or(String::new(), |first| first.to_uppercase().chain(chars).collect())
 }
 
 /// Newest entry per executable, most recently used first, without system helpers.
@@ -127,7 +156,10 @@ mod tests {
         assert_eq!(exe_of(key).as_deref(), Some("cs2.exe"));
         assert_eq!(exe_of("C:#Users#me#AppData#Local#Discord#app-1.0.9#Discord.exe").as_deref(), Some("discord.exe"));
         assert_eq!(exe_of("C:#tools#readme.txt"), None);
-        assert_eq!(display_name("cs2.exe"), "cs2");
+        assert_eq!(display_name("cs2.exe"), "Counter-Strike 2");
+        assert_eq!(display_name("obs64.exe"), "OBS Studio");
+        assert_eq!(display_name("audacity.exe"), "Audacity");
+        assert_eq!(display_name("эфир.exe"), "Эфир");
     }
 
     #[test]
