@@ -132,6 +132,8 @@ enum Hit {
     DropPreset(usize),
     /// Save the current voice with its pitch, volume and mix.
     SavePreset,
+    /// Unfold or fold the advanced microphone settings.
+    Advanced,
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
@@ -284,6 +286,8 @@ struct App {
     output: usize,
     voice: usize,
     shelf: Shelf,
+    /// The advanced microphone settings are unfolded.
+    advanced: bool,
     page: Page,
 
     shared: Arc<Shared>,
@@ -472,6 +476,7 @@ impl App {
             input: 0,
             output: 0,
             shelf: Shelf::All,
+            advanced: false,
             page: Page::Voices,
             shared: Arc::new(Shared::default()),
             engine: None,
@@ -1137,6 +1142,10 @@ impl App {
             Hit::Preset(p) => self.choose(Fav::Preset(p), false),
             Hit::DropPreset(p) => self.drop_preset(p),
             Hit::SavePreset => self.save_preset(),
+            Hit::Advanced => {
+                self.advanced = !self.advanced;
+                self.dirty = true;
+            }
             Hit::Star(i) => self.toggle_favorite(i),
             Hit::Tab(c) => {
                 self.shelf = c;
@@ -1801,17 +1810,23 @@ impl App {
         section(g, &mut y, self.t("Микрофон", "Microphone"))?;
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
         self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
-        let fast = self.t("Низкая задержка", "Low latency");
-        let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
-            (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
-            (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
-            _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
-        };
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
-        self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
         let gate = self.t("Тишина между фразами", "Silence between phrases");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
-        self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
+        // Rarely touched once set: folded away like an expander in Windows Settings.
+        let more = self.t("Дополнительно", "Advanced");
+        let more_desc = self.t("Задержка, усиление, порог гейта", "Latency, gain, gate threshold");
+        self.row_card(g, &mut y, Hit::Advanced, glyph::MORE, more, more_desc)?;
+        if self.advanced {
+            let fast = self.t("Низкая задержка", "Low latency");
+            let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
+                (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
+                (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
+                _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
+            };
+            self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
+            self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
+            self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
+        }
         y += 20.0;
 
         section(g, &mut y, self.t("Вывод", "Output"))?;
@@ -1891,6 +1906,10 @@ impl App {
                 }
                 Hit::AddApp => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
                 Hit::Offer(_) => g.icon(glyph::ADD, Font::Icon12, side, th.text_secondary())?,
+                Hit::Advanced => {
+                    let chevron = if self.advanced { glyph::CHEVRON_UP } else { glyph::CHEVRON_DOWN };
+                    g.icon(chevron, Font::Icon12, side, th.text_secondary())?
+                }
                 Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
                 Hit::None => {}
                 _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,

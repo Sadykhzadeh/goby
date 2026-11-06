@@ -52,7 +52,7 @@ there. Goby never offers the cable as its own microphone, so it cannot feed itse
 
 The main window holds what you change while playing: the voice, the effect switch (it
 keeps the chosen voice), pitch, volume and *Hear myself* for your headphones. Everything
-you set once lives in **Settings**: the microphone with its
+you set once lives in **Settings**: the microphone (gain, the gate threshold and *Low latency* fold away under **Advanced**) with its
 gain, a noise gate that mutes keyboard clicks and room noise between phrases and *Low
 latency*, which takes the microphone in exclusive mode, the output, how much of your
 original voice to mix back in, and the tray, startup and hotkey switches. Arrow keys
