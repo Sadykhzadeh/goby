@@ -26,6 +26,10 @@ pub struct Settings {
     pub unroute: Vec<String>,
     /// The cable was offered a rename once; never prompt for it again.
     pub cable_named_tried: bool,
+    /// Closing the window leaves Goby running in the notification area.
+    pub tray: bool,
+    /// The first close to the tray said where Goby went; it says so only once.
+    pub tray_told: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +50,8 @@ impl Default for Settings {
             routed: Vec::new(),
             unroute: Vec::new(),
             cable_named_tried: false,
+            tray: true,
+            tray_told: false,
         }
     }
 }
@@ -84,6 +90,8 @@ impl Settings {
                 "routed" => s.routed = list(v),
                 "unroute" => s.unroute = list(v),
                 "cable_named_tried" => s.cable_named_tried = v == "1",
+                "tray" => s.tray = v != "0",
+                "tray_told" => s.tray_told = v == "1",
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -98,7 +106,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\n",
             self.input,
             self.output,
             self.voice,
@@ -114,6 +122,8 @@ impl Settings {
             self.routed.join(","),
             self.unroute.join(","),
             self.cable_named_tried as u8,
+            self.tray as u8,
+            self.tray_told as u8,
         )
     }
 
@@ -157,6 +167,8 @@ mod tests {
             routed: vec!["cs2.exe".into(), "discord.exe".into()],
             unroute: vec!["obs64.exe".into()],
             cable_named_tried: true,
+            tray: false,
+            tray_told: true,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

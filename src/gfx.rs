@@ -385,4 +385,5 @@ pub mod glyph {
     pub const TONE: u16 = 0xE8D6;
     pub const GATE: u16 = 0xE9E9;
     pub const MIX: u16 = 0xE9D9;
+    pub const MINIMIZE: u16 = 0xE921;
 }

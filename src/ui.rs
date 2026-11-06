@@ -30,6 +30,7 @@ use crate::lang;
 use crate::policy;
 use crate::settings::Settings;
 use crate::theme::{Theme, argb, with_alpha};
+use crate::tray;
 use crate::voices::{self, Category};
 
 // Layout, in DIPs.
@@ -63,6 +64,7 @@ enum Switch {
     Gate,
     Monitor,
     Exclusive,
+    Tray,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,7 +246,10 @@ struct App {
     settings_scroll: Anim,
     gallery_max: f32,
     settings_max: f32,
-    switches: [Anim; 4],
+    switches: [Anim; 5],
+    /// The notification-area icon is up, and the tip it shows.
+    tray_icon: bool,
+    tray_tip: String,
     tab_x: Anim,
     tab_w: Anim,
     tab_widths: Vec<f32>,
@@ -414,7 +419,9 @@ impl App {
             settings_scroll: Anim::default(),
             gallery_max: 0.0,
             settings_max: 0.0,
-            switches: [Anim::default(); 4],
+            switches: [Anim::default(); 5],
+            tray_icon: false,
+            tray_tip: String::new(),
             tab_x: Anim::default(),
             tab_w: Anim::default(),
             tab_widths: Vec::new(),
@@ -426,7 +433,7 @@ impl App {
             quiet_frames: 0,
         };
         let s = &app.settings;
-        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive].into_iter().enumerate() {
+        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive, s.tray].into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
         }
@@ -440,6 +447,86 @@ impl App {
 
     fn t(&self, ru: &'static str, en: &'static str) -> &'static str {
         if self.ru { ru } else { en }
+    }
+
+    // ---------- tray ----------
+
+    /// What the icon says on hover: the voice that is on, or that the effect is off.
+    fn tip(&self) -> String {
+        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
+        match self.settings.enabled {
+            true => format!("Goby: {voice}"),
+            false => format!("Goby: {}", self.t("эффект выключен", "effect off")),
+        }
+    }
+
+    fn add_tray_icon(&mut self) {
+        let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, self.dpi as u32) };
+        let Some(icon) = make_icon(size, icon::RGB) else { return };
+        self.tray_tip = self.tip();
+        self.tray_icon = tray::add(self.hwnd, icon, &self.tray_tip);
+    }
+
+    fn show(&mut self) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, if IsIconic(self.hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+            let _ = SetForegroundWindow(self.hwnd);
+        }
+        self.dirty = true;
+    }
+
+    /// Closing the window: it goes to the tray while the icon is there to bring it back.
+    /// True when it should be destroyed instead, which frees `self`, so the caller does it.
+    fn close(&mut self) -> bool {
+        if !self.settings.tray || !self.tray_icon {
+            return true;
+        }
+        unsafe {
+            let _ = ShowWindow(self.hwnd, SW_HIDE);
+        }
+        self.gfx = None;
+        if !self.settings.tray_told {
+            self.settings.tray_told = true;
+            self.settings.save();
+            tray::notify(
+                self.hwnd,
+                self.t("Goby работает в трее", "Goby is still running"),
+                self.t(
+                    "Голос остаётся включённым. Щёлкните значок, чтобы открыть окно, или правой кнопкой, чтобы выйти.",
+                    "Your voice stays on. Click the icon to open the window, or right-click it to quit.",
+                ),
+            );
+        }
+        false
+    }
+
+    fn tray_items(&self) -> Vec<tray::Item> {
+        let item =
+            |label: &str, checked: bool, default: bool| tray::Item { label: Some(label.to_string()), checked, default };
+        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
+        vec![
+            item(self.t("Открыть Goby", "Open Goby"), false, true),
+            tray::Item { label: None, checked: false, default: false },
+            item(&format!("{}: {voice}", self.t("Эффект", "Effect")), self.settings.enabled, false),
+            tray::Item { label: None, checked: false, default: false },
+            item(self.t("Выйти", "Quit"), false, false),
+        ]
+    }
+
+    /// Acts on a menu item; true for Quit, which the caller carries out like `close`.
+    fn tray_chosen(&mut self, i: usize) -> bool {
+        match i {
+            0 => self.show(),
+            2 => {
+                self.settings.enabled = !self.settings.enabled;
+                self.apply();
+                self.settings.save();
+                self.dirty = true;
+            }
+            4 => return true,
+            _ => {}
+        }
+        false
     }
 
     // ---------- state ----------
@@ -742,11 +829,19 @@ impl App {
             self.refresh_devices();
             self.restart();
         }
-        let on = [self.settings.enabled, self.settings.gate, self.settings.monitor, self.settings.exclusive];
+        let s = &self.settings;
+        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray];
         let mut moving = false;
         for (a, on) in self.switches.iter_mut().zip(on) {
             a.target = if on { 1.0 } else { 0.0 };
             moving |= a.step(0.35);
+        }
+        if self.tray_icon {
+            let tip = self.tip();
+            if tip != self.tray_tip {
+                tray::set_tip(self.hwnd, &tip);
+                self.tray_tip = tip;
+            }
         }
         moving |= self.tab_x.step(0.3) | self.tab_w.step(0.3);
         moving |= self.gallery_scroll.step(0.3) | self.settings_scroll.step(0.3);
@@ -808,6 +903,7 @@ impl App {
                     Switch::Gate => self.settings.gate = !self.settings.gate,
                     Switch::Monitor => self.settings.monitor = !self.settings.monitor,
                     Switch::Exclusive => self.settings.exclusive = !self.settings.exclusive,
+                    Switch::Tray => self.settings.tray = !self.settings.tray,
                 }
                 self.apply();
                 if matches!(s, Switch::Monitor | Switch::Exclusive) {
@@ -1228,6 +1324,13 @@ impl App {
         self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
 
         y += 20.0;
+
+        section(g, &mut y, self.t("Окно", "Window"))?;
+        let tray = self.t("Работать в трее", "Keep running in the tray");
+        let tray_desc = self.t("Закрытие окна не выключает голос", "Closing the window keeps your voice on");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc)?;
+
+        y += 20.0;
         let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
         self.row_card(g, &mut y, Hit::About, glyph::INFO, &about, "Azer Sadykhzadeh · azer.one")?;
 
@@ -1371,6 +1474,12 @@ fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
     }
 }
 
+/// The message Explorer broadcasts when the taskbar comes back after a restart.
+fn taskbar_created() -> u32 {
+    static ID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })
+}
+
 unsafe fn app_of(hwnd: HWND) -> Option<&'static mut App> {
     let p = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut App;
     unsafe { p.as_mut() }
@@ -1397,7 +1506,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_ERASEBKGND => LRESULT(1),
             WM_TIMER => {
                 app.tick();
-                if app.dirty && !IsIconic(hwnd).as_bool() && !app.covered() {
+                if app.dirty && IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !app.covered() {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 LRESULT(0)
@@ -1495,7 +1604,38 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 app.dirty = true;
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
+            WM_CLOSE => {
+                if app.close() {
+                    let _ = DestroyWindow(hwnd);
+                }
+                LRESULT(0)
+            }
+            tray::WM_QUIT_GOBY => {
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            tray::WM_TRAY => {
+                match tray::event(lp) {
+                    tray::SELECT | tray::KEY_SELECT => app.show(),
+                    WM_CONTEXTMENU => {
+                        let items = app.tray_items();
+                        let chosen = tray::menu(hwnd, tray::anchor(wp), &items);
+                        let Some(app) = app_of(hwnd) else { return LRESULT(0) };
+                        if chosen.is_some_and(|i| app.tray_chosen(i)) {
+                            let _ = DestroyWindow(hwnd);
+                        }
+                    }
+                    _ => {}
+                }
+                LRESULT(0)
+            }
+            m if m == taskbar_created() => {
+                // Explorer restarted and forgot every icon.
+                app.add_tray_icon();
+                LRESULT(0)
+            }
             WM_DESTROY => {
+                tray::remove(hwnd);
                 app.settings.save();
                 let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut App;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -1521,7 +1661,8 @@ fn window_size(w: f32, h: f32, dpi: u32, style: WINDOW_STYLE) -> (i32, i32) {
     (r.right - r.left, r.bottom - r.top)
 }
 
-pub fn run() -> Result<()> {
+/// Opens the window, or with `hidden` starts with only the tray icon.
+pub fn run(hidden: bool) -> Result<()> {
     unsafe {
         // A second Goby would open a second engine into the same cable: bring the first one
         // forward instead.
@@ -1578,9 +1719,13 @@ pub fn run() -> Result<()> {
 
         let mut app = Box::new(App::new(hwnd));
         app.apply_frame();
+        app.add_tray_icon();
+        let hidden = hidden && app.tray_icon;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         SetTimer(Some(hwnd), 1, 33, None);
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        if !hidden {
+            let _ = ShowWindow(hwnd, SW_SHOW);
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

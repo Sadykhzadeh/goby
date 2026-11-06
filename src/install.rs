@@ -143,7 +143,10 @@ fn close_running() {
         if hwnd.is_invalid() || Instant::now() > deadline {
             break;
         }
+        // Closing only hides a Goby that keeps running in the tray; versions from before
+        // the tray ignore the quit message and close.
         unsafe {
+            let _ = PostMessageW(Some(hwnd), crate::tray::WM_QUIT_GOBY, WPARAM(0), LPARAM(0));
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
         std::thread::sleep(Duration::from_millis(150));

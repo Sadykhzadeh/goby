@@ -54,6 +54,11 @@ keeps the chosen voice, *Hear myself* for your headphones, and *Low latency*, wh
 the microphone in exclusive mode. Arrow keys walk the gallery; double-click a slider to
 reset it.
 
+Closing the window leaves Goby running in the notification area, so your voice stays on
+in the game. Click the icon to bring the window back; right-click it to switch the effect
+off or to quit. *Keep running in the tray* under Settings turns this off, and then closing
+the window quits. `goby.exe --tray` starts with only the icon.
+
 ## Numbers
 
 Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:

@@ -13,6 +13,7 @@ mod policy;
 mod ring;
 mod settings;
 mod theme;
+mod tray;
 mod ui;
 mod voices;
 
@@ -39,7 +40,7 @@ fn main() -> windows::core::Result<()> {
         // Debug builds and `--portable` skip the setup question.
         rest if cfg!(debug_assertions) || rest.contains(&"--portable") || install::is_installed_copy() => {
             install::tidy();
-            ui::run()
+            ui::run(rest.contains(&"--tray"))
         }
         _ => match install::ask() {
             install::Choice::Install { desktop } => {
@@ -49,12 +50,12 @@ fn main() -> windows::core::Result<()> {
                     }
                     Err(e) => {
                         install::failed(&e);
-                        ui::run()?;
+                        ui::run(false)?;
                     }
                 }
                 Ok(())
             }
-            install::Choice::RunOnce => ui::run(),
+            install::Choice::RunOnce => ui::run(false),
             install::Choice::Quit => Ok(()),
         },
     }
