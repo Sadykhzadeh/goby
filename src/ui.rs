@@ -26,6 +26,7 @@ use crate::apps;
 use crate::engine::{self, Endpoint, Engine, SCOPE_LEN, Shared};
 use crate::gfx::{Align, Font, Gfx, R, glyph};
 use crate::icon;
+use crate::install;
 use crate::lang;
 use crate::policy;
 use crate::settings::Settings;
@@ -65,6 +66,7 @@ enum Switch {
     Monitor,
     Exclusive,
     Tray,
+    Autostart,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -246,7 +248,9 @@ struct App {
     settings_scroll: Anim,
     gallery_max: f32,
     settings_max: f32,
-    switches: [Anim; 5],
+    switches: [Anim; 6],
+    /// Windows starts Goby at sign-in; kept in the registry, read once here.
+    autostart: bool,
     /// The notification-area icon is up, and the tip it shows.
     tray_icon: bool,
     tray_tip: String,
@@ -419,7 +423,8 @@ impl App {
             settings_scroll: Anim::default(),
             gallery_max: 0.0,
             settings_max: 0.0,
-            switches: [Anim::default(); 5],
+            switches: [Anim::default(); 6],
+            autostart: install::starts_with_windows(),
             tray_icon: false,
             tray_tip: String::new(),
             tab_x: Anim::default(),
@@ -433,7 +438,7 @@ impl App {
             quiet_frames: 0,
         };
         let s = &app.settings;
-        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive, s.tray].into_iter().enumerate() {
+        for (i, on) in [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart].into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
         }
@@ -830,7 +835,7 @@ impl App {
             self.restart();
         }
         let s = &self.settings;
-        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray];
+        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, self.autostart];
         let mut moving = false;
         for (a, on) in self.switches.iter_mut().zip(on) {
             a.target = if on { 1.0 } else { 0.0 };
@@ -904,6 +909,10 @@ impl App {
                     Switch::Monitor => self.settings.monitor = !self.settings.monitor,
                     Switch::Exclusive => self.settings.exclusive = !self.settings.exclusive,
                     Switch::Tray => self.settings.tray = !self.settings.tray,
+                    Switch::Autostart => {
+                        install::set_start_with_windows(!self.autostart);
+                        self.autostart = install::starts_with_windows();
+                    }
                 }
                 self.apply();
                 if matches!(s, Switch::Monitor | Switch::Exclusive) {
@@ -1329,6 +1338,9 @@ impl App {
         let tray = self.t("Работать в трее", "Keep running in the tray");
         let tray_desc = self.t("Закрытие окна не выключает голос", "Closing the window keeps your voice on");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc)?;
+        let start = self.t("Запускать вместе с Windows", "Start with Windows");
+        let start_desc = self.t("Сразу в трей, без окна", "Straight to the tray, no window");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Autostart), glyph::POWER, start, start_desc)?;
 
         y += 20.0;
         let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
@@ -1668,6 +1680,10 @@ pub fn run(hidden: bool) -> Result<()> {
         // forward instead.
         let _guard = CreateMutexW(None, true, w!("Goby.SingleInstance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            // A start at sign-in finds Goby already up and leaves it where it is.
+            if hidden {
+                return Ok(());
+            }
             if let Ok(hwnd) = FindWindowW(w!("GobyWindow"), PCWSTR::null()) {
                 let _ = ShowWindow(hwnd, SW_RESTORE);
                 let _ = SetForegroundWindow(hwnd);

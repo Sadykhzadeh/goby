@@ -12,8 +12,8 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree, IPersistFile,
 };
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW,
-    RegDeleteTreeW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ, RRF_RT_ANY, RegCloseKey,
+    RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteTreeW, RegGetValueW, RegSetValueExW,
 };
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 use windows::Win32::UI::Controls::*;
@@ -25,6 +25,9 @@ use crate::lang::pick;
 use crate::{apps, engine, policy, settings::Settings};
 
 const UNINSTALL_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Goby");
+const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
+/// Where Task Manager's Startup apps page keeps the entries it has switched off.
+const APPROVED_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run");
 const AUTHOR: &str = "Azer Sadykhzadeh";
 const WEBSITE: &str = "https://azer.one";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -133,6 +136,74 @@ fn write_uninstall_entry(exe: &Path) {
             }
         }
         let _ = RegCloseKey(key);
+    }
+}
+
+/// What Windows runs at sign-in: Goby in the tray, without the setup question a copy
+/// outside the install folder would ask.
+pub fn autostart_command(exe: &Path, installed: bool) -> String {
+    let portable = if installed { "" } else { " --portable" };
+    format!("\"{}\"{portable} --tray", exe.display())
+}
+
+/// Task Manager marks an entry it switched off with an odd first byte.
+pub fn approved(state: &[u8]) -> bool {
+    state.first().is_none_or(|b| b % 2 == 0)
+}
+
+fn read_value(key: PCWSTR, name: PCWSTR) -> Option<Vec<u8>> {
+    let mut size = 0u32;
+    unsafe {
+        if RegGetValueW(HKEY_CURRENT_USER, key, name, RRF_RT_ANY, None, None, Some(&mut size)) != ERROR_SUCCESS {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        let read = RegGetValueW(
+            HKEY_CURRENT_USER,
+            key,
+            name,
+            RRF_RT_ANY,
+            None,
+            Some(data.as_mut_ptr().cast()),
+            Some(&mut size),
+        );
+        (read == ERROR_SUCCESS).then(|| {
+            data.truncate(size as usize);
+            data
+        })
+    }
+}
+
+/// Whether Windows starts Goby at sign-in.
+pub fn starts_with_windows() -> bool {
+    read_value(RUN_KEY, w!("Goby")).is_some() && read_value(APPROVED_KEY, w!("Goby")).is_none_or(|s| approved(&s))
+}
+
+pub fn set_start_with_windows(on: bool) {
+    unsafe {
+        // Switching it on here also clears an earlier "off" from Task Manager.
+        let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, w!("Goby"));
+        if !on {
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, w!("Goby"));
+            return;
+        }
+        let Ok(exe) = std::env::current_exe() else { return };
+        let mut key = HKEY::default();
+        let created = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            None,
+            &mut key,
+            None,
+        );
+        if created == ERROR_SUCCESS {
+            set_string(key, "Goby", &autostart_command(&exe, is_installed_copy()));
+            let _ = RegCloseKey(key);
+        }
     }
 }
 
@@ -363,6 +434,7 @@ pub fn uninstall(quiet: bool) {
     unsafe {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL_KEY);
     }
+    set_start_with_windows(false);
     if let Some(dir) = Settings::dir() {
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -410,6 +482,24 @@ pub fn tidy() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sign_in_starts_goby_in_the_tray_without_the_setup_question() {
+        let exe = Path::new(r"C:\Users\a\AppData\Local\Programs\Goby\goby.exe");
+        assert_eq!(autostart_command(exe, true), r#""C:\Users\a\AppData\Local\Programs\Goby\goby.exe" --tray"#);
+        assert_eq!(
+            autostart_command(Path::new(r"D:\tools\goby.exe"), false),
+            r#""D:\tools\goby.exe" --portable --tray"#
+        );
+    }
+
+    #[test]
+    fn task_manager_switches_an_entry_off_with_an_odd_first_byte() {
+        assert!(approved(&[2, 0, 0, 0]));
+        assert!(approved(&[6, 0, 0, 0]));
+        assert!(!approved(&[3, 0, 0, 0, 1, 2, 3, 4]));
+        assert!(approved(&[]));
+    }
 
     #[test]
     fn the_apps_entry_names_the_author_and_uninstalls_quietly_too() {
