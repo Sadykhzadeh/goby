@@ -54,3 +54,6 @@ features = [
 lto = "fat"
 codegen-units = 1
 strip = true
+# No unwinding tables or landing pads: 100 KB less, and nothing here catches a panic.
+panic = "abort"
+# opt-level stays at 3: "s" makes the heaviest voice 15-25 % slower and "z" six times.
