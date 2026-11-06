@@ -3,7 +3,6 @@
 //! add a Start menu shortcut and an entry under Settings > Apps, whose Uninstall runs
 //! `goby.exe --uninstall`.
 
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -18,7 +17,7 @@ use windows::Win32::System::Registry::{
 use windows::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::Shell::*;
-use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SW_HIDE, WM_CLOSE};
+use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SHOW_WINDOW_CMD, SW_HIDE, WM_CLOSE};
 use windows::core::{BOOL, GUID, HSTRING, Interface, PCWSTR, Result, w};
 
 use crate::lang::pick;
@@ -31,7 +30,6 @@ const APPROVED_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Expl
 const AUTHOR: &str = "Azer Sadykhzadeh";
 const WEBSITE: &str = "https://azer.one";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 fn known_folder(id: &GUID) -> Option<PathBuf> {
     unsafe {
@@ -464,12 +462,20 @@ fn remove_folder_after_exit() {
     let script = format!(
         "for /l %i in (1,1,30) do (ping -n 2 127.0.0.1 >nul & rmdir /s /q \"{dir}\" 2>nul & if not exist \"{dir}\" exit /b)"
     );
-    let _ = std::process::Command::new("cmd.exe")
-        // Passed verbatim: escaped quotes would reach cmd.exe as \" and break the path.
-        .raw_arg(format!("/d /c {script}"))
-        .current_dir(std::env::temp_dir())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn();
+    // Started outside the folder it deletes, and hidden.
+    launch(w!("cmd.exe"), &format!("/d /c {script}"), Some(&std::env::temp_dir()), SW_HIDE);
+}
+
+/// Starts a program and leaves it running. Through the shell rather than std::process,
+/// whose process plumbing would add about 30 KB to the executable for two launches.
+/// The arguments reach the program verbatim.
+pub fn launch(file: impl windows::core::Param<PCWSTR>, args: &str, dir: Option<&Path>, show: SHOW_WINDOW_CMD) {
+    let args = HSTRING::from(args);
+    let dir = dir.map(|d| HSTRING::from(d.as_os_str()));
+    let dir = dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr()));
+    unsafe {
+        ShellExecuteW(None, w!("open"), file, &args, dir, show);
+    }
 }
 
 /// Removes the previous version an update moved aside, once it is no longer running.

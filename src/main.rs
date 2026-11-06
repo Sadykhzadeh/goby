@@ -47,7 +47,8 @@ fn main() -> windows::core::Result<()> {
             install::Choice::Install { desktop } => {
                 match install::install(desktop) {
                     Ok(exe) => {
-                        let _ = std::process::Command::new(exe).spawn();
+                        let exe = windows::core::HSTRING::from(exe.as_os_str());
+                        install::launch(&exe, "", None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
                     }
                     Err(e) => {
                         install::failed(&e);
