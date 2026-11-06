@@ -38,7 +38,7 @@ when the app starts and the result is drawn.
 2. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
    **Just run it**). On the first start Windows asks once for permission to rename the
    cable, so it shows up as **Goby Mic** everywhere instead of "CABLE Output".
-3. Under **Who hears Goby**, press **Add a program** and pick CS2, Discord or OBS from
+3. Open **Settings** (the gear at the bottom left); under **Who hears Goby**, press **Add a program** and pick CS2, Discord or OBS from
    the menu. It lists every program that has used your microphone (the same list Windows
    keeps for its privacy page); **Other program…** opens the usual file picker. Goby pins
    only the chosen programs to Goby Mic, the way the Volume mixer's per-app settings do.
@@ -48,11 +48,13 @@ when the app starts and the result is drawn.
 CS2 has no microphone picker of its own, which is exactly why the per-program switch is
 there. Goby never offers the cable as its own microphone, so it cannot feed itself back in.
 
-Microphone settings: gain, a noise gate that mutes keyboard clicks and room noise
-between phrases, how much of your original voice to mix back in, an effect switch that
-keeps the chosen voice, *Hear myself* for your headphones, and *Low latency*, which takes
-the microphone in exclusive mode. Arrow keys walk the gallery; double-click a slider to
-reset it.
+The main window holds what you change while playing: the voice, the effect switch (it
+keeps the chosen voice), pitch, volume and *Hear myself* for your headphones. Everything
+you set once lives in **Settings**: the programs that hear Goby, the microphone with its
+gain, a noise gate that mutes keyboard clicks and room noise between phrases and *Low
+latency*, which takes the microphone in exclusive mode, the output, how much of your
+original voice to mix back in, and the tray, startup and hotkey switches. Arrow keys
+walk the gallery, Esc leaves Settings, and a double-click resets a slider.
 
 Hotkeys work from inside a game: **Ctrl+Alt+G** switches the effect on and off, and
 **Ctrl+Alt+Page Down** / **Page Up** step to the next or previous voice (which also

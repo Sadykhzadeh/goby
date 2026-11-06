@@ -56,6 +56,7 @@ pub enum Font {
     Body,
     Strong,
     Subtitle,
+    Title,
     Icon16,
     Icon12,
 }
@@ -72,6 +73,7 @@ struct Fonts {
     body: IDWriteTextFormat,
     strong: IDWriteTextFormat,
     subtitle: IDWriteTextFormat,
+    title: IDWriteTextFormat,
     icon16: IDWriteTextFormat,
     icon12: IDWriteTextFormat,
 }
@@ -142,6 +144,7 @@ fn make_fonts(dw: &IDWriteFactory) -> Result<Fonts> {
             body: format(text, DWRITE_FONT_WEIGHT_NORMAL, 14.0)?,
             strong: format(text, DWRITE_FONT_WEIGHT_SEMI_BOLD, 14.0)?,
             subtitle: format(display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 20.0)?,
+            title: format(display, DWRITE_FONT_WEIGHT_SEMI_BOLD, 28.0)?,
             icon16: format(icons, DWRITE_FONT_WEIGHT_NORMAL, 16.0)?,
             icon12: format(icons, DWRITE_FONT_WEIGHT_NORMAL, 12.0)?,
         })
@@ -320,6 +323,7 @@ impl Gfx {
             Font::Body => &self.fonts.body,
             Font::Strong => &self.fonts.strong,
             Font::Subtitle => &self.fonts.subtitle,
+            Font::Title => &self.fonts.title,
             Font::Icon16 => &self.fonts.icon16,
             Font::Icon12 => &self.fonts.icon12,
         }
@@ -388,4 +392,5 @@ pub mod glyph {
     pub const MINIMIZE: u16 = 0xE921;
     pub const POWER: u16 = 0xE7E8;
     pub const KEYBOARD: u16 = 0xE765;
+    pub const SETTINGS: u16 = 0xE713;
 }

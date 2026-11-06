@@ -48,6 +48,10 @@ const TILE_GAP: f32 = 8.0;
 const GUTTER: f32 = 12.0;
 const TILE_H: f32 = 76.0;
 const CARD_GAP: f32 = 4.0;
+/// The settings page reads as one column, like Windows Settings, however wide the window.
+const SETTINGS_W: f32 = 760.0;
+/// Width of the navigation rail, as in a compact WinUI NavigationView.
+const RAIL_W: f32 = 56.0;
 
 const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x0020_0000);
 
@@ -83,6 +87,13 @@ enum Pane {
     Settings,
 }
 
+/// The voices are the app; everything set once lives on its own page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Page {
+    Voices,
+    Settings,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Hit {
     None,
@@ -98,6 +109,8 @@ enum Hit {
     /// Choose another program that should hear Goby.
     AddApp,
     Scrollbar(Pane),
+    /// Go to a page: the Settings button, the back arrow, the "nobody hears Goby" hint.
+    Nav(Page),
 }
 
 impl Knob {
@@ -116,25 +129,36 @@ impl Knob {
 /// Where everything goes for the current window size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Layout {
+    /// The navigation rail on the left: Voices on top, Settings pinned to the bottom.
+    nav_voices: R,
+    nav_settings: R,
+    // The voices page.
     scope: R,
+    quick: R,
     tabs: R,
     gallery: R,
-    pane: R,
     cols: usize,
+    // The settings page: a title over one centred column.
+    title: R,
+    pane: R,
 }
 
 impl Layout {
     fn new(w: f32, h: f32) -> Layout {
         let (w, h) = (w.max(MIN_W), h.max(MIN_H));
-        // The settings pane grows with the window, within reason.
-        let pane_w = (w * 0.34).clamp(300.0, 440.0);
-        let pane = R::new(w - 24.0 - pane_w, 16.0, pane_w, h - 32.0);
-        let left_w = pane.l - 20.0 - 24.0;
-        let scope = R::new(24.0, 16.0, left_w, 164.0);
-        let tabs = R::new(24.0, scope.b + 12.0, left_w, 36.0);
-        let gallery = R { l: 24.0, t: tabs.b + 8.0, r: 24.0 + left_w, b: h - 16.0 };
-        let cols = (((gallery.w() - GUTTER + TILE_GAP) / (TILE_MIN_W + TILE_GAP)) as usize).clamp(2, 8);
-        Layout { scope, tabs, gallery, pane, cols }
+        let nav_voices = R::new(4.0, 12.0, RAIL_W - 8.0, 40.0);
+        let nav_settings = R::new(4.0, h - 12.0 - 40.0, RAIL_W - 8.0, 40.0);
+        let left = RAIL_W + 8.0;
+        let full = w - left - 24.0;
+        let scope = R::new(left, 16.0, full, 120.0);
+        let quick = R::new(left, scope.b + CARD_GAP * 2.0, full, 84.0);
+        let tabs = R::new(left, quick.b + 12.0, full, 36.0);
+        let gallery = R { l: left, t: tabs.b + 8.0, r: left + full, b: h - 16.0 };
+        let cols = (((gallery.w() - GUTTER + TILE_GAP) / (TILE_MIN_W + TILE_GAP)) as usize).clamp(2, 10);
+        let column = full.min(SETTINGS_W);
+        let title = R::new(left + (full - column) / 2.0, 16.0, column, 44.0);
+        let pane = R { l: title.l, t: title.b + 8.0, r: title.r, b: h - 16.0 };
+        Layout { nav_voices, nav_settings, scope, quick, tabs, gallery, cols, title, pane }
     }
 }
 
@@ -221,6 +245,7 @@ struct App {
     output: usize,
     voice: usize,
     filter: Option<Category>,
+    page: Page,
 
     shared: Arc<Shared>,
     engine: Option<Engine>,
@@ -406,6 +431,7 @@ impl App {
             input: 0,
             output: 0,
             filter: None,
+            page: Page::Voices,
             shared: Arc::new(Shared::default()),
             engine: None,
             status: String::new(),
@@ -982,9 +1008,20 @@ impl App {
                 self.drag = Some(Drag { hit, from: (self.mouse.1, at) });
                 unsafe { SetCapture(self.hwnd) };
             }
+            Hit::Nav(page) => self.go(page),
             Hit::None => {}
         }
         None
+    }
+
+    fn go(&mut self, page: Page) {
+        if self.page != page {
+            self.page = page;
+            self.settings_scroll = Anim::default();
+            self.hits.clear();
+            self.hover = Hit::None;
+        }
+        self.dirty = true;
     }
 
     fn moved(&mut self) {
@@ -1024,20 +1061,28 @@ impl App {
     }
 
     fn wheel(&mut self, notches: f32) {
-        if self.lay.tabs.has(self.mouse) {
+        if self.page == Page::Settings {
+            let a = &mut self.settings_scroll;
+            a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
+        } else if self.lay.tabs.has(self.mouse) {
             self.tab_scroll = (self.tab_scroll - notches * 80.0).clamp(0.0, self.tab_max);
         } else if self.lay.gallery.has(self.mouse) {
             let a = &mut self.gallery_scroll;
             a.target = (a.target - notches * (TILE_H + TILE_GAP)).clamp(0.0, self.gallery_max);
-        } else if self.lay.pane.has(self.mouse) {
-            let a = &mut self.settings_scroll;
-            a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
         }
         self.dirty = true;
     }
 
     /// Arrow keys walk the gallery like a native grid view.
     fn key(&mut self, vk: u16) -> bool {
+        if self.page == Page::Settings {
+            // Esc and Backspace go back, as in Windows Settings.
+            if matches!(VIRTUAL_KEY(vk), VK_ESCAPE | VK_BACK) {
+                self.go(Page::Voices);
+                return true;
+            }
+            return false;
+        }
         let list = self.filtered();
         if list.is_empty() {
             return false;
@@ -1093,10 +1138,68 @@ impl App {
     fn draw(&mut self, g: &Gfx) -> Result<()> {
         self.hits.clear();
         self.tracks.clear();
-        self.draw_scope(g)?;
-        self.draw_tabs(g)?;
-        self.draw_gallery(g)?;
-        self.draw_settings(g)?;
+        self.draw_rail(g)?;
+        match self.page {
+            Page::Voices => {
+                self.draw_scope(g)?;
+                self.draw_quick(g)?;
+                self.draw_tabs(g)?;
+                self.draw_gallery(g)?;
+            }
+            Page::Settings => self.draw_settings(g)?,
+        }
+        Ok(())
+    }
+
+    /// The compact NavigationView: an icon per page, the current one marked by an accent pill.
+    fn draw_rail(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        for (page, r, icon) in
+            [(Page::Voices, self.lay.nav_voices, glyph::MIC), (Page::Settings, self.lay.nav_settings, glyph::SETTINGS)]
+        {
+            let hit = Hit::Nav(page);
+            if self.page == page || self.hover == hit {
+                g.fill(r, 4.0, th.control_hover());
+            }
+            if self.page == page {
+                g.fill(R::new(r.l, r.t + 12.0, 3.0, 16.0), 1.5, th.accent());
+            }
+            g.icon(icon, Font::Icon16, r, th.text())?;
+            self.hits.push((r, hit));
+        }
+        Ok(())
+    }
+
+    /// What gets changed while playing: pitch, volume and hearing yourself, side by side.
+    fn draw_quick(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let r = self.lay.quick;
+        self.card(g, r, 8.0, false);
+        let w = r.w() / 3.0;
+        for (i, (k, icon, title)) in [
+            (Knob::Tone, glyph::TONE, self.t("Тон", "Pitch")),
+            (Knob::Volume, glyph::VOLUME, self.t("Громкость", "Volume")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let s = R::new(r.l + w * i as f32, r.t, w, r.h());
+            g.icon(icon, Font::Icon16, R::new(s.l + 16.0, s.t + 12.0, 20.0, 24.0), th.text())?;
+            g.text(title, Font::Body, R::new(s.l + 48.0, s.t + 12.0, s.w() - 140.0, 24.0), Align::Start, th.text())?;
+            let value = R::new(s.r - 96.0, s.t + 12.0, 80.0, 24.0);
+            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary())?;
+            self.slider(g, k, R::new(s.l + 26.0, s.t + 48.0, s.w() - 52.0, 24.0));
+            g.fill(R::new(s.r - 0.5, s.t + 16.0, 1.0, s.h() - 32.0), 0.0, th.card_stroke());
+        }
+        let s = R::new(r.l + w * 2.0, r.t, w, r.h());
+        g.icon(glyph::HEADPHONE, Font::Icon16, R::new(s.l + 16.0, s.t + 30.0, 20.0, 24.0), th.text())?;
+        let text_w = s.w() - 48.0 - 72.0;
+        let hear = self.t("Слышать себя", "Hear myself");
+        g.text(hear, Font::Body, R::new(s.l + 48.0, s.t + 20.0, text_w, 22.0), Align::Start, th.text())?;
+        let mon = self.t("В ваших наушниках", "In your headphones");
+        g.text(mon, Font::Caption, R::new(s.l + 48.0, s.t + 42.0, text_w, 18.0), Align::Start, th.text_secondary())?;
+        self.toggle(g, s.r - 60.0, s.t + 32.0, Switch::Monitor);
+        self.hits.push((s.inset(4.0), Hit::Toggle(Switch::Monitor)));
         Ok(())
     }
 
@@ -1175,8 +1278,17 @@ impl App {
             Align::Start,
             th.text(),
         )?;
+        // With nobody listening the voice goes nowhere; say so where it is seen.
+        let unheard = self.healthy && (self.cable.is_none() || self.settings.routed.is_empty());
         let (line, color) = if !self.healthy {
             (self.status.clone(), argb(if th.dark { 0xFFFF99A4 } else { 0xFFC42B1C }))
+        } else if self.cable.is_none() {
+            let none = self.t("Нет виртуального кабеля: откройте настройки", "No virtual cable: open Settings");
+            (none.into(), th.accent())
+        } else if self.settings.routed.is_empty() {
+            let none =
+                self.t("Пока никто не слышит Goby: выберите программы", "Nobody hears Goby yet: pick the programs");
+            (none.into(), th.accent())
         } else if !self.settings.enabled {
             let off = self.t("Эффект выключен: в игру идёт ваш голос", "Effect off: your own voice goes through");
             (off.into(), th.text_secondary())
@@ -1184,7 +1296,11 @@ impl App {
             let lat = format!("{} {} {}", self.t("задержка", "latency"), self.latency.round(), self.t("мс", "ms"));
             (format!("{} · {}", def.category.name(self.ru), lat), th.text_secondary())
         };
-        g.text(&line, Font::Caption, R::new(r.l + 20.0, r.t + 40.0, 420.0, 18.0), Align::Start, color)?;
+        let line_r = R::new(r.l + 20.0, r.t + 40.0, 420.0, 18.0);
+        g.text(&line, Font::Caption, line_r, Align::Start, color)?;
+        if unheard {
+            self.hits.push((line_r, Hit::Nav(Page::Settings)));
+        }
 
         let label = self.t("Эффект", "Effect");
         g.text(label, Font::Body, R::new(r.r - 160.0, r.t + 14.0, 88.0, 24.0), Align::End, th.text())?;
@@ -1302,6 +1418,9 @@ impl App {
 
     fn draw_settings(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
+        let title = self.lay.title;
+        g.text(self.t("Настройки", "Settings"), Font::Title, title, Align::Start, th.text())?;
+
         let scroll = self.settings_scroll.value.min(self.settings_max);
         let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
         let mut y = self.lay.pane.t - scroll;
@@ -1313,36 +1432,7 @@ impl App {
             Ok(())
         };
 
-        section(g, &mut y, self.t("Голос", "Voice"))?;
-        self.slider_card(g, &mut y, Knob::Tone, glyph::TONE, self.t("Тон", "Pitch"))?;
-        self.slider_card(g, &mut y, Knob::Volume, glyph::VOLUME, self.t("Громкость", "Volume"))?;
-        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, self.t("Свой голос в миксе", "Original voice in mix"))?;
-        y += 20.0;
-
-        section(g, &mut y, self.t("Микрофон", "Microphone"))?;
-        let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
-        let fast = self.t("Низкая задержка", "Low latency");
-        let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
-            (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
-            (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
-            _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
-        };
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
-        self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
-        let gate = self.t("Тишина между фразами", "Silence between phrases");
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
-        self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
-        y += 20.0;
-
-        section(g, &mut y, self.t("Вывод", "Output"))?;
-        let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, self.t("Куда отдавать", "Send to"), &out)?;
-        let mon = self.t("В ваши наушники", "In your headphones");
-        let hear = self.t("Слышать себя", "Hear myself");
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Monitor), glyph::HEADPHONE, hear, mon)?;
-        y += 20.0;
-
+        // The one thing a new user has to set up comes first.
         section(g, &mut y, self.t("Кто слышит Goby", "Who hears Goby"))?;
         if self.cable.is_none() {
             let none =
@@ -1364,10 +1454,31 @@ impl App {
             self.t("Остальные слышат обычный микрофон", "Everything else hears your own mic")
         };
         self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
-
         y += 20.0;
 
-        section(g, &mut y, self.t("Окно", "Window"))?;
+        section(g, &mut y, self.t("Микрофон", "Microphone"))?;
+        let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
+        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
+        let fast = self.t("Низкая задержка", "Low latency");
+        let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
+            (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
+            (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
+            _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
+        };
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
+        self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;
+        let gate = self.t("Тишина между фразами", "Silence between phrases");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate)?;
+        self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"))?;
+        y += 20.0;
+
+        section(g, &mut y, self.t("Вывод", "Output"))?;
+        let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
+        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, self.t("Куда отдавать", "Send to"), &out)?;
+        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, self.t("Свой голос в миксе", "Original voice in mix"))?;
+        y += 20.0;
+
+        section(g, &mut y, self.t("Общие", "General"))?;
         let tray = self.t("Работать в трее", "Keep running in the tray");
         let tray_desc = self.t("Голос работает и после закрытия", "The voice stays on when closed");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc)?;
@@ -1842,11 +1953,20 @@ mod layout_tests {
     fn layout_fills_any_window_without_overlap() {
         for (w, h) in [(MIN_W, MIN_H), (WIDTH, HEIGHT), (1600.0, 1000.0), (3000.0, 1600.0), (400.0, 300.0)] {
             let l = Layout::new(w, h);
-            assert!(l.gallery.r < l.pane.l && l.scope.r < l.pane.l, "{w}x{h}: left column runs into the pane");
-            assert!(l.pane.r <= w.max(MIN_W) - 23.0 && l.gallery.b <= h.max(MIN_H) - 15.0, "{w}x{h}: off the window");
+            let (w, h) = (w.max(MIN_W), h.max(MIN_H));
+            for r in [l.scope, l.quick, l.tabs, l.gallery] {
+                assert!(
+                    r.l >= RAIL_W && r.r <= w - 23.0 && r.b <= h - 15.0,
+                    "{w}x{h}: off the window or under the rail"
+                );
+            }
+            assert!(l.scope.b < l.quick.t && l.quick.b < l.tabs.t && l.tabs.b < l.gallery.t, "{w}x{h}: rows overlap");
+            assert!(l.gallery.h() >= 2.0 * TILE_H, "{w}x{h}: fewer than two rows of voices");
+            assert!(l.nav_voices.b < l.nav_settings.t && l.nav_settings.b <= h, "{w}x{h}: rail items overlap");
             let tile_w = (l.gallery.w() - GUTTER - TILE_GAP * (l.cols - 1) as f32) / l.cols as f32;
             assert!(tile_w >= TILE_MIN_W - 0.01 || l.cols == 2, "{w}x{h}: tiles too narrow ({tile_w})");
-            assert!(l.pane.w() >= 300.0, "{w}x{h}: settings pane too narrow");
+            assert!(l.pane.w() >= 300.0 && l.pane.w() <= SETTINGS_W, "{w}x{h}: settings column {}", l.pane.w());
+            assert!(l.pane.l >= RAIL_W && l.title.b <= l.pane.t, "{w}x{h}: settings column misplaced");
         }
         assert!(Layout::new(1600.0, 1000.0).cols > Layout::new(MIN_W, MIN_H).cols, "wider windows show more columns");
     }
