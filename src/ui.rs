@@ -30,7 +30,7 @@ use crate::icon;
 use crate::install;
 use crate::lang;
 use crate::policy;
-use crate::settings::Settings;
+use crate::settings::{Preset, Settings};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::tray;
 use crate::voices::{self, Category};
@@ -92,9 +92,16 @@ enum Pane {
 enum TrayAct {
     None,
     Open,
-    Voice(usize),
+    Pick(Fav),
     Effect,
     Quit,
+}
+
+/// One tile of the gallery: a catalog voice, or a voice someone saved with their own tuning.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fav {
+    Voice(usize),
+    Preset(usize),
 }
 
 /// Which voices the gallery shows.
@@ -120,6 +127,11 @@ enum Hit {
     Tab(Shelf),
     /// The star on a voice tile.
     Star(usize),
+    /// A saved voice (index into `settings.presets`), and the × that deletes it.
+    Preset(usize),
+    DropPreset(usize),
+    /// Save the current voice with its pitch, volume and mix.
+    SavePreset,
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
@@ -579,9 +591,10 @@ impl App {
         let line = || (tray::Item { label: None, checked: false, default: false }, TrayAct::None);
         let mut menu = vec![item(self.t("Открыть Goby", "Open Goby"), false, TrayAct::Open), line()];
         let favorites = self.favorites();
-        for &i in favorites.iter().take(12) {
-            let on = i == self.voice && self.settings.enabled;
-            menu.push(item(voices::ALL[i].name(self.ru), on, TrayAct::Voice(i)));
+        let current = self.current();
+        for &f in favorites.iter().take(12) {
+            let on = f == current && self.settings.enabled;
+            menu.push(item(&self.label(f), on, TrayAct::Pick(f)));
         }
         if !favorites.is_empty() {
             menu.push(line());
@@ -598,7 +611,7 @@ impl App {
     fn tray_act(&mut self, act: TrayAct) -> bool {
         match act {
             TrayAct::Open => self.show(),
-            TrayAct::Voice(i) => self.pick_voice(i),
+            TrayAct::Pick(f) => self.choose(f, true),
             TrayAct::Effect => {
                 self.settings.enabled = !self.settings.enabled;
                 self.apply();
@@ -613,9 +626,98 @@ impl App {
 
     // ---------- favourites ----------
 
-    /// The starred voices, in the order they were starred.
-    fn favorites(&self) -> Vec<usize> {
-        self.settings.favorites.iter().filter_map(|id| voices::index_of(id)).collect()
+    /// Saved voices first, then the starred ones, each in the order it was added.
+    fn favorites(&self) -> Vec<Fav> {
+        let saved = (0..self.settings.presets.len())
+            .filter(|p| voices::index_of(&self.settings.presets[*p].voice).is_some())
+            .map(Fav::Preset);
+        let starred = self.settings.favorites.iter().filter_map(|id| voices::index_of(id)).map(Fav::Voice);
+        saved.chain(starred).collect()
+    }
+
+    /// The saved voice that is set exactly as it is playing now, if any.
+    fn active_preset(&self) -> Option<usize> {
+        let s = &self.settings;
+        let id = voices::ALL[self.voice].id;
+        s.presets.iter().position(|p| p.matches(id, s.semitones, s.dry_mix, s.volume))
+    }
+
+    fn current(&self) -> Fav {
+        self.active_preset().map_or(Fav::Voice(self.voice), Fav::Preset)
+    }
+
+    /// The voice a tile plays, for its waveform.
+    fn voice_of(&self, f: Fav) -> usize {
+        match f {
+            Fav::Voice(i) => i,
+            Fav::Preset(p) => self.settings.presets.get(p).and_then(|p| voices::index_of(&p.voice)).unwrap_or(0),
+        }
+    }
+
+    fn label(&self, f: Fav) -> String {
+        match f {
+            Fav::Voice(i) => voices::ALL[i].name(self.ru).to_string(),
+            Fav::Preset(p) => {
+                let name = voices::ALL[self.voice_of(f)].name(self.ru);
+                self.settings.presets.get(p).map_or(name.to_string(), |p| preset_label(name, p, self.ru))
+            }
+        }
+    }
+
+    /// Switches to a tile. `wake` also turns the effect on, for picks made outside the
+    /// gallery, from a hotkey or the tray, where wanting a voice means wanting to hear it.
+    fn choose(&mut self, f: Fav, wake: bool) {
+        match f {
+            Fav::Voice(i) => {
+                self.voice = i;
+                self.settings.semitones = 0.0;
+            }
+            Fav::Preset(p) => {
+                let Some(preset) = self.settings.presets.get(p).cloned() else { return };
+                let Some(i) = voices::index_of(&preset.voice) else { return };
+                self.voice = i;
+                self.settings.semitones = preset.semitones;
+                self.settings.dry_mix = preset.dry_mix;
+                self.settings.volume = preset.volume;
+            }
+        }
+        if wake {
+            self.settings.enabled = true;
+        }
+        self.apply();
+        self.settings.save();
+        self.dirty = true;
+    }
+
+    /// The current voice has been tuned away from how the catalog plays it.
+    fn tuned(&self) -> bool {
+        let s = &self.settings;
+        s.semitones != 0.0 || s.dry_mix != 0.0 || (s.volume - 1.0).abs() > 0.005
+    }
+
+    fn save_preset(&mut self) {
+        if self.active_preset().is_some() {
+            return;
+        }
+        let s = &self.settings;
+        let preset = Preset {
+            voice: voices::ALL[self.voice].id.to_string(),
+            semitones: s.semitones,
+            dry_mix: s.dry_mix,
+            volume: s.volume,
+        };
+        self.settings.presets.push(preset);
+        self.settings.save();
+        self.dirty = true;
+    }
+
+    fn drop_preset(&mut self, p: usize) {
+        if p < self.settings.presets.len() {
+            self.settings.presets.remove(p);
+            self.settings.save();
+            self.hover = Hit::None;
+            self.dirty = true;
+        }
     }
 
     fn is_favorite(&self, i: usize) -> bool {
@@ -628,16 +730,6 @@ impl App {
             true => self.settings.favorites.retain(|f| f != id),
             false => self.settings.favorites.push(id.to_string()),
         }
-        self.settings.save();
-        self.dirty = true;
-    }
-
-    /// Switches to a voice from outside the gallery, which also means wanting to hear it.
-    fn pick_voice(&mut self, i: usize) {
-        self.voice = i;
-        self.settings.semitones = 0.0;
-        self.settings.enabled = true;
-        self.apply();
         self.settings.save();
         self.dirty = true;
     }
@@ -664,10 +756,10 @@ impl App {
         // Favourites when there are any, otherwise every voice but Off, which the toggle covers.
         let mut list = self.favorites();
         if list.is_empty() {
-            list = (1..voices::ALL.len()).collect();
+            list = (1..voices::ALL.len()).map(Fav::Voice).collect();
         }
-        if let Some(i) = hotkeys::step_in(&list, Some(self.voice), step) {
-            self.pick_voice(i);
+        if let Some(f) = hotkeys::step_in(&list, Some(self.current()), step) {
+            self.choose(f, true);
         }
     }
 
@@ -954,11 +1046,22 @@ impl App {
         }
     }
 
-    fn filtered(&self) -> Vec<usize> {
+    fn filtered(&self) -> Vec<Fav> {
         match self.shelf {
-            Shelf::All => (0..voices::ALL.len()).collect(),
+            Shelf::All => (0..voices::ALL.len()).map(Fav::Voice).collect(),
             Shelf::Favorites => self.favorites(),
-            Shelf::Group(c) => (0..voices::ALL.len()).filter(|i| voices::ALL[*i].category == c).collect(),
+            Shelf::Group(c) => {
+                (0..voices::ALL.len()).filter(|i| voices::ALL[*i].category == c).map(Fav::Voice).collect()
+            }
+        }
+    }
+
+    /// The tile drawn as chosen: a saved voice while it plays exactly as saved, otherwise
+    /// the catalog voice, except on Favorites, where that would mark two tiles.
+    fn is_chosen(&self, f: Fav) -> bool {
+        match f {
+            Fav::Preset(p) => self.active_preset() == Some(p),
+            Fav::Voice(i) => i == self.voice && (self.shelf != Shelf::Favorites || self.active_preset().is_none()),
         }
     }
 
@@ -1030,12 +1133,10 @@ impl App {
     fn press(&mut self, double: bool) -> Option<Popup> {
         let hit = self.hit_at(self.mouse);
         match hit {
-            Hit::Tile(i) => {
-                self.voice = i;
-                self.settings.semitones = 0.0;
-                self.apply();
-                self.settings.save();
-            }
+            Hit::Tile(i) => self.choose(Fav::Voice(i), false),
+            Hit::Preset(p) => self.choose(Fav::Preset(p), false),
+            Hit::DropPreset(p) => self.drop_preset(p),
+            Hit::SavePreset => self.save_preset(),
             Hit::Star(i) => self.toggle_favorite(i),
             Hit::Tab(c) => {
                 self.shelf = c;
@@ -1196,7 +1297,7 @@ impl App {
         if list.is_empty() {
             return false;
         }
-        let pos = list.iter().position(|i| *i == self.voice).unwrap_or(0);
+        let pos = list.iter().position(|f| self.is_chosen(*f)).unwrap_or(0);
         let next = match VIRTUAL_KEY(vk) {
             VK_LEFT => pos.saturating_sub(1),
             VK_RIGHT => (pos + 1).min(list.len() - 1),
@@ -1206,10 +1307,7 @@ impl App {
             VK_END => list.len() - 1,
             _ => return false,
         };
-        self.voice = list[next];
-        self.settings.semitones = 0.0;
-        self.apply();
-        self.settings.save();
+        self.choose(list[next], false);
         // Keep the selection in view.
         let row = (next / self.lay.cols) as f32 * (TILE_H + TILE_GAP);
         let a = &mut self.gallery_scroll;
@@ -1483,7 +1581,7 @@ impl App {
         self.card(g, r, 8.0, false);
         let def = &voices::ALL[self.voice];
         g.text(
-            def.name(self.ru),
+            &self.label(self.current()),
             Font::Subtitle,
             R::new(r.l + 20.0, r.t + 12.0, 380.0, 28.0),
             Align::Start,
@@ -1511,6 +1609,25 @@ impl App {
         g.text(&line, Font::Caption, line_r, Align::Start, color)?;
         if unheard {
             self.hits.push((line_r, Hit::Nav(Page::Programs)));
+        }
+
+        // A voice tuned away from the catalog can be kept; once kept it says where it went.
+        if self.active_preset().is_some() {
+            let saved = self.t("В избранном", "In Favorites");
+            let w = g.measure(saved, Font::Caption)? + 22.0;
+            let at = R::new(r.r - 176.0 - w, r.t + 14.0, w, 24.0);
+            g.icon(glyph::STAR_FILLED, Font::Icon12, R::new(at.l, at.t, 16.0, 24.0), th.accent())?;
+            g.text(saved, Font::Caption, R { l: at.l + 22.0, ..at }, Align::Start, th.text_secondary())?;
+        } else if self.tuned() {
+            let save = self.t("Сохранить как мой голос", "Save as my voice");
+            let w = g.measure(save, Font::Body)? + 48.0;
+            let button = R::new(r.r - 176.0 - w, r.t + 10.0, w, 32.0);
+            let hovered = self.hover == Hit::SavePreset;
+            g.fill(button, 4.0, if hovered { th.control_hover() } else { th.control_alt() });
+            g.stroke(button, 4.0, th.control_stroke(), 1.0);
+            g.icon(glyph::STAR, Font::Icon12, R::new(button.l + 10.0, button.t, 16.0, 32.0), th.text())?;
+            g.text(save, Font::Body, R { l: button.l + 34.0, ..button }, Align::Start, th.text())?;
+            self.hits.push((button, Hit::SavePreset));
         }
 
         let label = self.t("Эффект", "Effect");
@@ -1576,7 +1693,7 @@ impl App {
         let scroll = self.gallery_scroll.value.min(self.gallery_max);
 
         g.clip(self.lay.gallery);
-        for (n, &i) in list.iter().enumerate() {
+        for (n, &f) in list.iter().enumerate() {
             let (row, col) = (n / self.lay.cols, n % self.lay.cols);
             let r = R::new(
                 self.lay.gallery.l + col as f32 * (tile_w + TILE_GAP),
@@ -1587,8 +1704,12 @@ impl App {
             if !r.intersects(&self.lay.gallery) {
                 continue;
             }
-            let selected = i == self.voice;
-            let hovered = self.hover == Hit::Tile(i);
+            let (hit, corner) = match f {
+                Fav::Voice(i) => (Hit::Tile(i), Hit::Star(i)),
+                Fav::Preset(p) => (Hit::Preset(p), Hit::DropPreset(p)),
+            };
+            let selected = self.is_chosen(f);
+            let hovered = self.hover == hit;
             g.fill(r, 4.0, if hovered { th.control_hover() } else { th.card() });
             if selected {
                 g.stroke(r, 4.0, th.accent(), 2.0);
@@ -1596,30 +1717,34 @@ impl App {
                 g.stroke(r, 4.0, th.card_stroke(), 1.0);
             }
             // The icon is the voice's own waveform.
-            let wave = &self.glyphs[i];
+            let wave = &self.glyphs[self.voice_of(f)];
             let (gl, gw, gy) = (r.l + 14.0, r.w() - 28.0, r.t + 24.0);
             let last = (wave.len() - 1) as f32;
             let pts: Vec<(f32, f32)> =
                 wave.iter().enumerate().map(|(k, s)| (gl + gw * k as f32 / last, gy - s * 11.0)).collect();
             g.line(&pts, if selected { th.accent() } else { th.text_secondary() }, 1.4)?;
             let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0 - 24.0, 22.0);
-            g.text(voices::ALL[i].name(self.ru), Font::Body, name, Align::Start, th.text())?;
+            g.text(&self.label(f), Font::Body, name, Align::Start, th.text())?;
             let visible = R { l: r.l, t: r.t.max(self.lay.gallery.t), r: r.r, b: r.b.min(self.lay.gallery.b) };
-            self.hits.push((visible, Hit::Tile(i)));
-            // A filled star marks a favourite; an outline one offers to make it one.
-            let star = R::new(r.r - 34.0, r.b - 34.0, 28.0, 28.0);
-            let starred = self.is_favorite(i);
-            if starred || hovered || self.hover == Hit::Star(i) {
-                if self.hover == Hit::Star(i) {
-                    g.fill(star, 4.0, th.control_hover());
+            self.hits.push((visible, hit));
+            // A voice has a star: filled for a favourite, an outline offering to make it one.
+            // A saved voice is always a favourite; on hover its corner deletes it.
+            let button = R::new(r.r - 34.0, r.b - 34.0, 28.0, 28.0);
+            let on_button = self.hover == corner;
+            let shown = match f {
+                Fav::Voice(i) if self.is_favorite(i) => Some((glyph::STAR_FILLED, th.accent())),
+                Fav::Voice(_) if hovered || on_button => Some((glyph::STAR, th.text_secondary())),
+                Fav::Preset(_) if hovered || on_button => Some((glyph::REMOVE, th.text_secondary())),
+                Fav::Preset(_) => Some((glyph::STAR_FILLED, th.accent())),
+                Fav::Voice(_) => None,
+            };
+            if let Some((icon, color)) = shown {
+                if on_button {
+                    g.fill(button, 4.0, th.control_hover());
                 }
-                let (icon, color) = match starred {
-                    true => (glyph::STAR_FILLED, th.accent()),
-                    false => (glyph::STAR, th.text_secondary()),
-                };
-                g.icon(icon, Font::Icon12, star, color)?;
-                if star.intersects(&self.lay.gallery) && visible.has((star.l + 14.0, star.t + 14.0)) {
-                    self.hits.push((star, Hit::Star(i)));
+                g.icon(icon, Font::Icon12, button, color)?;
+                if (hovered || on_button) && visible.has((button.l + 14.0, button.t + 14.0)) {
+                    self.hits.push((button, corner));
                 }
             }
         }
@@ -1852,6 +1977,22 @@ fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
         let _ = DeleteObject(mask.into());
         icon
     }
+}
+
+/// A saved voice's name: the voice and what was changed, e.g. "Demon +3 · 20% own".
+fn preset_label(name: &str, p: &Preset, ru: bool) -> String {
+    let mut label = name.to_string();
+    if p.semitones != 0.0 {
+        label.push_str(&format!(" {:+}", p.semitones));
+    }
+    if (p.volume - 1.0).abs() > 0.005 {
+        label.push_str(&format!(" · {}%", (p.volume * 100.0).round()));
+    }
+    if p.dry_mix > 0.0 {
+        let own = if ru { "своего" } else { "own" };
+        label.push_str(&format!(" · {}% {own}", (p.dry_mix * 100.0).round()));
+    }
+    label
 }
 
 /// The message Explorer broadcasts when the taskbar comes back after a restart.
@@ -2138,6 +2279,14 @@ pub fn run(hidden: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_voice_is_named_after_what_was_changed() {
+        let p = |semitones, dry_mix, volume| Preset { voice: "demon".into(), semitones, dry_mix, volume };
+        assert_eq!(preset_label("Demon", &p(3.0, 0.0, 1.0), false), "Demon +3");
+        assert_eq!(preset_label("Demon", &p(-2.5, 0.2, 1.0), false), "Demon -2.5 · 20% own");
+        assert_eq!(preset_label("Демон", &p(0.0, 0.0, 1.25), true), "Демон · 125%");
+    }
 
     #[test]
     fn the_scope_stays_inside_its_card() {

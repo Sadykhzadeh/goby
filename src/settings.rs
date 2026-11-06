@@ -34,6 +34,46 @@ pub struct Settings {
     pub hotkeys: bool,
     /// Starred voice ids, in the order they were starred.
     pub favorites: Vec<String>,
+    /// Voices saved with their own pitch, volume and mix, in the order they were saved.
+    pub presets: Vec<Preset>,
+}
+
+/// A voice as someone tuned it, saved under the name of the voice and its changes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Preset {
+    pub voice: String,
+    pub semitones: f32,
+    pub dry_mix: f32,
+    pub volume: f32,
+}
+
+impl Preset {
+    /// Whether the voice is set exactly like this now.
+    pub fn matches(&self, voice: &str, semitones: f32, dry_mix: f32, volume: f32) -> bool {
+        let near = |a: f32, b: f32| (a - b).abs() < 0.005;
+        self.voice == voice
+            && near(self.semitones, semitones)
+            && near(self.dry_mix, dry_mix)
+            && near(self.volume, volume)
+    }
+}
+
+/// `voice:semitones:mix:volume` entries separated by `;`; malformed ones are dropped.
+fn presets(v: &str) -> Vec<Preset> {
+    v.split(';')
+        .filter_map(|entry| {
+            let mut parts = entry.trim().split(':');
+            let voice = parts.next()?.trim().to_ascii_lowercase();
+            let mut number = || parts.next()?.trim().parse::<f32>().ok().filter(|x| x.is_finite());
+            let (semitones, dry_mix, volume) = (number()?, number()?, number()?);
+            (!voice.is_empty()).then(|| Preset {
+                voice,
+                semitones: semitones.clamp(-12.0, 12.0),
+                dry_mix: dry_mix.clamp(0.0, 1.0),
+                volume: volume.clamp(0.0, 2.0),
+            })
+        })
+        .collect()
 }
 
 impl Default for Settings {
@@ -58,6 +98,7 @@ impl Default for Settings {
             tray_told: false,
             hotkeys: true,
             favorites: Vec::new(),
+            presets: Vec::new(),
         }
     }
 }
@@ -100,6 +141,7 @@ impl Settings {
                 "tray_told" => s.tray_told = v == "1",
                 "hotkeys" => s.hotkeys = v != "0",
                 "favorites" => s.favorites = list(v),
+                "presets" => s.presets = presets(v),
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -114,7 +156,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\n",
             self.input,
             self.output,
             self.voice,
@@ -134,6 +176,11 @@ impl Settings {
             self.tray_told as u8,
             self.hotkeys as u8,
             self.favorites.join(","),
+            self.presets
+                .iter()
+                .map(|p| format!("{}:{}:{}:{}", p.voice, p.semitones, p.dry_mix, p.volume))
+                .collect::<Vec<_>>()
+                .join(";"),
         )
     }
 
@@ -181,6 +228,10 @@ mod tests {
             tray_told: true,
             hotkeys: false,
             favorites: vec!["demon".into(), "robot".into()],
+            presets: vec![
+                Preset { voice: "demon".into(), semitones: 3.0, dry_mix: 0.2, volume: 1.0 },
+                Preset { voice: "robot".into(), semitones: -2.5, dry_mix: 0.0, volume: 1.25 },
+            ],
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
@@ -190,6 +241,20 @@ mod tests {
         let s = Settings::parse("preset=1\nsemitones=8\nvolume=1\n");
         assert_eq!(s.semitones, 0.0);
         assert_eq!(s.voice, "minion");
+    }
+
+    #[test]
+    fn broken_presets_are_dropped_and_wild_values_clamped() {
+        let s = Settings::parse("presets=demon:3:0.2:1;robot;:1:0:1;ghost:x:0:1;minion:40:-1:9;giant:1:0:NaN\n");
+        assert_eq!(
+            s.presets,
+            vec![
+                Preset { voice: "demon".into(), semitones: 3.0, dry_mix: 0.2, volume: 1.0 },
+                Preset { voice: "minion".into(), semitones: 12.0, dry_mix: 0.0, volume: 2.0 },
+            ]
+        );
+        assert!(s.presets[0].matches("demon", 3.001, 0.2, 1.0));
+        assert!(!s.presets[0].matches("demon", 3.0, 0.3, 1.0));
     }
 
     #[test]

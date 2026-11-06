@@ -67,6 +67,10 @@ Star the voices you use (or right-click them) and they get a **Favorites** tab, 
 Goby opens on from then on. The hotkeys then step through the favorites only, and the
 tray icon's menu lists them, so a voice can be switched without opening the window.
 
+Tune a voice with pitch, volume or the original-voice mix and **Save as my voice** keeps
+it as it is, named after what changed (*Demon +3*, *Robot · 125%*). Saved voices come
+first in Favorites, in the tray menu and on the hotkeys; the × on a saved voice deletes it.
+
 Closing the window leaves Goby running in the notification area, so your voice stays on
 in the game. Click the icon to bring the window back; right-click it to switch the effect
 off or to quit. *Keep running in the tray* under Settings turns this off, and then closing
