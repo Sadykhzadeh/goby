@@ -1369,18 +1369,15 @@ impl App {
 
         section(g, &mut y, self.t("Окно", "Window"))?;
         let tray = self.t("Работать в трее", "Keep running in the tray");
-        let tray_desc = self.t("Закрытие окна не выключает голос", "Closing the window keeps your voice on");
+        let tray_desc = self.t("Голос работает и после закрытия", "The voice stays on when closed");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc)?;
         let start = self.t("Запускать вместе с Windows", "Start with Windows");
         let start_desc = self.t("Сразу в трей, без окна", "Straight to the tray, no window");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Autostart), glyph::POWER, start, start_desc)?;
         let keys = self.t("Горячие клавиши", "Hotkeys");
         let keys_desc = match self.hotkeys_ok {
-            true => self.t(
-                "Ctrl+Alt+G — эффект, Ctrl+Alt+PgUp/PgDn — голос, даже в игре",
-                "Ctrl+Alt+G effect, Ctrl+Alt+PgUp/PgDn voice, even in a game",
-            ),
-            false => self.t("Часть клавиш занята другой программой", "Another program holds some of the keys"),
+            true => self.t("Ctrl+Alt+G эффект, PgUp/PgDn голос", "Ctrl+Alt+G effect, PgUp/PgDn voice"),
+            false => self.t("Некоторые клавиши заняты", "Some keys are taken elsewhere"),
         };
         self.row_card(g, &mut y, Hit::Toggle(Switch::Hotkeys), glyph::KEYBOARD, keys, keys_desc)?;
 
