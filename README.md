@@ -38,9 +38,11 @@ when the app starts and the result is drawn.
 2. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
    **Just run it**). On the first start Windows asks once for permission to rename the
    cable, so it shows up as **Goby Mic** everywhere instead of "CABLE Output".
-3. Open **Settings** (the gear at the bottom left); under **Who hears Goby**, press **Add a program** and pick CS2, Discord or OBS from
-   the menu. It lists every program that has used your microphone (the same list Windows
-   keeps for its privacy page); **Other program…** opens the usual file picker. Goby pins
+3. Open **Programs** on the left. Under **Recently used the microphone** (the same list
+   Windows keeps for its privacy page), press **+** next to CS2, Discord or OBS; **Add a
+   program** also has **Other program…**, which opens the usual file picker. The page
+   shows whether each program hears Goby right now, will once it starts, or will once it
+   opens the microphone. Goby pins
    only the chosen programs to Goby Mic, the way the Volume mixer's per-app settings do.
    Everything else keeps your real microphone and nothing system-wide changes. The ×
    next to a program hands it back.
@@ -50,7 +52,7 @@ there. Goby never offers the cable as its own microphone, so it cannot feed itse
 
 The main window holds what you change while playing: the voice, the effect switch (it
 keeps the chosen voice), pitch, volume and *Hear myself* for your headphones. Everything
-you set once lives in **Settings**: the programs that hear Goby, the microphone with its
+you set once lives in **Settings**: the microphone with its
 gain, a noise gate that mutes keyboard clicks and room noise between phrases and *Low
 latency*, which takes the microphone in exclusive mode, the output, how much of your
 original voice to mix back in, and the tray, startup and hotkey switches. Arrow keys

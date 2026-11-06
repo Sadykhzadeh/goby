@@ -393,4 +393,6 @@ pub mod glyph {
     pub const POWER: u16 = 0xE7E8;
     pub const KEYBOARD: u16 = 0xE765;
     pub const SETTINGS: u16 = 0xE713;
+    pub const VOICES: u16 = 0xE76E;
+    pub const APPS: u16 = 0xE71D;
 }

@@ -91,6 +91,7 @@ enum Pane {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Page {
     Voices,
+    Programs,
     Settings,
 }
 
@@ -109,8 +110,12 @@ enum Hit {
     /// Choose another program that should hear Goby.
     AddApp,
     Scrollbar(Pane),
-    /// Go to a page: the Settings button, the back arrow, the "nobody hears Goby" hint.
+    /// Go to a page: the navigation rail, or the "nobody hears Goby" hint.
     Nav(Page),
+    /// A recent microphone user (index into `mic_apps`) to add with one click.
+    Offer(usize),
+    /// The VB-Cable download page.
+    CableSite,
 }
 
 impl Knob {
@@ -131,6 +136,7 @@ impl Knob {
 struct Layout {
     /// The navigation rail on the left: Voices on top, Settings pinned to the bottom.
     nav_voices: R,
+    nav_programs: R,
     nav_settings: R,
     // The voices page.
     scope: R,
@@ -147,6 +153,7 @@ impl Layout {
     fn new(w: f32, h: f32) -> Layout {
         let (w, h) = (w.max(MIN_W), h.max(MIN_H));
         let nav_voices = R::new(4.0, 12.0, RAIL_W - 8.0, 40.0);
+        let nav_programs = R::new(4.0, nav_voices.b + 4.0, RAIL_W - 8.0, 40.0);
         let nav_settings = R::new(4.0, h - 12.0 - 40.0, RAIL_W - 8.0, 40.0);
         let left = RAIL_W + 8.0;
         let full = w - left - 24.0;
@@ -158,7 +165,7 @@ impl Layout {
         let column = full.min(SETTINGS_W);
         let title = R::new(left + (full - column) / 2.0, 16.0, column, 44.0);
         let pane = R { l: title.l, t: title.b + 8.0, r: title.r, b: h - 16.0 };
-        Layout { nav_voices, nav_settings, scope, quick, tabs, gallery, cols, title, pane }
+        Layout { nav_voices, nav_programs, nav_settings, scope, quick, tabs, gallery, cols, title, pane }
     }
 }
 
@@ -258,6 +265,8 @@ struct App {
     /// chosen program, in `settings.routed` order.
     mic_apps: Vec<apps::MicApp>,
     app_state: Vec<AppState>,
+    /// Each chosen program has the mic open right now, in `settings.routed` order.
+    app_live: Vec<bool>,
     apps_at: Instant,
     /// Processes already pinned to Goby, so each is asked only once, and the cable path
     /// they were pinned to: a different cable starts the cache over.
@@ -440,6 +449,7 @@ impl App {
             cable: None,
             mic_apps: Vec::new(),
             app_state: Vec::new(),
+            app_live: Vec::new(),
             apps_at: Instant::now(),
             pinned: Vec::new(),
             pinned_to: String::new(),
@@ -635,8 +645,15 @@ impl App {
     /// them back). Windows keeps the choice per program, so it outlives this process.
     fn sync_apps(&mut self) {
         self.apps_at = Instant::now();
+        let recent = apps::recent();
+        let live: Vec<bool> =
+            self.settings.routed.iter().map(|exe| recent.iter().any(|a| a.exe == *exe && a.active)).collect();
+        if live != self.app_live {
+            self.app_live = live;
+            self.dirty = true;
+        }
         let offered: Vec<apps::MicApp> =
-            apps::recent().into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
+            recent.into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
         // Without the cable there is nothing to pin to, and "" would match every program.
         let Some(record) = self.cable.as_ref().map(|(_, r)| r.id.clone()) else {
             let states = vec![AppState::Waiting; self.settings.routed.len()];
@@ -1009,6 +1026,21 @@ impl App {
                 unsafe { SetCapture(self.hwnd) };
             }
             Hit::Nav(page) => self.go(page),
+            Hit::Offer(i) => {
+                if let Some(app) = self.mic_apps.get(i) {
+                    self.route(app.exe.clone());
+                }
+            }
+            Hit::CableSite => unsafe {
+                ShellExecuteW(
+                    Some(self.hwnd),
+                    w!("open"),
+                    w!("https://vb-audio.com/Cable/"),
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    SW_SHOWNORMAL,
+                );
+            },
             Hit::None => {}
         }
         None
@@ -1061,7 +1093,7 @@ impl App {
     }
 
     fn wheel(&mut self, notches: f32) {
-        if self.page == Page::Settings {
+        if self.page != Page::Voices {
             let a = &mut self.settings_scroll;
             a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
         } else if self.lay.tabs.has(self.mouse) {
@@ -1075,7 +1107,7 @@ impl App {
 
     /// Arrow keys walk the gallery like a native grid view.
     fn key(&mut self, vk: u16) -> bool {
-        if self.page == Page::Settings {
+        if self.page != Page::Voices {
             // Esc and Backspace go back, as in Windows Settings.
             if matches!(VIRTUAL_KEY(vk), VK_ESCAPE | VK_BACK) {
                 self.go(Page::Voices);
@@ -1146,17 +1178,25 @@ impl App {
                 self.draw_tabs(g)?;
                 self.draw_gallery(g)?;
             }
+            Page::Programs => self.draw_programs(g)?,
             Page::Settings => self.draw_settings(g)?,
         }
+        self.draw_rail_tip(g)?;
         Ok(())
+    }
+
+    fn rail(&self) -> [(Page, R, u16, &'static str); 3] {
+        [
+            (Page::Voices, self.lay.nav_voices, glyph::VOICES, self.t("Голоса", "Voices")),
+            (Page::Programs, self.lay.nav_programs, glyph::APPS, self.t("Программы", "Programs")),
+            (Page::Settings, self.lay.nav_settings, glyph::SETTINGS, self.t("Настройки", "Settings")),
+        ]
     }
 
     /// The compact NavigationView: an icon per page, the current one marked by an accent pill.
     fn draw_rail(&mut self, g: &Gfx) -> Result<()> {
         let th = self.theme;
-        for (page, r, icon) in
-            [(Page::Voices, self.lay.nav_voices, glyph::MIC), (Page::Settings, self.lay.nav_settings, glyph::SETTINGS)]
-        {
+        for (page, r, icon, _) in self.rail() {
             let hit = Hit::Nav(page);
             if self.page == page || self.hover == hit {
                 g.fill(r, 4.0, th.control_hover());
@@ -1167,6 +1207,100 @@ impl App {
             g.icon(icon, Font::Icon16, r, th.text())?;
             self.hits.push((r, hit));
         }
+        Ok(())
+    }
+
+    /// The name of a rail item under the pointer, as the compact rail's tooltip shows it.
+    fn draw_rail_tip(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let Some((_, r, _, label)) = self.rail().into_iter().find(|(p, ..)| self.hover == Hit::Nav(*p)) else {
+            return Ok(());
+        };
+        let w = g.measure(label, Font::Body)? + 20.0;
+        let tip = R::new(r.r + 6.0, r.t + 6.0, w, 28.0);
+        g.fill(tip, 4.0, th.control_solid());
+        g.stroke(tip, 4.0, th.strong_stroke(), 1.0);
+        g.text(label, Font::Body, tip, Align::Center, th.text())?;
+        Ok(())
+    }
+
+    /// Which programs hear Goby, and whether each one does right now.
+    fn draw_programs(&mut self, g: &Gfx) -> Result<()> {
+        let th = self.theme;
+        let title = self.lay.title;
+        g.text(self.t("Программы", "Programs"), Font::Title, title, Align::Start, th.text())?;
+        let scroll = self.settings_scroll.value.min(self.settings_max);
+        let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
+        let mut y = self.lay.pane.t - scroll;
+        g.clip(self.lay.pane);
+
+        let note = self.t(
+            "Выбранные программы слышат Goby вместо микрофона. Остальные слышат ваш обычный микрофон.",
+            "The programs chosen here hear Goby instead of your microphone. Everything else hears your own mic.",
+        );
+        g.text(note, Font::Body, R::new(x + 2.0, y, w, 22.0), Align::Start, th.text_secondary())?;
+        y += 36.0;
+
+        match &self.cable {
+            None => {
+                let none = self.t(
+                    "Установите бесплатный VB-Cable и перезапустите Goby",
+                    "Install the free VB-Cable, then restart Goby",
+                );
+                let title = self.t("Нет виртуального кабеля", "No virtual cable");
+                self.row_card(g, &mut y, Hit::CableSite, glyph::GAME, title, none)?;
+            }
+            Some((_, record)) => {
+                let ready = self.t("Через него Goby попадает в программы", "Goby reaches the programs through it");
+                let name = short(&record.name).to_string();
+                self.row_card(g, &mut y, Hit::None, glyph::MIC, &name, ready)?;
+            }
+        }
+        y += 20.0;
+
+        let section = |g: &Gfx, y: &mut f32, title: &str| -> Result<()> {
+            g.text(title, Font::Strong, R::new(x + 2.0, *y, w, 20.0), Align::Start, th.text())?;
+            *y += 28.0;
+            Ok(())
+        };
+        section(g, &mut y, self.t("Слышат Goby", "Hear Goby"))?;
+        for i in 0..self.settings.routed.len() {
+            let exe = self.settings.routed[i].clone();
+            let talking = self.app_live.get(i).copied().unwrap_or(false);
+            let desc = match (self.app_state.get(i).copied().unwrap_or(AppState::Waiting), talking) {
+                (AppState::OnGoby, true) => self.t("Слышит Goby прямо сейчас", "Hearing Goby right now"),
+                (AppState::OnGoby, false) => self.t("Запущена и слышит Goby", "Running, hears Goby"),
+                (AppState::Waiting, _) => self.t("Услышит Goby при запуске", "Hears Goby once it starts"),
+                (AppState::Pending, _) => self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic"),
+            };
+            self.row_card(g, &mut y, Hit::Remove(i), app_glyph(&exe), &apps::display_name(&exe), desc)?;
+        }
+        let hint = if self.settings.routed.is_empty() {
+            self.t("Например CS2 или Discord", "For example CS2 or Discord")
+        } else {
+            self.t("Из списка или любой exe-файл", "From the list or any program file")
+        };
+        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
+
+        if !self.mic_apps.is_empty() {
+            y += 20.0;
+            section(g, &mut y, self.t("Недавно открывали микрофон", "Recently used the microphone"))?;
+            for i in 0..self.mic_apps.len().min(6) {
+                let app = &self.mic_apps[i];
+                let (name, exe) = (app.name.clone(), app.exe.clone());
+                let desc = match app.active {
+                    true => self.t("Слушает микрофон сейчас · добавить", "Listening now · add"),
+                    false => self.t("Добавить, чтобы слышала Goby", "Add it to hear Goby"),
+                };
+                self.row_card(g, &mut y, Hit::Offer(i), app_glyph(&exe), &name, desc)?;
+            }
+        }
+
+        g.unclip();
+        let content = y + scroll - self.lay.pane.t;
+        self.settings_max = (content - self.lay.pane.h()).max(0.0);
+        self.settings_scroll.target = self.settings_scroll.target.min(self.settings_max);
+        self.scrollbar(g, self.lay.pane, scroll, self.settings_max, Pane::Settings);
         Ok(())
     }
 
@@ -1283,7 +1417,7 @@ impl App {
         let (line, color) = if !self.healthy {
             (self.status.clone(), argb(if th.dark { 0xFFFF99A4 } else { 0xFFC42B1C }))
         } else if self.cable.is_none() {
-            let none = self.t("Нет виртуального кабеля: откройте настройки", "No virtual cable: open Settings");
+            let none = self.t("Нет виртуального кабеля: откройте «Программы»", "No virtual cable: open Programs");
             (none.into(), th.accent())
         } else if self.settings.routed.is_empty() {
             let none =
@@ -1299,7 +1433,7 @@ impl App {
         let line_r = R::new(r.l + 20.0, r.t + 40.0, 420.0, 18.0);
         g.text(&line, Font::Caption, line_r, Align::Start, color)?;
         if unheard {
-            self.hits.push((line_r, Hit::Nav(Page::Settings)));
+            self.hits.push((line_r, Hit::Nav(Page::Programs)));
         }
 
         let label = self.t("Эффект", "Effect");
@@ -1432,30 +1566,6 @@ impl App {
             Ok(())
         };
 
-        // The one thing a new user has to set up comes first.
-        section(g, &mut y, self.t("Кто слышит Goby", "Who hears Goby"))?;
-        if self.cable.is_none() {
-            let none =
-                self.t("Установите VB-Cable, чтобы голос шёл в игры", "Install VB-Cable to route the voice into games");
-            self.row_card(g, &mut y, Hit::None, glyph::GAME, self.t("Виртуальный кабель", "Virtual cable"), none)?;
-        }
-        for i in 0..self.settings.routed.len() {
-            let exe = self.settings.routed[i].clone();
-            let desc = match self.app_state.get(i).copied().unwrap_or(AppState::Waiting) {
-                AppState::OnGoby => self.t("Слышит Goby", "Hears Goby"),
-                AppState::Waiting => self.t("Услышит Goby при запуске", "Hears Goby once it starts"),
-                AppState::Pending => self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic"),
-            };
-            self.row_card(g, &mut y, Hit::Remove(i), app_glyph(&exe), &apps::display_name(&exe), desc)?;
-        }
-        let hint = if self.settings.routed.is_empty() {
-            self.t("Например CS2 или Discord", "For example CS2 or Discord")
-        } else {
-            self.t("Остальные слышат обычный микрофон", "Everything else hears your own mic")
-        };
-        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint)?;
-        y += 20.0;
-
         section(g, &mut y, self.t("Микрофон", "Microphone"))?;
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
         self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic)?;
@@ -1548,6 +1658,7 @@ impl App {
                     g.icon(glyph::REMOVE, Font::Icon12, b, th.text_secondary())?;
                 }
                 Hit::AddApp => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
+                Hit::Offer(_) => g.icon(glyph::ADD, Font::Icon12, side, th.text_secondary())?,
                 Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
                 Hit::None => {}
                 _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
@@ -1962,7 +2073,10 @@ mod layout_tests {
             }
             assert!(l.scope.b < l.quick.t && l.quick.b < l.tabs.t && l.tabs.b < l.gallery.t, "{w}x{h}: rows overlap");
             assert!(l.gallery.h() >= 2.0 * TILE_H, "{w}x{h}: fewer than two rows of voices");
-            assert!(l.nav_voices.b < l.nav_settings.t && l.nav_settings.b <= h, "{w}x{h}: rail items overlap");
+            assert!(
+                l.nav_voices.b < l.nav_programs.t && l.nav_programs.b < l.nav_settings.t && l.nav_settings.b <= h,
+                "{w}x{h}: rail items overlap"
+            );
             let tile_w = (l.gallery.w() - GUTTER - TILE_GAP * (l.cols - 1) as f32) / l.cols as f32;
             assert!(tile_w >= TILE_MIN_W - 0.01 || l.cols == 2, "{w}x{h}: tiles too narrow ({tile_w})");
             assert!(l.pane.w() >= 300.0 && l.pane.w() <= SETTINGS_W, "{w}x{h}: settings column {}", l.pane.w());
