@@ -52,11 +52,12 @@ there. Goby never offers the cable as its own microphone, so it cannot feed itse
 
 The main window holds what you change while playing: the voice, the effect switch (it
 keeps the chosen voice), pitch, volume and *Hear myself* for your headphones. Everything
-you set once lives in **Settings**: the microphone (gain, the gate threshold and *Low latency* fold away under **Advanced**) with its
-gain, a noise gate that mutes keyboard clicks and room noise between phrases and *Low
-latency*, which takes the microphone in exclusive mode, the output, how much of your
-original voice to mix back in, and the tray, startup and hotkey switches. Arrow keys
-walk the gallery, Esc leaves Settings, and a double-click resets a slider.
+you set once lives in **Settings**: the microphone and a noise gate that mutes keyboard
+clicks and room noise between phrases, the output, how much of your original voice to
+mix back in, and the tray, startup and hotkey switches. Gain, the gate threshold and *Low
+latency*, which takes the microphone in exclusive mode, fold away under **Advanced**.
+Arrow keys walk the gallery, Esc leaves Settings and Programs, and a double-click resets
+a slider.
 
 Hotkeys work from inside a game: **Ctrl+Alt+G** switches the effect on and off, and
 **Ctrl+Alt+Page Down** / **Page Up** step to the next or previous voice (which also
