@@ -5,8 +5,9 @@
 use std::sync::OnceLock;
 
 /// A file from `lang/`, packed while compiling: its texts only, `\n` turned into a new line,
-/// as `text\0` in the order of en.lang's keys, empty where the file lacks a line. The keys
-/// themselves are kept once, as hashes in `KEYS`.
+/// as `text\0` in the order of en.lang's keys, empty where the file lacks a line, and the
+/// Russian alphabet a byte a letter (see `texts`). The keys themselves are kept once, as
+/// hashes in `KEYS`.
 macro_rules! file {
     ($code:literal) => {{
         const TEXT: &str = include_str!(concat!("../lang/", $code, ".lang"));
@@ -15,16 +16,13 @@ macro_rules! file {
             texts(TEXT.as_bytes(), EN, &mut out);
             out
         };
-        match std::str::from_utf8(&PACKED) {
-            Ok(packed) => packed,
-            Err(_) => panic!(concat!("lang/", $code, ".lang is not UTF-8")),
-        }
+        &PACKED
     }};
 }
 
 /// Every language: its code, its name in itself, and its file. English comes first, as
 /// the one the others fall back to. A new language is one more file and one more line.
-pub const LANGUAGES: &[(&str, &str, &str)] = &[("en", "English", file!("en")), ("ru", "Русский", file!("ru"))];
+pub const LANGUAGES: &[(&str, &str, &[u8])] = &[("en", "English", file!("en")), ("ru", "Русский", file!("ru"))];
 
 const EN: &[u8] = include_str!("../lang/en.lang").as_bytes();
 
@@ -125,7 +123,9 @@ const fn seek(file: &[u8], mut from: usize, to: usize, en: &[u8], k0: usize, k1:
 }
 
 /// Writes the texts of `file` packed into `out` as far as they fit, one for each key of
-/// `en` in its order, and says how long they are in full.
+/// `en` in its order, and says how long they are in full. А to я, two bytes in UTF-8, go
+/// in one, 0x80 to 0xBF: bytes that never start a character in UTF-8, so `parse` can tell
+/// them apart. That makes Russian text 40 % smaller.
 const fn texts(file: &[u8], en: &[u8], out: &mut [u8]) -> usize {
     let (mut n, mut at, mut last) = (0, 0, 0);
     while let Some([k0, k1, _, _, next]) = line(en, at) {
@@ -137,9 +137,15 @@ const fn texts(file: &[u8], en: &[u8], out: &mut [u8]) -> usize {
         };
         if let Some([_, _, mut i, to, after]) = found {
             while i < to {
-                let new_line = file[i] == b'\\' && i + 1 < to && file[i + 1] == b'n';
-                n = put(out, n, if new_line { b'\n' } else { file[i] });
-                i += 1 + new_line as usize;
+                let next = if i + 1 < to { file[i + 1] } else { 0 };
+                let (b, len) = match (file[i], next) {
+                    (b'\\', b'n') => (b'\n', 2),
+                    (0xD0, 0x90..=0xBF) => (next - 0x10, 2), // А to п
+                    (0xD1, 0x80..=0x8F) => (next + 0x30, 2), // р to я
+                    (b, _) => (b, 1),
+                };
+                n = put(out, n, b);
+                i += len;
             }
             last = after;
         }
@@ -154,9 +160,20 @@ type Table = Vec<&'static str>;
 
 // Inlined, it is copied once per language.
 #[inline(never)]
-fn parse(packed: &'static str) -> Table {
+fn parse(packed: &[u8]) -> Table {
+    let mut utf8 = Vec::with_capacity(packed.len() * 2);
+    let mut continuing = 0;
+    for &b in packed {
+        if continuing == 0 && (0x80..0xC0).contains(&b) {
+            utf8.extend(if b < 0xB0 { [0xD0, b + 0x10] } else { [0xD1, b - 0x30] });
+        } else {
+            continuing =
+                if continuing > 0 { continuing - 1 } else { (b >= 0xC0) as u8 + (b >= 0xE0) as u8 + (b >= 0xF0) as u8 };
+            utf8.push(b);
+        }
+    }
     let mut table = Table::new();
-    for text in packed.split('\0') {
+    for text in String::from_utf8(utf8).unwrap_or_default().leak().split('\0') {
         table.push(text);
     }
     table.pop(); // after the last \0
@@ -256,10 +273,10 @@ mod tests {
         found
     }
 
-    fn packed(text: &str, en: &str) -> String {
+    fn packed(text: &str, en: &str) -> Vec<u8> {
         let mut out = vec![0; texts(text.as_bytes(), en.as_bytes(), &mut [])];
         texts(text.as_bytes(), en.as_bytes(), &mut out);
-        String::from_utf8(out).unwrap()
+        out
     }
 
     /// Every key and its text in a file, in its order.
@@ -275,10 +292,15 @@ mod tests {
     #[test]
     fn files_are_packed_into_texts_in_the_order_of_english() {
         let en = "# A comment = not a line\n  a = x\\ny \r\nb=2 = 3\n\nno equals sign\nc = a \\ b\n";
-        assert_eq!(packed(en, en), "x\ny\x002 = 3\0a \\ b\0");
-        assert_eq!(parse(packed(en, en).leak()), ["x\ny", "2 = 3", "a \\ b"]);
+        assert_eq!(packed(en, en), b"x\ny\x002 = 3\0a \\ b\0");
+        assert_eq!(parse(&packed(en, en)), ["x\ny", "2 = 3", "a \\ b"]);
+        // The Russian alphabet takes a byte a letter; the rest of Unicode stays as it was.
+        let text = "Ёжик «в тумане» — ЯБЛОКО, ёлка и рыба €𝄞";
+        let line = format!("a = {text}");
+        assert_eq!(packed(&line, "a = x").len(), text.len() - 24 + 1);
+        assert_eq!(parse(&packed(&line, "a = x")), [text]);
         // Out of order, a line missing, and one English lacks.
-        assert_eq!(packed("c = C\nd = D\nb = B\n", en), "\0B\0C\0");
+        assert_eq!(packed("c = C\nd = D\nb = B\n", en), b"\0B\0C\0");
         let keys: Vec<&str> = lines(en).iter().map(|(k, _)| *k).collect();
         assert_eq!(keys, ["a", "b", "c"]);
         let mut hashes = [0; 3];
@@ -397,7 +419,7 @@ mod tests {
     #[test]
     fn a_missing_line_falls_back_to_english() {
         let en = "a = A\nb = B\n";
-        let tables = Box::leak(Box::new([parse(packed(en, en).leak()), parse(packed("b = Б\n", en).leak())]));
+        let tables = Box::leak(Box::new([parse(&packed(en, en)), parse(&packed("b = Б\n", en))]));
         assert_eq!(look(tables, 1, 0), "A");
         assert_eq!(look(tables, 1, 1), "Б");
     }
