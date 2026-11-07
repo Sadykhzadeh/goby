@@ -15,6 +15,7 @@ use windows::Win32::Security::Cryptography::{
 use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::files::{self, File};
+use crate::settings::whole;
 
 /// The public half of the release key, X then Y. The private half is kept encrypted with
 /// the author's other secrets and signs every release's manifest.
@@ -47,7 +48,7 @@ pub struct Manifest {
 }
 
 pub fn parse_version(s: &str) -> Option<Version> {
-    let mut parts = s.trim().split('.').map(|p| p.parse::<u32>().ok());
+    let mut parts = s.trim().split('.').map(|p| whole(p).and_then(|n| u32::try_from(n).ok()));
     let v = (parts.next()??, parts.next()??, parts.next()??);
     parts.next().is_none().then_some(v)
 }
@@ -85,7 +86,7 @@ pub fn parse(text: &str) -> Option<Manifest> {
         let (key, value) = line.split_once(' ')?;
         match key {
             "version" if version.is_none() => version = Some(parse_version(value)?),
-            "size" if size.is_none() => size = Some(value.parse::<u64>().ok().filter(|s| (1..=MAX_EXE).contains(s))?),
+            "size" if size.is_none() => size = Some(whole(value).filter(|s| (1..=MAX_EXE).contains(s))?),
             "sha256" if sha256.is_none() => sha256 = Some(hex32(value)?),
             "url" if value.starts_with("https://") && !value.contains(char::is_whitespace) => {
                 urls.push(value.to_string())

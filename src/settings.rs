@@ -127,6 +127,16 @@ fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
     decimal(v).unwrap_or(default).clamp(lo, hi)
 }
 
+/// What `str::parse::<u64>` reads: an optional `+`, then decimal digits that fit.
+/// The std parser is generic and comes in once per integer type; this is one small copy.
+pub fn whole(s: &str) -> Option<u64> {
+    let d = s.strip_prefix('+').unwrap_or(s);
+    if d.is_empty() {
+        return None;
+    }
+    d.bytes().try_fold(0u64, |n, c| n.checked_mul(10)?.checked_add((c as char).to_digit(10)? as u64))
+}
+
 /// What `str::parse::<f32>` reads, kept only when finite: a sign, digits with an optional
 /// fraction, an optional exponent. The std parser handles every corner of IEEE rounding and
 /// brings 15 KB of tables with it; the numbers in settings.ini are short, and for them one
@@ -223,7 +233,7 @@ impl Settings {
                 "favorites" => s.favorites = list(v),
                 "presets" => s.presets = presets(v),
                 "updates" => s.updates = v != "0",
-                "update_checked" => s.update_checked = v.parse().unwrap_or(0),
+                "update_checked" => s.update_checked = whole(v).unwrap_or(0),
                 "dry_mix" => s.dry_mix = number(v, s.dry_mix, 0.0, 1.0),
                 "lang" if crate::lang::find(v).is_some() => s.lang = v.to_string(),
                 _ => {}
@@ -505,6 +515,35 @@ mod tests {
                 s.insert(0, '-');
             }
             assert_eq!(decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
+        }
+    }
+
+    #[test]
+    fn whole_reads_what_std_reads() {
+        for s in [
+            "",
+            "+",
+            "-",
+            "-0",
+            "0",
+            "+0",
+            "007",
+            "+7",
+            "++7",
+            " 7",
+            "7 ",
+            "1.0",
+            "1e3",
+            "١",
+            "18446744073709551615",
+            "18446744073709551616",
+            "99999999999999999999",
+            "4294967295",
+            "4294967296",
+            "1794000000",
+        ] {
+            assert_eq!(whole(s), s.parse::<u64>().ok(), "{s:?}");
+            assert_eq!(whole(s).and_then(|n| u32::try_from(n).ok()), s.parse::<u32>().ok(), "{s:?}");
         }
     }
 
