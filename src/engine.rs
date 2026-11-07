@@ -163,6 +163,31 @@ fn list_all(capture: bool) -> Vec<Endpoint> {
     (0..count).filter_map(|i| unsafe { all.Item(i) }.ok()).filter_map(|d| describe(&d).ok()).collect()
 }
 
+/// Who is recording right now: (process id, the capture endpoint it records from), for
+/// every active session on every microphone. This is what a program really does, whatever
+/// it was told to: one with its own microphone setting ignores the per-app default.
+pub fn recording() -> Vec<(u32, Endpoint)> {
+    let mut found = Vec::new();
+    let Ok(e) = enumerator() else { return found };
+    let Ok(all) = (unsafe { e.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) }) else { return found };
+    for i in 0..unsafe { all.GetCount() }.unwrap_or(0) {
+        let Ok(dev) = (unsafe { all.Item(i) }) else { continue };
+        let Ok(ep) = describe(&dev) else { continue };
+        let sessions =
+            unsafe { dev.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None).and_then(|m| m.GetSessionEnumerator()) };
+        let Ok(sessions) = sessions else { continue };
+        for k in 0..unsafe { sessions.GetCount() }.unwrap_or(0) {
+            let Ok(control) = (unsafe { sessions.GetSession(k) }) else { continue };
+            let active = unsafe { control.GetState() }.is_ok_and(|s| s == AudioSessionStateActive);
+            let pid = control.cast::<IAudioSessionControl2>().and_then(|c| unsafe { c.GetProcessId() });
+            if let (true, Ok(pid)) = (active, pid) {
+                found.push((pid, ep.clone()));
+            }
+        }
+    }
+    found
+}
+
 /// Endpoints to offer. The cable's own capture side would loop our output back in, so it is
 /// never offered as a microphone.
 pub fn list(capture: bool) -> Vec<Endpoint> {
@@ -798,6 +823,19 @@ mod probe {
 #[cfg(test)]
 mod live {
     use super::*;
+
+    /// Lists who records from which microphone right now; reads only.
+    /// `cargo test --release who_records -- --ignored --nocapture`
+    #[test]
+    #[ignore = "needs real audio devices"]
+    fn who_records() {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok().unwrap() };
+        let names = crate::apps::processes();
+        for (pid, ep) in recording() {
+            let exe = names.iter().find(|(_, p)| *p == pid).map_or("?", |(n, _)| n.as_str());
+            println!("{exe} ({pid}) records from {}", ep.name);
+        }
+    }
 
     /// `cargo test --release live_latency -- --ignored --nocapture`
     #[test]

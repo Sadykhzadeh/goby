@@ -1,6 +1,7 @@
 //! Drawing: Direct2D 1.1 into a DirectComposition swap chain with alpha, so the system Mica
 //! backdrop shows through wherever the window is transparent. All coordinates are DIPs.
 
+use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -88,6 +89,10 @@ pub struct Gfx {
     round: ID2D1StrokeStyle,
     fonts: Fonts,
     pub dpi: f32,
+    /// Program icons, made once per device: `None` for a file that had none to give.
+    /// A short list rather than a map: there are a dozen at most, and a HashMap costs
+    /// the executable 20 KB.
+    pictures: RefCell<Vec<(String, Option<ID2D1Bitmap1>)>>,
 }
 
 fn family_exists(dw: &IDWriteFactory, name: PCWSTR) -> bool {
@@ -207,7 +212,18 @@ impl Gfx {
             )?;
             let brush = dc.CreateSolidColorBrush(&D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }, None)?;
             let fonts = make_fonts(&dw)?;
-            let gfx = Gfx { d2d, dw, dc, swap, _composition: (composition, target, visual), brush, round, fonts, dpi };
+            let gfx = Gfx {
+                d2d,
+                dw,
+                dc,
+                swap,
+                _composition: (composition, target, visual),
+                brush,
+                round,
+                fonts,
+                dpi,
+                pictures: RefCell::new(Vec::new()),
+            };
             gfx.bind_target()?;
             Ok(gfx)
         }
@@ -344,6 +360,38 @@ impl Gfx {
             self.dc.DrawTextLayout(Vector2 { X: r.l, Y: r.t }, &layout, &self.brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
+    }
+
+    /// Draws the picture known as `key` into `r`, asking `make` for its premultiplied BGRA
+    /// pixels (`px`×`px`) the first time. False when there is no picture to draw.
+    pub fn picture(&self, key: &str, px: u32, make: impl FnOnce() -> Option<Vec<u8>>, r: R) -> bool {
+        let mut cache = self.pictures.borrow_mut();
+        let at = match cache.iter().position(|(k, _)| k == key) {
+            Some(at) => at,
+            None => {
+                let bitmap = make().and_then(|pixels| {
+                    let props = D2D1_BITMAP_PROPERTIES1 {
+                        pixelFormat: D2D1_PIXEL_FORMAT {
+                            format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                            alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                        },
+                        dpiX: 96.0,
+                        dpiY: 96.0,
+                        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+                        colorContext: ManuallyDrop::new(None),
+                    };
+                    let size = D2D_SIZE_U { width: px, height: px };
+                    unsafe { self.dc.CreateBitmap(size, Some(pixels.as_ptr() as _), px * 4, &props) }.ok()
+                });
+                cache.push((key.to_string(), bitmap));
+                cache.len() - 1
+            }
+        };
+        let Some(bitmap) = cache[at].1.as_ref() else { return false };
+        unsafe {
+            self.dc.DrawBitmap(bitmap, Some(&r.d2d()), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+        }
+        true
     }
 
     /// A glyph from the system icon font (Segoe Fluent Icons code points).

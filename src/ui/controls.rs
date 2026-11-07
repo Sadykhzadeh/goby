@@ -140,12 +140,12 @@ impl App {
     }
 
     /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
-    pub(super) fn row_card(
+    pub(super) fn row_card<'a>(
         &mut self,
         g: &Gfx,
         y: &mut f32,
         hit: Hit,
-        icon: u16,
+        icon: impl Into<Icon<'a>>,
         title: &str,
         desc: &str,
     ) -> Result<()> {
@@ -153,7 +153,21 @@ impl App {
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
         if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, self.hover == hit && !matches!(hit, Hit::Remove(_)));
-            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0), th.text())?;
+            let spot = R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0);
+            match icon.into() {
+                Icon::Glyph(code) => g.icon(code, Font::Icon16, spot, th.text())?,
+                Icon::Exe(exe) => {
+                    // The program's own icon when its file is known and has one; the
+                    // kind of program (game, chat, browser) as a glyph otherwise.
+                    let px = (20.0 * g.dpi / 96.0).round() as u32;
+                    let path = self.exe_paths.iter().find(|(e, _)| e == exe).map(|(_, p)| p);
+                    let pic = R::new(r.l + 16.0, r.t + 24.0, 20.0, 20.0);
+                    let drawn = path.is_some_and(|p| g.picture(exe, px, || apps::icon_pixels(p, px as i32), pic));
+                    if !drawn {
+                        g.icon(app_glyph(exe), Font::Icon16, spot, th.text())?;
+                    }
+                }
+            }
             let text_w = r.w() - 52.0 - 64.0;
             g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
             g.text(
@@ -190,5 +204,17 @@ impl App {
         }
         *y += 68.0 + CARD_GAP;
         Ok(())
+    }
+}
+
+/// What a settings row shows on its left: a Segoe Fluent glyph, or a program's own icon.
+pub(super) enum Icon<'a> {
+    Glyph(u16),
+    Exe(&'a str),
+}
+
+impl From<u16> for Icon<'_> {
+    fn from(code: u16) -> Self {
+        Icon::Glyph(code)
     }
 }

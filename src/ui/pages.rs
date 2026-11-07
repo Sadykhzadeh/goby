@@ -1,6 +1,7 @@
 //! The three pages and the navigation rail, drawn each frame from the current state.
 
 use super::*;
+use controls::Icon;
 
 impl App {
     pub(super) fn paint(&mut self) -> Result<()> {
@@ -167,13 +168,22 @@ impl App {
         for i in 0..self.settings.routed.len() {
             let exe = self.settings.routed[i].clone();
             let talking = self.app_live.get(i).copied().unwrap_or(false);
-            let desc = match (self.app_state.get(i).copied().unwrap_or(AppState::Waiting), talking) {
-                (AppState::OnGoby, true) => self.t("Слышит Goby прямо сейчас", "Hearing Goby right now"),
-                (AppState::OnGoby, false) => self.t("Запущена и слышит Goby", "Running, hears Goby"),
-                (AppState::Waiting, _) => self.t("Услышит Goby при запуске", "Hears Goby once it starts"),
-                (AppState::Pending, _) => self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic"),
+            let elsewhere = self.app_elsewhere.get(i).cloned().flatten();
+            let desc = match (self.app_state.get(i).copied().unwrap_or(AppState::Waiting), talking, elsewhere) {
+                // Recording, but from a real mic: it chose one in its own settings, and only
+                // switching that to Default lets Windows hand it Goby.
+                (_, false, Some(mic)) => match self.ru {
+                    true => format!("Пишет с «{mic}», а не с Goby: выберите в ней микрофон «По умолчанию»"),
+                    false => format!("Records from {mic}, not Goby: set its microphone to Default"),
+                },
+                (_, true, _) => self.t("Слышит Goby прямо сейчас", "Hearing Goby right now").into(),
+                (AppState::OnGoby, ..) => self.t("Запущена и слышит Goby", "Running, hears Goby").into(),
+                (AppState::Waiting, ..) => self.t("Услышит Goby при запуске", "Hears Goby once it starts").into(),
+                (AppState::Pending, ..) => {
+                    self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic").into()
+                }
             };
-            self.row_card(g, &mut y, Hit::Remove(i), app_glyph(&exe), &apps::display_name(&exe), desc)?;
+            self.row_card(g, &mut y, Hit::Remove(i), Icon::Exe(&exe), &apps::display_name(&exe), &desc)?;
         }
         let hint = if self.settings.routed.is_empty() {
             self.t("Например CS2 или Discord", "For example CS2 or Discord")
@@ -192,7 +202,7 @@ impl App {
                     true => self.t("Слушает микрофон сейчас · добавить", "Listening now · add"),
                     false => self.t("Добавить, чтобы слышала Goby", "Add it to hear Goby"),
                 };
-                self.row_card(g, &mut y, Hit::Offer(i), app_glyph(&exe), &name, desc)?;
+                self.row_card(g, &mut y, Hit::Offer(i), Icon::Exe(&exe), &name, desc)?;
             }
         }
 

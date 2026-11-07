@@ -2,12 +2,19 @@
 //! (Settings > Privacy > Microphone > recent activity); we read the same registry keys.
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, MAX_PATH};
+use windows::Win32::Graphics::Gdi::{
+    BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits, ReleaseDC,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_QWORD, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
 };
+use windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
+use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO, PrivateExtractIconsW};
 use windows::core::{PWSTR, w};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +23,8 @@ pub struct MicApp {
     pub exe: String,
     /// What to show: the executable name without ".exe".
     pub name: String,
+    /// Where the executable lives, for its icon.
+    pub path: String,
     /// FILETIME of the last time it opened the mic.
     pub last_used: u64,
     /// It has the mic open right now.
@@ -115,7 +124,13 @@ pub fn recent() -> Vec<MicApp> {
             };
             let start = read(w!("LastUsedTimeStart")).unwrap_or(0);
             let stop = read(w!("LastUsedTimeStop")).unwrap_or(1);
-            found.push(MicApp { name: display_name(&exe), exe, last_used: start, active: start > 0 && stop == 0 });
+            found.push(MicApp {
+                name: display_name(&exe),
+                path: key.replace('#', "\\"),
+                exe,
+                last_used: start,
+                active: start > 0 && stop == 0,
+            });
         }
         let _ = RegCloseKey(root);
     }
@@ -144,12 +159,83 @@ pub fn pids_of(snapshot: &[(String, u32)], exe: &str) -> Vec<u32> {
     snapshot.iter().filter(|(name, _)| name == exe).map(|(_, pid)| *pid).collect()
 }
 
+/// The full path of a running process's executable.
+pub fn exe_path(pid: u32) -> Option<String> {
+    unsafe {
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 1024];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+        let _ = CloseHandle(process);
+        ok.then(|| String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+/// A program's own icon at `size`×`size` pixels, as premultiplied BGRA rows, or `None`
+/// when the file has no icon to give.
+pub fn icon_pixels(path: &str, size: i32) -> Option<Vec<u8>> {
+    unsafe {
+        let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+        let mut name = [0u16; 260];
+        let n = wide.len().min(name.len());
+        name[..n].copy_from_slice(&wide[..n]);
+        let mut icon = HICON::default();
+        if PrivateExtractIconsW(&name, 0, size, size, Some(std::slice::from_mut(&mut icon)), None, 0) == 0
+            || icon.is_invalid()
+        {
+            return None;
+        }
+        let mut info = ICONINFO::default();
+        let got = GetIconInfo(icon, &mut info).is_ok();
+        let mut pixels = vec![0u8; (size * size * 4) as usize];
+        let mut header = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: size,
+                biHeight: -size,
+                biPlanes: 1,
+                biBitCount: 32,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let dc = GetDC(None);
+        let rows = if got {
+            GetDIBits(dc, info.hbmColor, 0, size as u32, Some(pixels.as_mut_ptr() as _), &mut header, DIB_RGB_COLORS)
+        } else {
+            0
+        };
+        // Old icons carry no alpha at all and use a separate mask for transparency.
+        if rows > 0 && pixels.chunks_exact(4).all(|p| p[3] == 0) {
+            let mut mask = vec![0u8; (size * size * 4) as usize];
+            GetDIBits(dc, info.hbmMask, 0, size as u32, Some(mask.as_mut_ptr() as _), &mut header, DIB_RGB_COLORS);
+            for (p, m) in pixels.chunks_exact_mut(4).zip(mask.chunks_exact(4)) {
+                p[3] = if m[0] == 0 { 255 } else { 0 };
+            }
+        }
+        ReleaseDC(None, dc);
+        let _ = DeleteObject(info.hbmColor.into());
+        let _ = DeleteObject(info.hbmMask.into());
+        let _ = DestroyIcon(icon);
+        if rows == 0 {
+            return None;
+        }
+        for p in pixels.chunks_exact_mut(4) {
+            let a = p[3] as u32;
+            for c in &mut p[..3] {
+                *c = (*c as u32 * a / 255) as u8;
+            }
+        }
+        Some(pixels)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn app(exe: &str, last_used: u64, active: bool) -> MicApp {
-        MicApp { exe: exe.into(), name: display_name(exe), last_used, active }
+        MicApp { exe: exe.into(), name: display_name(exe), path: String::new(), last_used, active }
     }
 
     #[test]

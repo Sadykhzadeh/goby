@@ -313,8 +313,12 @@ struct App {
     /// chosen program, in `settings.routed` order.
     mic_apps: Vec<apps::MicApp>,
     app_state: Vec<AppState>,
-    /// Each chosen program has the mic open right now, in `settings.routed` order.
+    /// Each chosen program records from Goby right now, in `settings.routed` order.
     app_live: Vec<bool>,
+    /// The real microphone a chosen program records from instead, when it picks its own.
+    app_elsewhere: Vec<Option<String>>,
+    /// Where each program seen so far lives (lower-case exe name to full path), for icons.
+    exe_paths: Vec<(String, String)>,
     apps_at: Instant,
     /// Processes already pinned to Goby, so each is asked only once, and the cable path
     /// they were pinned to: a different cable starts the cache over.
@@ -510,6 +514,8 @@ impl App {
             mic_apps: Vec::new(),
             app_state: Vec::new(),
             app_live: Vec::new(),
+            app_elsewhere: Vec::new(),
+            exe_paths: Vec::new(),
             apps_at: Instant::now(),
             pinned: Vec::new(),
             pinned_to: String::new(),
@@ -631,11 +637,10 @@ impl App {
             self.look_for_cable();
         }
         let recent = apps::recent();
-        let live: Vec<bool> =
-            self.settings.routed.iter().map(|exe| recent.iter().any(|a| a.exe == *exe && a.active)).collect();
-        if live != self.app_live {
-            self.app_live = live;
-            self.dirty = true;
+        for app in recent.iter().filter(|a| !a.path.is_empty()) {
+            if !self.exe_paths.iter().any(|(e, _)| *e == app.exe) {
+                self.exe_paths.push((app.exe.clone(), app.path.clone()));
+            }
         }
         let offered: Vec<apps::MicApp> =
             recent.into_iter().filter(|a| !self.settings.routed.contains(&a.exe)).take(15).collect();
@@ -658,6 +663,30 @@ impl App {
         let idle = self.settings.routed.is_empty() && self.settings.unroute.is_empty();
         let snapshot = if idle { Vec::new() } else { apps::processes() };
         self.pinned.retain(|pid| snapshot.iter().any(|(_, p)| p == pid));
+
+        // Which microphone each chosen program really records from at this moment: the
+        // per-app default only reaches programs that use the default, and one with its own
+        // microphone setting is the case worth saying out loud.
+        // A chosen program Windows has not listed yet still has an icon on disk.
+        for exe in &self.settings.routed {
+            if !self.exe_paths.iter().any(|(e, _)| e == exe)
+                && let Some(path) = apps::pids_of(&snapshot, exe).into_iter().find_map(apps::exe_path)
+            {
+                self.exe_paths.push((exe.clone(), path));
+            }
+        }
+        let sessions = if self.settings.routed.is_empty() { Vec::new() } else { engine::recording() };
+        let (mut live, mut elsewhere) = (Vec::new(), Vec::new());
+        for exe in &self.settings.routed {
+            let pids = apps::pids_of(&snapshot, exe);
+            let mine = sessions.iter().filter(|(pid, _)| pids.contains(pid));
+            live.push(mine.clone().any(|(_, ep)| ep.id == record));
+            elsewhere.push(mine.into_iter().find(|(_, ep)| ep.id != record).map(|(_, ep)| short(&ep.name).to_string()));
+        }
+        if live != self.app_live || elsewhere != self.app_elsewhere {
+            (self.app_live, self.app_elsewhere) = (live, elsewhere);
+            self.dirty = true;
+        }
 
         let mut states = Vec::with_capacity(self.settings.routed.len());
         for exe in &self.settings.routed {
