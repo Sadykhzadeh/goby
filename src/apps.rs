@@ -14,19 +14,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO, PrivateExtractIconsW};
 use windows::core::{PWSTR, w};
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct MicApp {
-    /// Lower-case executable name, e.g. "cs2.exe": stable across updates that move the folder.
-    pub exe: String,
-    /// What to show: the executable name without ".exe".
-    pub name: String,
-    /// Where the executable lives, for its icon.
-    pub path: String,
-    /// FILETIME of the last time it opened the mic.
-    pub last_used: u64,
-    /// It has the mic open right now.
-    pub active: bool,
-}
+use crate::host::{MicApp, display_name};
 
 /// Helpers and system processes that use the mic on someone else's behalf.
 const IGNORED: [&str; 4] = ["rundll32.exe", "svchost.exe", "goby.exe", "audiodg.exe"];
@@ -35,42 +23,6 @@ const IGNORED: [&str; 4] = ["rundll32.exe", "svchost.exe", "goby.exe", "audiodg.
 pub fn exe_of(key: &str) -> Option<String> {
     let file = key.rsplit('#').next()?.to_ascii_lowercase();
     file.ends_with(".exe").then_some(file)
-}
-
-/// What people call a program: the product name for well-known ones, whose executables
-/// are often cryptic (`cs2.exe`, `obs64.exe`), otherwise the file name with a capital.
-pub fn display_name(exe: &str) -> String {
-    let known = match exe {
-        "cs2.exe" => "Counter-Strike 2",
-        "dota2.exe" => "Dota 2",
-        "r5apex.exe" | "r5apex_dx12.exe" => "Apex Legends",
-        "valorant-win64-shipping.exe" => "Valorant",
-        "fortniteclient-win64-shipping.exe" => "Fortnite",
-        "robloxplayerbeta.exe" => "Roblox",
-        "javaw.exe" => "Minecraft",
-        "discord.exe" => "Discord",
-        "telegram.exe" => "Telegram",
-        "teams.exe" | "ms-teams.exe" => "Microsoft Teams",
-        "zoom.exe" => "Zoom",
-        "skype.exe" => "Skype",
-        "whatsapp.exe" => "WhatsApp",
-        "obs64.exe" | "obs32.exe" => "OBS Studio",
-        "chrome.exe" => "Google Chrome",
-        "msedge.exe" => "Microsoft Edge",
-        "firefox.exe" => "Firefox",
-        "steam.exe" | "steamwebhelper.exe" => "Steam",
-        "nvidia broadcast.exe" => "NVIDIA Broadcast",
-        _ => "",
-    };
-    if !known.is_empty() {
-        return known.to_string();
-    }
-    // ASCII only: full Unicode case mapping would add 17 KB of tables for one letter.
-    let mut name = exe.strip_suffix(".exe").unwrap_or(exe).to_string();
-    if let Some(first) = name.get_mut(..1) {
-        first.make_ascii_uppercase();
-    }
-    name
 }
 
 /// Newest entry per executable, most recently used first, without system helpers.

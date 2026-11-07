@@ -1,7 +1,7 @@
 //! Drawing: Direct2D 1.1 into a DirectComposition swap chain with alpha, so the system Mica
 //! backdrop shows through wherever the window is transparent. All coordinates are DIPs.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -18,55 +18,14 @@ use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{BOOL, Interface, PCWSTR, Result, w};
 use windows_numerics::{Matrix3x2, Vector2};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct R {
-    pub l: f32,
-    pub t: f32,
-    pub r: f32,
-    pub b: f32,
+use crate::draw::{Align, Canvas, Color, Font, R};
+
+fn rect(r: R) -> D2D_RECT_F {
+    D2D_RECT_F { left: r.l, top: r.t, right: r.r, bottom: r.b }
 }
 
-impl R {
-    pub const fn new(l: f32, t: f32, w: f32, h: f32) -> R {
-        R { l, t, r: l + w, b: t + h }
-    }
-    pub fn w(&self) -> f32 {
-        self.r - self.l
-    }
-    pub fn h(&self) -> f32 {
-        self.b - self.t
-    }
-    pub fn has(&self, (x, y): (f32, f32)) -> bool {
-        x >= self.l && x < self.r && y >= self.t && y < self.b
-    }
-    pub fn inset(&self, d: f32) -> R {
-        R { l: self.l + d, t: self.t + d, r: self.r - d, b: self.b - d }
-    }
-    pub fn intersects(&self, o: &R) -> bool {
-        self.l < o.r && o.l < self.r && self.t < o.b && o.t < self.b
-    }
-    fn d2d(&self) -> D2D_RECT_F {
-        D2D_RECT_F { left: self.l, top: self.t, right: self.r, bottom: self.b }
-    }
-}
-
-/// The Windows 11 type ramp (sizes in DIPs) plus the system icon font.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Font {
-    Caption,
-    Body,
-    Strong,
-    Subtitle,
-    Title,
-    Icon16,
-    Icon12,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Align {
-    Start,
-    Center,
-    End,
+fn color(c: Color) -> D2D1_COLOR_F {
+    D2D1_COLOR_F { r: c.r, g: c.g, b: c.b, a: c.a }
 }
 
 struct Fonts {
@@ -93,6 +52,8 @@ pub struct Gfx {
     /// A short list rather than a map: there are a dozen at most, and a HashMap costs
     /// the executable 20 KB.
     pictures: RefCell<Vec<(String, Option<ID2D1Bitmap1>)>>,
+    /// The first drawing error of the frame, reported by `end`.
+    error: Cell<Option<windows::core::Error>>,
 }
 
 fn family_exists(dw: &IDWriteFactory, name: PCWSTR) -> bool {
@@ -223,6 +184,7 @@ impl Gfx {
                 fonts,
                 dpi,
                 pictures: RefCell::new(Vec::new()),
+                error: Cell::new(None),
             };
             gfx.bind_target()?;
             Ok(gfx)
@@ -265,11 +227,16 @@ impl Gfx {
         self.bind_target()
     }
 
-    pub fn begin(&self, background: D2D1_COLOR_F) {
+    pub fn begin(&self, background: Color) {
         unsafe {
             self.dc.BeginDraw();
-            self.dc.Clear(Some(&background));
+            self.dc.Clear(Some(&color(background)));
         }
+    }
+
+    /// The first error drawing ran into this frame, if any.
+    pub fn take_error(&self) -> Result<()> {
+        self.error.take().map_or(Ok(()), Err)
     }
 
     /// Finishes the frame and hands it to the compositor. Errors mean the device is gone.
@@ -280,41 +247,14 @@ impl Gfx {
         }
     }
 
-    pub fn fill(&self, r: R, radius: f32, c: D2D1_COLOR_F) {
-        unsafe {
-            self.brush.SetColor(&c);
-            self.dc.FillRoundedRectangle(
-                &D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius },
-                &self.brush,
-            );
+    fn keep(&self, r: Result<()>) {
+        if let Err(e) = r {
+            let first = self.error.take().unwrap_or(e);
+            self.error.set(Some(first));
         }
     }
 
-    /// A stroke drawn inside `r`, so a 1 px border sits on the pixel grid.
-    pub fn stroke(&self, r: R, radius: f32, c: D2D1_COLOR_F, width: f32) {
-        unsafe {
-            self.brush.SetColor(&c);
-            let half = r.inset(width / 2.0);
-            self.dc.DrawRoundedRectangle(
-                &D2D1_ROUNDED_RECT { rect: half.d2d(), radiusX: radius, radiusY: radius },
-                &self.brush,
-                width,
-                None,
-            );
-        }
-    }
-
-    pub fn circle(&self, x: f32, y: f32, radius: f32, c: D2D1_COLOR_F) {
-        unsafe {
-            self.brush.SetColor(&c);
-            self.dc.FillEllipse(
-                &D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius },
-                &self.brush,
-            );
-        }
-    }
-
-    pub fn line(&self, pts: &[(f32, f32)], c: D2D1_COLOR_F, width: f32) -> Result<()> {
+    fn try_line(&self, pts: &[(f32, f32)], c: Color, width: f32) -> Result<()> {
         if pts.len() < 2 {
             return Ok(());
         }
@@ -327,7 +267,7 @@ impl Gfx {
             }
             sink.EndFigure(D2D1_FIGURE_END_OPEN);
             sink.Close()?;
-            self.brush.SetColor(&c);
+            self.brush.SetColor(&color(c));
             self.dc.DrawGeometry(&geo, &self.brush, width, &self.round);
         }
         Ok(())
@@ -345,8 +285,7 @@ impl Gfx {
         }
     }
 
-    /// One line of text, vertically centred in `r`.
-    pub fn text(&self, s: &str, f: Font, r: R, align: Align, c: D2D1_COLOR_F) -> Result<()> {
+    fn try_text(&self, s: &str, f: Font, r: R, align: Align, c: Color) -> Result<()> {
         unsafe {
             let wide: Vec<u16> = s.encode_utf16().collect();
             let layout = self.dw.CreateTextLayout(&wide, self.format(f), r.w().max(1.0), r.h().max(1.0))?;
@@ -356,15 +295,70 @@ impl Gfx {
                 Align::End => DWRITE_TEXT_ALIGNMENT_TRAILING,
             })?;
             layout.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            self.brush.SetColor(&c);
+            self.brush.SetColor(&color(c));
             self.dc.DrawTextLayout(Vector2 { X: r.l, Y: r.t }, &layout, &self.brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
         }
         Ok(())
     }
 
-    /// Draws the picture known as `key` into `r`, asking `make` for its premultiplied BGRA
-    /// pixels (`px`×`px`) the first time. False when there is no picture to draw.
-    pub fn picture(&self, key: &str, px: u32, make: impl FnOnce() -> Option<Vec<u8>>, r: R) -> bool {
+    fn try_measure(&self, s: &str, f: Font) -> Result<f32> {
+        unsafe {
+            let wide: Vec<u16> = s.encode_utf16().collect();
+            let layout = self.dw.CreateTextLayout(&wide, self.format(f), 4096.0, 256.0)?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m)?;
+            Ok(m.width)
+        }
+    }
+}
+
+impl Canvas for Gfx {
+    fn dpi(&self) -> f32 {
+        self.dpi
+    }
+
+    fn fill(&self, r: R, radius: f32, c: Color) {
+        unsafe {
+            self.brush.SetColor(&color(c));
+            self.dc.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT { rect: rect(r), radiusX: radius, radiusY: radius },
+                &self.brush,
+            );
+        }
+    }
+
+    fn stroke(&self, r: R, radius: f32, c: Color, width: f32) {
+        unsafe {
+            self.brush.SetColor(&color(c));
+            let half = r.inset(width / 2.0);
+            self.dc.DrawRoundedRectangle(
+                &D2D1_ROUNDED_RECT { rect: rect(half), radiusX: radius, radiusY: radius },
+                &self.brush,
+                width,
+                None,
+            );
+        }
+    }
+
+    fn circle(&self, x: f32, y: f32, radius: f32, c: Color) {
+        unsafe {
+            self.brush.SetColor(&color(c));
+            self.dc.FillEllipse(
+                &D2D1_ELLIPSE { point: Vector2 { X: x, Y: y }, radiusX: radius, radiusY: radius },
+                &self.brush,
+            );
+        }
+    }
+
+    fn line(&self, pts: &[(f32, f32)], c: Color, width: f32) {
+        self.keep(self.try_line(pts, c, width));
+    }
+
+    fn text(&self, s: &str, f: Font, r: R, align: Align, c: Color) {
+        self.keep(self.try_text(s, f, r, align, c));
+    }
+
+    fn picture(&self, key: &str, px: u32, make: &mut dyn FnMut() -> Option<Vec<u8>>, r: R) -> bool {
         let mut cache = self.pictures.borrow_mut();
         let at = match cache.iter().position(|(k, _)| k == key) {
             Some(at) => at,
@@ -389,36 +383,32 @@ impl Gfx {
         };
         let Some(bitmap) = cache[at].1.as_ref() else { return false };
         unsafe {
-            self.dc.DrawBitmap(bitmap, Some(&r.d2d()), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
+            self.dc.DrawBitmap(bitmap, Some(&rect(r)), 1.0, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, None, None);
         }
         true
     }
 
     /// A glyph from the system icon font (Segoe Fluent Icons code points).
-    pub fn icon(&self, code: u16, f: Font, r: R, c: D2D1_COLOR_F) -> Result<()> {
+    fn icon(&self, code: u16, f: Font, r: R, c: Color) {
         self.text(&String::from_utf16_lossy(&[code]), f, r, Align::Center, c)
     }
 
-    pub fn measure(&self, s: &str, f: Font) -> Result<f32> {
-        unsafe {
-            let wide: Vec<u16> = s.encode_utf16().collect();
-            let layout = self.dw.CreateTextLayout(&wide, self.format(f), 4096.0, 256.0)?;
-            let mut m = DWRITE_TEXT_METRICS::default();
-            layout.GetMetrics(&mut m)?;
-            Ok(m.width)
-        }
+    fn measure(&self, s: &str, f: Font) -> f32 {
+        let w = self.try_measure(s, f);
+        let width = *w.as_ref().unwrap_or(&0.0);
+        self.keep(w.map(|_| ()));
+        width
     }
 
-    pub fn clip(&self, r: R) {
-        unsafe { self.dc.PushAxisAlignedClip(&r.d2d(), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) }
+    fn clip(&self, r: R) {
+        unsafe { self.dc.PushAxisAlignedClip(&rect(r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE) }
     }
 
-    pub fn unclip(&self) {
+    fn unclip(&self) {
         unsafe { self.dc.PopAxisAlignedClip() }
     }
 
-    /// Draws what follows `dy` lower and at `opacity`, until `unshift`: a page coming in.
-    pub fn shift(&self, dy: f32, opacity: f32) {
+    fn shift(&self, dy: f32, opacity: f32) {
         unsafe {
             self.dc.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: dy });
             let params = D2D1_LAYER_PARAMETERS1 {
@@ -434,43 +424,10 @@ impl Gfx {
         }
     }
 
-    pub fn unshift(&self) {
+    fn unshift(&self) {
         unsafe {
             self.dc.PopLayer();
             self.dc.SetTransform(&Matrix3x2 { M11: 1.0, M22: 1.0, ..Default::default() });
         }
     }
-}
-
-/// Icon code points from Segoe Fluent Icons (same in Segoe MDL2 Assets).
-pub mod glyph {
-    pub const MIC: u16 = 0xE720;
-    pub const SPEAKERS: u16 = 0xE7F5;
-    pub const HEADPHONE: u16 = 0xE7F6;
-    pub const CHEVRON_DOWN: u16 = 0xE70D;
-    pub const CHEVRON_UP: u16 = 0xE70E;
-    pub const MORE: u16 = 0xE712;
-    pub const CHECK: u16 = 0xE73E;
-    pub const UPDATE: u16 = 0xE896;
-    pub const OPEN: u16 = 0xE8A7;
-    pub const CHAT: u16 = 0xE8BD;
-    pub const ADD: u16 = 0xE710;
-    pub const INFO: u16 = 0xE946;
-    pub const REMOVE: u16 = 0xE711;
-    pub const GLOBE: u16 = 0xE774;
-    pub const VIDEO: u16 = 0xE714;
-    pub const GAME: u16 = 0xE7FC;
-    pub const SPEED: u16 = 0xEC4A;
-    pub const VOLUME: u16 = 0xE767;
-    pub const TONE: u16 = 0xE8D6;
-    pub const GATE: u16 = 0xE9E9;
-    pub const MIX: u16 = 0xE9D9;
-    pub const MINIMIZE: u16 = 0xE921;
-    pub const POWER: u16 = 0xE7E8;
-    pub const KEYBOARD: u16 = 0xE765;
-    pub const SETTINGS: u16 = 0xE713;
-    pub const VOICES: u16 = 0xE76E;
-    pub const APPS: u16 = 0xE71D;
-    pub const STAR: u16 = 0xE734;
-    pub const STAR_FILLED: u16 = 0xE735;
 }

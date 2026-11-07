@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod apps;
+#[cfg(test)]
+mod demo;
+mod draw;
 mod dsp;
 mod engine;
 mod fx;
 mod gfx;
+mod host;
 mod hotkeys;
 mod icon;
 mod install;

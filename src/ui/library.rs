@@ -2,7 +2,7 @@
 
 use super::*;
 
-impl App {
+impl<H: Host> App<H> {
     /// Saved voices first, then the starred ones, each in the order it was added.
     pub(super) fn favorites(&self) -> Vec<Fav> {
         let saved = (0..self.settings.presets.len())
@@ -62,7 +62,7 @@ impl App {
             self.settings.enabled = true;
         }
         self.apply();
-        self.settings.save();
+        self.save();
         self.dirty = true;
     }
 
@@ -84,14 +84,14 @@ impl App {
             volume: s.volume,
         };
         self.settings.presets.push(preset);
-        self.settings.save();
+        self.save();
         self.dirty = true;
     }
 
     pub(super) fn drop_preset(&mut self, p: usize) {
         if p < self.settings.presets.len() {
             self.settings.presets.remove(p);
-            self.settings.save();
+            self.save();
             self.hover = Hit::None;
             self.dirty = true;
         }
@@ -107,7 +107,7 @@ impl App {
             true => self.settings.favorites.retain(|f| f != id),
             false => self.settings.favorites.push(id.to_string()),
         }
-        self.settings.save();
+        self.save();
         self.dirty = true;
     }
 

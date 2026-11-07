@@ -22,6 +22,7 @@ use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEve
 use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
 use crate::dsp::Voice;
+use crate::host::{Endpoint, SCOPE_LEN};
 use crate::lang::pick;
 use crate::mic::Mic;
 use crate::ring::{Consumer, Producer, ring};
@@ -31,7 +32,6 @@ pub const RATE: u32 = 48_000;
 /// Ring fill the outputs steer towards. Larger is safer, smaller is snappier.
 const TARGET_MS: f64 = 12.0;
 const MAX_BLOCK: usize = 4096;
-pub const SCOPE_LEN: usize = 2048;
 
 /// Lock-free knobs, meters and scope taps shared between the UI and the audio threads.
 pub struct Shared {
@@ -119,12 +119,6 @@ impl Shared {
             voiced[i] = f32::from_bits(self.scope_out[j].load(Relaxed));
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Endpoint {
-    pub id: String,
-    pub name: String,
 }
 
 fn enumerator() -> WinResult<IMMDeviceEnumerator> {

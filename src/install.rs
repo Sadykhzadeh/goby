@@ -416,7 +416,7 @@ pub fn uninstall(quiet: bool) {
     for exe in settings.routed.iter().chain(&settings.unroute) {
         let pids = apps::pids_of(&snapshot, exe);
         if !pids.iter().any(|pid| policy::route_app(*pid, None).is_ok()) {
-            left.push(apps::display_name(exe));
+            left.push(crate::host::display_name(exe));
         }
     }
     // Give the cable its VB-Audio names back.

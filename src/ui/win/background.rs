@@ -1,8 +1,25 @@
-//! Living in the tray: the notification icon, its menu, closing to it, and the hotkeys.
+//! Living in the tray: the notification icon, its menu, and closing to it.
 
-use super::*;
+use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
+use windows::Win32::UI::WindowsAndMessaging::{
+    IsIconic, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+};
 
-impl App {
+use super::{Win, make_icon};
+use crate::ui::Fav;
+use crate::{icon, tray, voices};
+
+/// What a line of the tray icon's menu does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum TrayAct {
+    None,
+    Open,
+    Pick(Fav),
+    Effect,
+    Quit,
+}
+
+impl Win {
     /// What the icon says on hover: the voice that is on, or that the effect is off.
     pub(super) fn tip(&self) -> String {
         let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
@@ -15,14 +32,26 @@ impl App {
     pub(super) fn add_tray_icon(&mut self) {
         let size = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, self.dpi as u32) };
         let Some(icon) = make_icon(size, icon::RGB) else { return };
-        self.tray_tip = self.tip();
-        self.tray_icon = tray::add(self.hwnd, icon, &self.tray_tip);
+        self.host.tray_tip = self.tip();
+        self.host.tray_icon = tray::add(self.host.hwnd, icon, &self.host.tray_tip);
+    }
+
+    /// Keeps the icon's tip on the voice that is playing.
+    pub(super) fn update_tip(&mut self) {
+        if self.host.tray_icon {
+            let tip = self.tip();
+            if tip != self.host.tray_tip {
+                tray::set_tip(self.host.hwnd, &tip);
+                self.host.tray_tip = tip;
+            }
+        }
     }
 
     pub(super) fn show(&mut self) {
         unsafe {
-            let _ = ShowWindow(self.hwnd, if IsIconic(self.hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
-            let _ = SetForegroundWindow(self.hwnd);
+            let hwnd = self.host.hwnd;
+            let _ = ShowWindow(hwnd, if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+            let _ = SetForegroundWindow(hwnd);
         }
         self.dirty = true;
     }
@@ -30,18 +59,18 @@ impl App {
     /// Closing the window: it goes to the tray while the icon is there to bring it back.
     /// True when it should be destroyed instead, which frees `self`, so the caller does it.
     pub(super) fn close(&mut self) -> bool {
-        if !self.settings.tray || !self.tray_icon {
+        if !self.settings.tray || !self.host.tray_icon {
             return true;
         }
         unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
+            let _ = ShowWindow(self.host.hwnd, SW_HIDE);
         }
-        self.gfx = None;
+        self.host.gfx = None;
         if !self.settings.tray_told {
             self.settings.tray_told = true;
-            self.settings.save();
+            self.save();
             tray::notify(
-                self.hwnd,
+                self.host.hwnd,
                 self.t("Goby работает в трее", "Goby is still running"),
                 self.t(
                     "Голос остаётся включённым. Щёлкните значок, чтобы открыть окно, или правой кнопкой, чтобы выйти.",
@@ -85,39 +114,12 @@ impl App {
             TrayAct::Effect => {
                 self.settings.enabled = !self.settings.enabled;
                 self.apply();
-                self.settings.save();
+                self.save();
                 self.dirty = true;
             }
             TrayAct::Quit => return true,
             TrayAct::None => {}
         }
         false
-    }
-
-    pub(super) fn use_hotkeys(&mut self) {
-        hotkeys::unregister(self.hwnd);
-        self.hotkeys_ok = !self.settings.hotkeys || hotkeys::register(self.hwnd);
-    }
-
-    pub(super) fn hotkey(&mut self, action: hotkeys::Action) {
-        let step = match action {
-            hotkeys::Action::Toggle => {
-                self.settings.enabled = !self.settings.enabled;
-                self.apply();
-                self.settings.save();
-                self.dirty = true;
-                return;
-            }
-            hotkeys::Action::Next => 1,
-            hotkeys::Action::Previous => -1,
-        };
-        // Favourites when there are any, otherwise every voice but Off, which the toggle covers.
-        let mut list = self.favorites();
-        if list.is_empty() {
-            list = (1..voices::ALL.len()).map(Fav::Voice).collect();
-        }
-        if let Some(f) = hotkeys::step_in(&list, Some(self.current()), step) {
-            self.choose(f, true);
-        }
     }
 }

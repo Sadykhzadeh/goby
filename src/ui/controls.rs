@@ -1,21 +1,21 @@
-//! WinUI-style controls drawn with Direct2D: cards, toggles, sliders and scrollbars.
+//! WinUI-style controls: cards, toggles, sliders and scrollbars.
 
 use super::*;
 
-impl App {
-    pub(super) fn card(&self, g: &Gfx, r: R, radius: f32, hovered: bool) {
+impl<H: Host> App<H> {
+    pub(super) fn card(&self, g: &dyn Canvas, r: R, radius: f32, hovered: bool) {
         let th = &self.theme;
         g.fill(r, radius, if hovered { th.control_hover() } else { th.card() });
         g.stroke(r, radius, th.card_stroke(), 1.0);
     }
 
-    pub(super) fn toggle(&self, g: &Gfx, x: f32, y: f32, which: Switch) {
+    pub(super) fn toggle(&self, g: &dyn Canvas, x: f32, y: f32, which: Switch) {
         let t = self.switches[which as usize].value;
         self.toggle_at(g, x, y, t, self.hover == Hit::Toggle(which));
     }
 
     /// WinUI ToggleSwitch: 40x20 track, 12 px knob that slides and recolours.
-    pub(super) fn toggle_at(&self, g: &Gfx, x: f32, y: f32, t: f32, hovered: bool) {
+    pub(super) fn toggle_at(&self, g: &dyn Canvas, x: f32, y: f32, t: f32, hovered: bool) {
         let th = &self.theme;
         let track = R::new(x, y, 40.0, 20.0);
         if t < 1.0 {
@@ -31,7 +31,7 @@ impl App {
     }
 
     /// WinUI Slider: 4 px rail, accent fill from the origin, raised thumb with an accent dot.
-    pub(super) fn slider(&mut self, g: &Gfx, k: Knob, track: R) {
+    pub(super) fn slider(&mut self, g: &dyn Canvas, k: Knob, track: R) {
         let th = self.theme;
         let (lo, hi, _, _) = k.range();
         let origin = if k == Knob::Tone { 0.0 } else { lo };
@@ -67,7 +67,7 @@ impl App {
     }
 
     /// Thin overlay scrollbar, wider while hovered or dragged, like WinUI's.
-    pub(super) fn scrollbar(&mut self, g: &Gfx, view: R, scroll: f32, max: f32, pane: Pane) {
+    pub(super) fn scrollbar(&mut self, g: &dyn Canvas, view: R, scroll: f32, max: f32, pane: Pane) {
         if max <= 0.0 {
             return;
         }
@@ -83,19 +83,18 @@ impl App {
     }
 
     /// SettingsCard with an icon, a title and a value, and a slider underneath.
-    pub(super) fn slider_card(&mut self, g: &Gfx, y: &mut f32, k: Knob, icon: u16, title: &str) -> Result<()> {
+    pub(super) fn slider_card(&mut self, g: &dyn Canvas, y: &mut f32, k: Knob, icon: u16, title: &str) {
         let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 84.0);
         if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, false);
-            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text())?;
-            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 12.0, r.w() - 140.0, 24.0), Align::Start, th.text())?;
+            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text());
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 12.0, r.w() - 140.0, 24.0), Align::Start, th.text());
             let value = R::new(r.r - 96.0, r.t + 12.0, 80.0, 24.0);
-            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary())?;
+            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary());
             self.slider(g, k, R::new(r.l + 26.0, r.t + 48.0, r.w() - 52.0, 24.0));
         }
         *y += 84.0 + CARD_GAP;
-        Ok(())
     }
 
     /// One step of a setup: its number in a circle, a check mark once done, and the
@@ -103,14 +102,14 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn step_card(
         &mut self,
-        g: &Gfx,
+        g: &dyn Canvas,
         y: &mut f32,
         n: usize,
         done: bool,
         hit: Hit,
         title: &str,
         desc: &str,
-    ) -> Result<()> {
+    ) {
         let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
         if r.intersects(&self.lay.pane) {
@@ -119,64 +118,64 @@ impl App {
             let mark = R::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
             if done {
                 g.circle(cx, cy, 12.0, th.accent());
-                g.icon(glyph::CHECK, Font::Icon12, mark, th.on_accent())?;
+                g.icon(glyph::CHECK, Font::Icon12, mark, th.on_accent());
             } else {
                 g.circle(cx, cy, 12.0, th.strong_stroke());
                 g.circle(cx, cy, 11.0, th.card());
-                g.text(&n.to_string(), Font::Strong, mark, Align::Center, th.text())?;
+                g.text(&n.to_string(), Font::Strong, mark, Align::Center, th.text());
             }
             let text_w = r.w() - 52.0 - 64.0;
-            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text());
             let desc_r = R::new(r.l + 52.0, r.t + 35.0, text_w, 18.0);
-            g.text(desc, Font::Caption, desc_r, Align::Start, th.text_secondary())?;
+            g.text(desc, Font::Caption, desc_r, Align::Start, th.text_secondary());
             if hit != Hit::None {
-                g.icon(glyph::OPEN, Font::Icon12, R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0), th.text_secondary())?;
+                g.icon(glyph::OPEN, Font::Icon12, R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0), th.text_secondary());
                 let visible = R { t: r.t.max(self.lay.pane.t), b: r.b.min(self.lay.pane.b), ..r };
                 self.hits.push((visible, hit));
             }
         }
         *y += 68.0 + CARD_GAP;
-        Ok(())
     }
 
     /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
     pub(super) fn row_card<'a>(
         &mut self,
-        g: &Gfx,
+        g: &dyn Canvas,
         y: &mut f32,
         hit: Hit,
         icon: impl Into<Icon<'a>>,
         title: &str,
         desc: &str,
-    ) -> Result<()> {
+    ) {
         let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
         if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, self.hover == hit && !matches!(hit, Hit::Remove(_)));
             let spot = R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0);
             match icon.into() {
-                Icon::Glyph(code) => g.icon(code, Font::Icon16, spot, th.text())?,
+                Icon::Glyph(code) => g.icon(code, Font::Icon16, spot, th.text()),
                 Icon::Exe(exe) => {
                     // The program's own icon when its file is known and has one; the
                     // kind of program (game, chat, browser) as a glyph otherwise.
-                    let px = (20.0 * g.dpi / 96.0).round() as u32;
+                    let px = (20.0 * g.dpi() / 96.0).round() as u32;
                     let path = self.exe_paths.iter().find(|(e, _)| e == exe).map(|(_, p)| p);
                     let pic = R::new(r.l + 16.0, r.t + 24.0, 20.0, 20.0);
-                    let drawn = path.is_some_and(|p| g.picture(exe, px, || apps::icon_pixels(p, px as i32), pic));
+                    let host = &self.host;
+                    let drawn = path.is_some_and(|p| g.picture(exe, px, &mut || host.icon(p, px), pic));
                     if !drawn {
-                        g.icon(app_glyph(exe), Font::Icon16, spot, th.text())?;
+                        g.icon(app_glyph(exe), Font::Icon16, spot, th.text());
                     }
                 }
             }
             let text_w = r.w() - 52.0 - 64.0;
-            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text());
             g.text(
                 desc,
                 Font::Caption,
                 R::new(r.l + 52.0, r.t + 35.0, text_w, 18.0),
                 Align::Start,
                 th.text_secondary(),
-            )?;
+            );
             let side = R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0);
             match hit {
                 Hit::Toggle(s) => self.toggle(g, r.r - 56.0, r.t + 24.0, s),
@@ -186,24 +185,23 @@ impl App {
                     if self.hover == hit {
                         g.fill(b, 4.0, th.control_hover());
                     }
-                    g.icon(glyph::REMOVE, Font::Icon12, b, th.text_secondary())?;
+                    g.icon(glyph::REMOVE, Font::Icon12, b, th.text_secondary());
                 }
-                Hit::AddApp => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
-                Hit::Offer(_) => g.icon(glyph::ADD, Font::Icon12, side, th.text_secondary())?,
+                Hit::AddApp => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary()),
+                Hit::Offer(_) => g.icon(glyph::ADD, Font::Icon12, side, th.text_secondary()),
                 Hit::Advanced => {
                     let chevron = if self.advanced { glyph::CHEVRON_UP } else { glyph::CHEVRON_DOWN };
-                    g.icon(chevron, Font::Icon12, side, th.text_secondary())?
+                    g.icon(chevron, Font::Icon12, side, th.text_secondary())
                 }
-                Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary())?,
+                Hit::Pick(_) => g.icon(glyph::CHEVRON_DOWN, Font::Icon12, side, th.text_secondary()),
                 Hit::None => {}
-                _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary())?,
+                _ => g.icon(glyph::OPEN, Font::Icon12, side, th.text_secondary()),
             }
             let target = if matches!(hit, Hit::Remove(_)) { R::new(r.r - 48.0, r.t + 18.0, 32.0, 32.0) } else { r };
             let visible = R { t: target.t.max(self.lay.pane.t), b: target.b.min(self.lay.pane.b), ..target };
             self.hits.push((visible, hit));
         }
         *y += 68.0 + CARD_GAP;
-        Ok(())
     }
 }
 

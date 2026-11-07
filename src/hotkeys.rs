@@ -6,12 +6,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_NEXT, VK_PRIOR,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Action {
-    Toggle,
-    Next,
-    Previous,
-}
+use crate::host::Hotkey as Action;
 
 const KEYS: [(Action, VIRTUAL_KEY); 3] =
     [(Action::Toggle, VK_G), (Action::Next, VK_NEXT), (Action::Previous, VK_PRIOR)];
@@ -43,36 +38,9 @@ pub fn action(id: usize) -> Option<Action> {
     KEYS.get(id.checked_sub(1)?).map(|(a, _)| *a)
 }
 
-/// The entry `step` places away from `current` in `list`, wrapping around. From outside the
-/// list a step forward lands on its first entry and a step back on its last.
-pub fn step_in<T: Copy + PartialEq>(list: &[T], current: Option<T>, step: isize) -> Option<T> {
-    if list.is_empty() {
-        return None;
-    }
-    let len = list.len() as isize;
-    let at = match current.and_then(|c| list.iter().position(|x| *x == c)) {
-        Some(pos) => (pos as isize + step).rem_euclid(len),
-        None if step > 0 => 0,
-        None => len - 1,
-    };
-    Some(list[at as usize])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn stepping_wraps_around_and_enters_from_either_end() {
-        let list = [1, 2, 3, 4];
-        assert_eq!(step_in(&list, Some(1), 1), Some(2));
-        assert_eq!(step_in(&list, Some(4), 1), Some(1));
-        assert_eq!(step_in(&list, Some(1), -1), Some(4));
-        assert_eq!(step_in(&list, Some(0), 1), Some(1));
-        assert_eq!(step_in(&list, Some(0), -1), Some(4));
-        assert_eq!(step_in(&list, None, 1), Some(1));
-        assert_eq!(step_in::<usize>(&[], Some(1), 1), None);
-    }
 
     #[test]
     fn every_registered_id_has_an_action() {
