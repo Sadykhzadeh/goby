@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.ttf binary
 tests/update/* binary
+# A raw ECDSA signature, not Standard ML source as the .sig extension suggests.
+*.sig binary linguist-detectable=false
