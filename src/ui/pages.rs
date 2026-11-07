@@ -446,6 +446,8 @@ impl<H: Host> App<H> {
         y += 20.0;
 
         section(g, &mut y, tr("settings.general"));
+        let language = self.language_name(&self.settings.lang);
+        self.row_card(g, &mut y, Hit::Pick(Pick::Lang), glyph::GLOBE, tr("settings.language"), &language);
         let tray = tr("settings.tray.title");
         let tray_desc = tr("settings.tray.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc);

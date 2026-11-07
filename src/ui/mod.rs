@@ -70,6 +70,7 @@ pub enum Switch {
 pub enum Pick {
     Mic,
     Out,
+    Lang,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -392,7 +393,7 @@ impl<H: Host> App<H> {
             still: false,
             host,
         };
-        lang::choose("auto", &app.host.language());
+        lang::choose(&app.settings.lang, &app.host.language());
         let s = &app.settings;
         let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys, s.updates];
         for (i, on) in switched.into_iter().enumerate() {

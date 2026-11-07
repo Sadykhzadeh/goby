@@ -38,9 +38,8 @@ impl Canvas for Record {
 }
 
 fn window(settings: Settings, ru: bool, w: f32) -> (App<DemoHost>, Record) {
-    let mut host = DemoHost::default();
-    host.language = if ru { "ru-RU" } else { "en-US" }.into();
-    let mut app = App::new(host, settings, Theme::new(true, [0; 7]), 96.0);
+    let settings = Settings { lang: if ru { "ru" } else { "en" }.into(), ..settings };
+    let mut app = App::new(DemoHost::default(), settings, Theme::new(true, [0; 7]), 96.0);
     app.resize(w, MIN_H);
     let g = Record::default();
     app.draw(&g);
@@ -127,4 +126,28 @@ fn the_scope_redraws_only_when_the_tone_would_change() {
     app.tick();
     app.tick();
     assert!(!app.dirty, "nothing moves, nothing redraws");
+}
+
+#[test]
+fn the_language_menu_switches_the_whole_window_at_once() {
+    let (mut app, _) = window(demo::settings(), false, WIDTH);
+    app.still = true;
+    app.down((app.lay.nav_settings.l + 5.0, app.lay.nav_settings.t + 5.0), false);
+    app.draw(&Record::default());
+    app.wheel((app.lay.pane.l + 5.0, app.lay.pane.t + 5.0), -20.0);
+    app.tick();
+    app.draw(&Record::default());
+    let row = hit(&app, Hit::Pick(Pick::Lang));
+    let menu = app.down((row.l + 5.0, row.t + 5.0), false).expect("a menu");
+    assert_eq!(menu.labels, ["Automatic (English)", "English", "Русский"]);
+    assert_eq!((menu.keys.as_slice(), menu.checked), (&["auto", "en", "ru"].map(String::from)[..], Some(1)));
+    let saves = app.host.saves.get();
+    app.menu_done(menu.pick, Some("ru".into()));
+    assert_eq!(app.settings.lang, "ru");
+    assert!(app.host.saves.get() > saves, "the choice is kept");
+    let g = Record::default();
+    app.draw(&g);
+    let texts: Vec<String> = g.texts.borrow().iter().map(|(t, _)| t.clone()).collect();
+    assert!(texts.iter().any(|t| t == "Настройки") && texts.iter().any(|t| t == "Русский"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Settings"));
 }

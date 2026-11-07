@@ -42,6 +42,8 @@ pub struct Settings {
     pub updates: bool,
     /// When that was last done, in seconds since 1970.
     pub update_checked: u64,
+    /// A language code from `lang::LANGUAGES`, or "auto" for the system's.
+    pub lang: String,
 }
 
 /// A voice as someone tuned it, saved under the name of the voice and its changes.
@@ -107,6 +109,7 @@ impl Default for Settings {
             presets: Vec::new(),
             updates: true,
             update_checked: 0,
+            lang: "auto".into(),
         }
     }
 }
@@ -161,6 +164,7 @@ impl Settings {
                 "updates" => s.updates = v != "0",
                 "update_checked" => s.update_checked = v.parse().unwrap_or(0),
                 "dry_mix" => s.dry_mix = number(v, s.dry_mix, 0.0, 1.0),
+                "lang" if crate::lang::find(v).is_some() => s.lang = v.to_string(),
                 _ => {}
             }
         }
@@ -174,7 +178,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\nlang={}\n",
             self.input,
             self.output,
             self.voice,
@@ -201,6 +205,7 @@ impl Settings {
                 .join(";"),
             self.updates as u8,
             self.update_checked,
+            self.lang,
         )
     }
 
@@ -254,6 +259,7 @@ mod tests {
             ],
             updates: false,
             update_checked: 1_794_000_000,
+            lang: "ru".into(),
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }
@@ -306,6 +312,14 @@ mod tests {
         assert_eq!((s.voice.as_str(), s.semitones), ("demon", 3.0));
         let s = Settings::parse("\u{feff}voice=demon\nsemitones=3\n");
         assert_eq!(s.semitones, 3.0, "a marked voice= line still says the file is a new one");
+    }
+
+    #[test]
+    fn a_language_goby_does_not_have_is_auto() {
+        assert_eq!(Settings::parse("lang=en\n").lang, "en");
+        assert_eq!(Settings::parse("lang=xx\n").lang, "auto");
+        assert_eq!(Settings::parse("lang=auto\n").lang, "auto");
+        assert_eq!(Settings::parse("").lang, "auto");
     }
 
     #[test]

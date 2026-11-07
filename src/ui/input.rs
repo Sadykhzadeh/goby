@@ -26,10 +26,8 @@ impl<H: Host> App<H> {
     fn device_popup(&mut self, pick: Pick) -> Option<Popup> {
         self.refresh_devices();
         let card = self.hits.iter().find(|(_, h)| *h == Hit::Pick(pick)).map(|(r, _)| *r)?;
-        let (items, selected) = match pick {
-            Pick::Mic => (&self.inputs, self.input),
-            Pick::Out => (&self.outputs, self.output),
-        };
+        let (items, selected) =
+            if pick == Pick::Mic { (&self.inputs, self.input) } else { (&self.outputs, self.output) };
         Some(Popup {
             pick: Some(pick),
             labels: items.iter().map(|e| e.name.clone()).collect(),
@@ -38,6 +36,42 @@ impl<H: Host> App<H> {
             browse: None,
             at: (card.l + 52.0, card.b),
         })
+    }
+
+    /// What the language menu calls a choice from settings.ini: a language by its own
+    /// name, and "auto" with the one it stands for now.
+    pub(super) fn language_name(&self, choice: &str) -> String {
+        let name = lang::LANGUAGES[lang::resolve(choice, &self.host.language())].1;
+        match choice {
+            "auto" => trf("settings.language.auto", &[("language", name)]),
+            _ => name.to_string(),
+        }
+    }
+
+    /// The language menu: Auto, then every language.
+    fn language_popup(&self) -> Option<Popup> {
+        let card = self.hits.iter().find(|(_, h)| *h == Hit::Pick(Pick::Lang)).map(|(r, _)| *r)?;
+        let keys: Vec<String> =
+            std::iter::once("auto").chain(lang::LANGUAGES.iter().map(|l| l.0)).map(String::from).collect();
+        Some(Popup {
+            pick: Some(Pick::Lang),
+            labels: keys.iter().map(|k| self.language_name(k)).collect(),
+            checked: keys.iter().position(|k| *k == self.settings.lang),
+            keys,
+            browse: None,
+            at: (card.l + 52.0, card.b),
+        })
+    }
+
+    /// Shows everything in the language `choice` from now on, and keeps it.
+    fn set_language(&mut self, choice: String) {
+        self.settings.lang = choice;
+        lang::choose(&self.settings.lang, &self.host.language());
+        // The tabs are measured once per language, and the marker under them follows.
+        self.tab_widths.clear();
+        self.tab_w = Anim::default();
+        self.save();
+        self.dirty = true;
     }
 
     /// A menu from `down` has closed, with the key of what was chosen, if anything.
@@ -53,12 +87,13 @@ impl<H: Host> App<H> {
     fn popup_done(&mut self, pick: Option<Pick>, key: String) {
         match pick {
             None => self.route(key),
+            Some(Pick::Lang) => self.set_language(key),
             Some(pick) => {
                 let list = if pick == Pick::Mic { &self.inputs } else { &self.outputs };
                 if let Some(i) = list.iter().position(|e| e.id == key) {
                     match pick {
                         Pick::Mic => (self.input, self.settings.input) = (i, key),
-                        Pick::Out => (self.output, self.settings.output) = (i, key),
+                        _ => (self.output, self.settings.output) = (i, key),
                     }
                     self.restart();
                 }
@@ -125,6 +160,7 @@ impl<H: Host> App<H> {
                 self.slider_from_x(k, self.mouse.0);
             }
             Hit::Toggle(s) => self.flip(s),
+            Hit::Pick(Pick::Lang) => return self.language_popup(),
             Hit::Pick(p) => return self.device_popup(p),
             Hit::Remove(i) => {
                 if i < self.settings.routed.len() {

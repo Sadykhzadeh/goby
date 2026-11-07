@@ -247,7 +247,8 @@ export async function open(wasm) {
   canvas.setAttribute("aria-label", "Goby's window. Arrow keys pick a voice; Escape goes back to the voices.");
   ctx = canvas.getContext("2d");
   await document.fonts?.ready;
-  x.ui_start(1000, 680, matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const language = new TextEncoder().encodeInto(navigator.language || "", new Uint8Array(x.memory.buffer, x.ui_language(), 35));
+  x.ui_start(1000, 680, matchMedia("(prefers-reduced-motion: reduce)").matches, language.written);
   frameEl.querySelector(".shot").replaceWith(canvas);
   size();
   new ResizeObserver(size).observe(frameEl);

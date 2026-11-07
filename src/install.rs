@@ -281,7 +281,7 @@ pub fn display_language() -> String {
 
 /// The dialogs here come before the window, which picks the language itself.
 fn use_chosen_language() {
-    lang::choose("auto", &display_language());
+    lang::choose(&Settings::load().lang, &display_language());
 }
 
 /// The first-run question, as a native task dialog with command links.
