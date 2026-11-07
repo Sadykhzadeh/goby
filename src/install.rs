@@ -3,6 +3,7 @@
 //! add a Start menu shortcut and an entry under Settings > Apps, whose Uninstall runs
 //! `goby.exe --uninstall`.
 
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HWND, LPARAM, WPARAM};
@@ -93,18 +94,19 @@ fn set_dword(key: HKEY, name: &str, value: u32) {
 }
 
 /// The values Settings > Apps shows for Goby; pure, so it can be tested.
-pub fn uninstall_entry(exe: &str, size_kb: u32) -> Vec<(&'static str, Option<String>, u32)> {
+pub fn uninstall_entry(exe: &str, size_kb: u32) -> Vec<(&'static str, Option<Cow<'static, str>>, u32)> {
     let dir = parent(exe).unwrap_or_default().to_string();
+    // The fixed values are borrowed rather than copied into a String each.
     vec![
         ("DisplayName", Some("Goby".into()), 0),
         ("DisplayVersion", Some(VERSION.into()), 0),
         ("Publisher", Some(AUTHOR.into()), 0),
         ("URLInfoAbout", Some(WEBSITE.into()), 0),
         ("HelpLink", Some(WEBSITE.into()), 0),
-        ("DisplayIcon", Some(format!("{exe},0")), 0),
-        ("InstallLocation", Some(dir), 0),
-        ("UninstallString", Some(format!("\"{exe}\" --uninstall")), 0),
-        ("QuietUninstallString", Some(format!("\"{exe}\" --uninstall --quiet")), 0),
+        ("DisplayIcon", Some(format!("{exe},0").into()), 0),
+        ("InstallLocation", Some(dir.into()), 0),
+        ("UninstallString", Some(format!("\"{exe}\" --uninstall").into()), 0),
+        ("QuietUninstallString", Some(format!("\"{exe}\" --uninstall --quiet").into()), 0),
         ("EstimatedSize", None, size_kb),
         ("NoModify", None, 1),
         ("NoRepair", None, 1),
