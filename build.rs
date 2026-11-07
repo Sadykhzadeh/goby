@@ -340,37 +340,111 @@ fn adler32(bytes: &[u8]) -> u32 {
     b << 16 | a
 }
 
-/// An RGBA PNG of the icon. Windows has read PNG images inside icons since Vista, at
-/// every size, and they take a tenth of the room of 32-bit bitmaps.
-fn icon_png(size: usize) -> Vec<u8> {
-    let px = icon::pixels(size, icon::RGB);
-    let mut raw = Vec::with_capacity(size * (1 + size * 4));
-    for row in px.chunks(size) {
-        raw.push(0); // no filter
-        for p in row {
-            raw.extend([(p >> 16) as u8, (p >> 8) as u8, *p as u8, (p >> 24) as u8]);
-        }
+/// The PNG filter `kind` applied to one row, given the row above (all zero for the first)
+/// and the bytes a pixel takes.
+fn filter(kind: u8, row: &[u8], up: &[u8], bpp: usize) -> Vec<u8> {
+    let mut out = vec![kind];
+    for i in 0..row.len() {
+        let (a, b, c) = if i >= bpp { (row[i - bpp], up[i], up[i - bpp]) } else { (0, up[i], 0) };
+        let predicted = match kind {
+            0 => 0,
+            1 => a,
+            2 => b,
+            3 => ((a as u16 + b as u16) / 2) as u8,
+            _ => {
+                let p = a as i16 + b as i16 - c as i16;
+                let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+                if pa <= pb && pa <= pc {
+                    a
+                } else if pb <= pc {
+                    b
+                } else {
+                    c
+                }
+            }
+        };
+        out.push(row[i].wrapping_sub(predicted));
     }
-    let mut zlib = vec![0x78, 0x01];
-    zlib.extend(deflate(&raw));
-    zlib.extend(adler32(&raw).to_be_bytes());
+    out
+}
 
+/// Image data for a PNG: the rows filtered with whichever of kinds packs smallest.
+fn idat(rows: &[Vec<u8>], bpp: usize, kinds: std::ops::Range<u8>) -> Vec<u8> {
+    let zero = vec![0; rows[0].len()];
+    kinds
+        .map(|kind| {
+            let mut raw = Vec::new();
+            for (y, row) in rows.iter().enumerate() {
+                raw.extend(filter(kind, row, if y > 0 { &rows[y - 1] } else { &zero }, bpp));
+            }
+            let mut zlib = vec![0x78, 0x01];
+            zlib.extend(deflate(&raw));
+            zlib.extend(adler32(&raw).to_be_bytes());
+            zlib
+        })
+        .min_by_key(Vec::len)
+        .unwrap()
+}
+
+fn png(size: usize, depth: u8, colour: u8, chunks: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-    let mut chunk = |kind: &[u8; 4], data: &[u8]| {
+    let mut header = Vec::new();
+    header.extend((size as u32).to_be_bytes());
+    header.extend((size as u32).to_be_bytes());
+    header.extend([depth, colour, 0, 0, 0]);
+    for (kind, data) in [(b"IHDR", header)].iter().chain(chunks).chain(&[(b"IEND", Vec::new())]) {
         png.extend((data.len() as u32).to_be_bytes());
         let mut body = kind.to_vec();
         body.extend(data);
         png.extend(&body);
         png.extend(crc32(&body).to_be_bytes());
-    };
-    let mut header = Vec::new();
-    header.extend((size as u32).to_be_bytes());
-    header.extend((size as u32).to_be_bytes());
-    header.extend([8, 6, 0, 0, 0]); // 8-bit RGBA
-    chunk(b"IHDR", &header);
-    chunk(b"IDAT", &zlib);
-    chunk(b"IEND", &[]);
+    }
     png
+}
+
+/// A PNG of the icon. Windows has read PNG images inside icons since Vista, at every size.
+/// The icon is one colour at many opacities, so besides plain RGBA it is tried as a palette
+/// of those opacities at a byte or less a pixel; both decode to the RGBA icon.rs draws, and
+/// the smaller is kept. The palette's own size makes RGBA win at the small sizes.
+fn icon_png(size: usize) -> Vec<u8> {
+    let px = icon::pixels(size, icon::RGB);
+    let rgba: Vec<Vec<u8>> = px
+        .chunks(size)
+        .map(|row| row.iter().flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, (p >> 24) as u8]).collect())
+        .collect();
+    // Filters never help the RGBA form here, and trying them makes the build slow.
+    let mut best = png(size, 8, 6, &[(b"IDAT", idat(&rgba, 4, 0..1))]);
+
+    let mut palette: Vec<u32> = px.clone();
+    palette.sort_by_key(|p| p >> 24);
+    palette.dedup();
+    let index: Vec<u8> =
+        px.iter().map(|p| palette.binary_search_by_key(&(p >> 24), |q| q >> 24).unwrap() as u8).collect();
+    let colours: Vec<u8> = palette.iter().flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8]).collect();
+    // Opacity per palette entry; the last, fully opaque one may be left out.
+    let alpha: Vec<u8> = palette.iter().map(|p| (p >> 24) as u8).collect();
+    let alpha = alpha.strip_suffix(&[255]).unwrap_or(&alpha).to_vec();
+    for depth in [1u8, 2, 4, 8].into_iter().filter(|d| palette.len() <= 1 << d) {
+        let per = 8 / depth as usize;
+        let rows: Vec<Vec<u8>> = index
+            .chunks(size)
+            .map(|row| {
+                row.chunks(per)
+                    .map(|c| c.iter().enumerate().fold(0, |b, (k, &v)| b | v << (8 - depth as usize * (k + 1))))
+                    .collect()
+            })
+            .collect();
+        let candidate = png(
+            size,
+            depth,
+            3,
+            &[(b"PLTE", colours.clone()), (b"tRNS", alpha.clone()), (b"IDAT", idat(&rows, 1, 0..5))],
+        );
+        if candidate.len() < best.len() {
+            best = candidate;
+        }
+    }
+    best
 }
 
 /// One VS_VERSIONINFO node: header, key, value, children, each 32-bit aligned.
