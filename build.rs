@@ -303,5 +303,8 @@ fn main() {
         // strip = true still leaves rustc passing /DEBUG, so the exe carries a debug directory
         // naming a goby.pdb that no release keeps. Debug builds keep their PDB.
         println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
+        // Leaves out the POGO debug entry: a list of section names only profile-guided
+        // optimization tools read.
+        println!("cargo:rustc-link-arg-bins=/EMITPOGOPHASEINFO");
     }
 }
