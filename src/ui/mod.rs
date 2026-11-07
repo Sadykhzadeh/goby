@@ -6,12 +6,12 @@
 use std::time::Duration;
 
 use crate::draw::{Align, Canvas, Font, R, glyph};
+use crate::fx::clamp;
 use crate::host::{AppState, Endpoint, Host, Hotkey, Key, Link, MicApp, SCOPE_LEN};
 use crate::lang::{self, tr, trf};
 use crate::settings::{Preset, Settings, signed, write_decimal};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
-use goby_dsp::fx::clamp;
 
 mod controls;
 mod input;

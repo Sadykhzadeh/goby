@@ -128,7 +128,7 @@ fn list(dst: &mut Vec<String>, v: &str) {
 /// and comes through `clamp` unchanged, and one NaN gain turns every sample after it to NaN.
 #[inline(never)]
 fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
-    goby_dsp::fx::clamp(parse_decimal(v).unwrap_or(default), lo, hi)
+    crate::fx::clamp(parse_decimal(v).unwrap_or(default), lo, hi)
 }
 
 /// What `str::parse::<u64>` reads: an optional `+`, then decimal digits that fit.

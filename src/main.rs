@@ -21,7 +21,7 @@ mod update;
 mod voices;
 
 // The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
-use goby_dsp::{dsp, mic, ring, stream};
+use goby_dsp::{dsp, fx, mic, ring, stream};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::System::Threading::{
