@@ -291,7 +291,7 @@ impl<H: Host> App<H> {
                     Pane::Settings => (self.lay.pane.h(), self.settings_max),
                 };
                 let content = view + max;
-                let to = (s0 + (self.mouse.1 - y0) * content / view).clamp(0.0, max);
+                let to = clamp(s0 + (self.mouse.1 - y0) * content / view, 0.0, max);
                 let a = match pane {
                     Pane::Gallery => &mut self.gallery_scroll,
                     Pane::Settings => &mut self.settings_scroll,
@@ -336,12 +336,12 @@ impl<H: Host> App<H> {
         self.mouse = p;
         if self.page != Page::Voices {
             let a = &mut self.settings_scroll;
-            a.target = (a.target - notches * 72.0).clamp(0.0, self.settings_max);
+            a.target = clamp(a.target - notches * 72.0, 0.0, self.settings_max);
         } else if self.lay.tabs.has(self.mouse) {
-            self.tab_scroll = (self.tab_scroll - notches * 80.0).clamp(0.0, self.tab_max);
+            self.tab_scroll = clamp(self.tab_scroll - notches * 80.0, 0.0, self.tab_max);
         } else if self.lay.gallery.has(self.mouse) {
             let a = &mut self.gallery_scroll;
-            a.target = (a.target - notches * (TILE_H + TILE_GAP)).clamp(0.0, self.gallery_max);
+            a.target = clamp(a.target - notches * (TILE_H + TILE_GAP), 0.0, self.gallery_max);
         }
         self.dirty = true;
     }
@@ -358,7 +358,7 @@ impl<H: Host> App<H> {
         } else {
             return false;
         };
-        let to = (a.target - dy).clamp(0.0, max);
+        let to = clamp(a.target - dy, 0.0, max);
         if to == a.target {
             return false;
         }

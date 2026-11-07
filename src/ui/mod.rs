@@ -11,6 +11,7 @@ use crate::lang::{self, tr, trf};
 use crate::settings::{Preset, Settings};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
+use goby_dsp::fx::clamp;
 
 mod controls;
 mod input;
@@ -600,7 +601,7 @@ impl<H: Host> App<H> {
 
     fn set_knob(&mut self, k: Knob, v: f32) {
         let (lo, hi, step, _) = k.range();
-        let v = ((v / step).round() * step).clamp(lo, hi);
+        let v = clamp((v / step).round() * step, lo, hi);
         let s = &mut self.settings;
         match k {
             Knob::Tone => s.semitones = v,

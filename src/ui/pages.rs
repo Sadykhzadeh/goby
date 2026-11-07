@@ -211,7 +211,7 @@ impl<H: Host> App<H> {
             None
         };
         let right = aside.map_or(r.r - 176.0, |a| a.l) - 12.0;
-        let text_w = |max: f32| (right - (r.l + 20.0)).clamp(0.0, max);
+        let text_w = |max: f32| clamp(right - (r.l + 20.0), 0.0, max);
 
         g.text(
             &self.label(self.current()),

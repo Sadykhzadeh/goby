@@ -3,6 +3,14 @@
 
 use std::f32::consts::TAU;
 
+/// `f32::clamp` without its `min <= max` check: that panic prints both floats, and that
+/// alone links core's float formatter into the exe. Same result for every input.
+#[inline]
+pub fn clamp(x: f32, lo: f32, hi: f32) -> f32 {
+    let x = if x < lo { lo } else { x };
+    if x > hi { hi } else { x }
+}
+
 /// Sine LFO.
 #[derive(Clone, Copy, Default)]
 pub struct Lfo {
@@ -126,7 +134,7 @@ impl Delay {
     /// The sample `delay` samples ago (0 = the one just pushed).
     #[inline]
     pub fn read(&self, delay: f32) -> f32 {
-        let d = delay.clamp(0.0, self.mask as f32 - 1.0);
+        let d = clamp(delay, 0.0, self.mask as f32 - 1.0);
         let i = d as usize;
         let t = d - i as f32;
         let a = self.buf[(self.write.wrapping_sub(i)) & self.mask];
