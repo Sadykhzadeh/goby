@@ -59,9 +59,12 @@ pub fn display_name(exe: &str) -> String {
     if !known.is_empty() {
         return known.to_string();
     }
-    let stem = exe.strip_suffix(".exe").unwrap_or(exe);
-    let mut chars = stem.chars();
-    chars.next().map_or(String::new(), |first| first.to_uppercase().chain(chars).collect())
+    // ASCII only: full Unicode case mapping would add 17 KB of tables for one letter.
+    let mut name = exe.strip_suffix(".exe").unwrap_or(exe).to_string();
+    if let Some(first) = name.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    name
 }
 
 /// Newest entry per executable, most recently used first, without system helpers.
@@ -159,7 +162,7 @@ mod tests {
         assert_eq!(display_name("cs2.exe"), "Counter-Strike 2");
         assert_eq!(display_name("obs64.exe"), "OBS Studio");
         assert_eq!(display_name("audacity.exe"), "Audacity");
-        assert_eq!(display_name("эфир.exe"), "Эфир");
+        assert_eq!(display_name("эфир.exe"), "эфир");
     }
 
     #[test]
