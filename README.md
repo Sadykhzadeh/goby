@@ -2,7 +2,7 @@
 
 <h1 align="center">Goby</h1>
 
-<p align="center"><b>A tiny voice changer for Windows.</b><br>61 voices for CS2, Discord, OBS or any program you pick. One ~500 KB exe, free and open source, no account.</p>
+<p align="center"><b>A tiny voice changer for Windows.</b><br>61 voices for CS2, Discord, OBS or any program you pick. One 354 KB exe, free and open source, no account.</p>
 
 <p align="center">
   <a href="https://github.com/Sadykhzadeh/goby/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sadykhzadeh/goby?label=download&color=ffb900&labelColor=1a1610"></a>
@@ -21,14 +21,14 @@
 
 ## Why Goby
 
-- **Small and quick.** One ~520 KB executable, about 28 ms from your mouth to the game, under 1 % of one CPU core.
+- **Small and quick.** One 354 KB executable, about 28 ms from your mouth to the game, under 1 % of one CPU core.
 - **Only where you want it.** Pick CS2 or Discord on the *Programs* page and only they hear the voice. Everything else keeps your real microphone.
 - **Made for playing.** Hotkeys that work inside a game, favorites, your own tuned voices, and it keeps running in the tray.
 - **Nothing to sign up for.** No account, no ads, nothing sent anywhere. Updates come only from releases signed by the author.
 
 ## Get started
 
-1. Download `goby-0.4.0-windows-x64.exe` from [Releases](https://github.com/Sadykhzadeh/goby/releases/latest) and choose **Install Goby** (or **Just run it**).
+1. Download `goby-0.4.1-windows-x64.exe` from [Releases](https://github.com/Sadykhzadeh/goby/releases/latest) and choose **Install Goby** (or **Just run it**).
 2. Goby needs the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) to reach other programs. Without it Goby walks you through installing it and picks it up without a restart.
 3. Open **Programs** and press **+** next to CS2, Discord or OBS. Done: talk.
 
@@ -61,7 +61,7 @@ Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from
 
 **Will an anti-cheat mind it?** Goby never touches the game. It does not inject anything or read its memory; the game only sees one more microphone, made by VB-Audio's ordinary signed driver.
 
-**Can other programs still use my microphone?** Yes. Goby shares it. *Low latency* under Settings > Advanced takes it exclusively for about 14 ms less delay, and then nothing else can record from it while Goby runs.
+**Can other programs still use my microphone?** Yes. Goby shares it. *Low latency* under Settings > Advanced takes it exclusively for about 11 ms less delay, and then nothing else can record from it while Goby runs.
 
 **Is this build really the author's?** Settings shows the version and the commit it was built from. That says which code it claims to be, not that it is genuine: check the file against `SHA256SUMS.txt` on the release page. Goby's own updater only accepts releases carrying the author's signature.
 

@@ -11,9 +11,9 @@ shortcuts, settings and folder.
 For scripts and package managers:
 
 ```
-goby-0.4.0-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
+goby-0.4.1-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
 goby.exe --uninstall --quiet                        # silent uninstall
-goby-0.4.0-windows-x64.exe --portable               # run without installing or asking
+goby-0.4.1-windows-x64.exe --portable               # run without installing or asking
 ```
 
 ## Updates

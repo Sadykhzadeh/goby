@@ -42,10 +42,10 @@ const PAGE: &str = r##"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Goby: a tiny voice changer for Windows</title>
-<meta name="description" content="61 voices for CS2, Discord, OBS or any program you pick. One 500 KB Windows app, free and open source, no account.">
+<meta name="description" content="61 voices for CS2, Discord, OBS or any program you pick. One 354 KB Windows app, free and open source, no account.">
 <meta name="theme-color" content="#13100c">
 <meta property="og:title" content="Goby: a tiny voice changer for Windows">
-<meta property="og:description" content="61 voices for the games and chats you pick. One 500 KB Windows app, free and open source.">
+<meta property="og:description" content="61 voices for the games and chats you pick. One 354 KB Windows app, free and open source.">
 <meta property="og:image" content="https://goby.azer.one/images/social.png">
 <meta property="og:url" content="https://goby.azer.one/">
 <meta name="twitter:card" content="summary_large_image">
@@ -79,7 +79,7 @@ const PAGE: &str = r##"<!doctype html>
       </button>
     </div>
     <div class="foot">
-      <p><b>61 voices</b> for CS2, Discord, OBS or any program you pick, from one <b>500 KB</b> Windows app. Free, open source, no account.</p>
+      <p><b>61 voices</b> for CS2, Discord, OBS or any program you pick, from one <b>354 KB</b> Windows app. Free, open source, no account.</p>
       <div class="get">
         <a class="download" href="https://github.com/Sadykhzadeh/goby/releases/latest">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10M5.5 8.8 10 13.3l4.5-4.5M4 17h12"/></svg>
@@ -154,7 +154,7 @@ const PAGE: &str = r##"<!doctype html>
     </details>
     <details>
       <summary>Can other programs still use my microphone?</summary>
-      <p>Yes, Goby shares it. <i>Low latency</i> under Settings &gt; Advanced takes it exclusively for about 14 ms less delay, and then nothing else can record from it while Goby runs.</p>
+      <p>Yes, Goby shares it. <i>Low latency</i> under Settings &gt; Advanced takes it exclusively for about 11 ms less delay, and then nothing else can record from it while Goby runs.</p>
     </details>
     <details>
       <summary>How do I know my copy is the real one?</summary>
