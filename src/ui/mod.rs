@@ -363,6 +363,12 @@ struct App {
     voiced: Box<[f32; SCOPE_LEN]>,
     dirty: bool,
     quiet_frames: u32,
+    /// The window can be seen: shown, not minimised, not under a fullscreen game.
+    shown: bool,
+    /// The Programs page is on screen, so what each program records from is worth asking.
+    watching: bool,
+    /// Milliseconds between timer ticks: a frame while shown, much slower otherwise.
+    pace: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -549,6 +555,9 @@ impl App {
             voiced: Box::new([0.0; SCOPE_LEN]),
             dirty: true,
             quiet_frames: 0,
+            shown: false,
+            watching: false,
+            pace: 0,
         };
         let s = &app.settings;
         let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys, s.updates];
@@ -675,17 +684,22 @@ impl App {
                 self.exe_paths.push((exe.clone(), path));
             }
         }
-        let sessions = if self.settings.routed.is_empty() { Vec::new() } else { engine::recording() };
-        let (mut live, mut elsewhere) = (Vec::new(), Vec::new());
-        for exe in &self.settings.routed {
-            let pids = apps::pids_of(&snapshot, exe);
-            let mine = sessions.iter().filter(|(pid, _)| pids.contains(pid));
-            live.push(mine.clone().any(|(_, ep)| ep.id == record));
-            elsewhere.push(mine.into_iter().find(|(_, ep)| ep.id != record).map(|(_, ep)| short(&ep.name).to_string()));
-        }
-        if live != self.app_live || elsewhere != self.app_elsewhere {
-            (self.app_live, self.app_elsewhere) = (live, elsewhere);
-            self.dirty = true;
+        // Asking every microphone for its sessions takes 3 to 5 ms, and only the Programs
+        // page shows the answer: skip it while that page cannot be seen.
+        if self.watching {
+            let sessions = if self.settings.routed.is_empty() { Vec::new() } else { engine::recording() };
+            let (mut live, mut elsewhere) = (Vec::new(), Vec::new());
+            for exe in &self.settings.routed {
+                let pids = apps::pids_of(&snapshot, exe);
+                let mine = sessions.iter().filter(|(pid, _)| pids.contains(pid));
+                live.push(mine.clone().any(|(_, ep)| ep.id == record));
+                elsewhere
+                    .push(mine.into_iter().find(|(_, ep)| ep.id != record).map(|(_, ep)| short(&ep.name).to_string()));
+            }
+            if live != self.app_live || elsewhere != self.app_elsewhere {
+                (self.app_live, self.app_elsewhere) = (live, elsewhere);
+                self.dirty = true;
+            }
         }
 
         let mut states = Vec::with_capacity(self.settings.routed.len());
@@ -828,6 +842,14 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // The moment the Programs page comes into view, ask what each program records from
+        // rather than show what was true when it was last seen.
+        let watching = self.shown && self.page == Page::Programs;
+        let looked = watching && !self.watching;
+        self.watching = watching;
+        if looked {
+            self.sync_apps();
+        }
         if self.shared.failed.load(Relaxed) && self.retry_at.is_none() {
             self.engine = None;
             self.healthy = false;
@@ -864,6 +886,9 @@ impl App {
         moving |= self.tab_x.step(0.3) | self.tab_w.step(0.3);
         moving |= self.gallery_scroll.step(0.3) | self.settings_scroll.step(0.3) | self.page_in.step(0.35);
         self.dirty |= moving;
+        if !self.shown {
+            return;
+        }
 
         let measured = self.shared.latency_ms();
         self.latency = if self.latency == 0.0 { measured } else { self.latency + (measured - self.latency) * 0.05 };
@@ -875,6 +900,16 @@ impl App {
         self.quiet_frames = if active { 0 } else { self.quiet_frames + 1 };
         if self.quiet_frames < 3 {
             self.dirty = true;
+        }
+    }
+
+    /// Ticks once a frame while the window can be seen. Otherwise only the device retry,
+    /// program pinning and the tray tip need the timer, and twice a second is plenty.
+    fn pace(&mut self, shown: bool) {
+        let ms = if shown { 33 } else { 500 };
+        if ms != self.pace {
+            self.pace = ms;
+            unsafe { SetTimer(Some(self.hwnd), 1, ms, None) };
         }
     }
 
@@ -994,11 +1029,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_ERASEBKGND => LRESULT(1),
             WM_TIMER => {
+                app.shown = IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !app.covered();
                 app.tick();
-                if app.dirty && IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() && !app.covered() {
+                if app.dirty && app.shown {
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
+                app.pace(app.shown);
                 LRESULT(0)
+            }
+            // Back from the tray or the taskbar: frames again from the next tick, not the
+            // next slow one.
+            WM_SHOWWINDOW if wp.0 != 0 => {
+                app.pace(true);
+                DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_MOUSEMOVE => {
                 app.mouse = point(lp, app.dpi);
@@ -1070,10 +1113,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 if wp.0 as u32 == SIZE_MINIMIZED {
                     // Give the GPU memory back while we sit in the taskbar.
                     app.gfx = None;
-                } else if let Some(g) = &mut app.gfx
-                    && g.resize(w, h, app.dpi).is_err()
-                {
-                    app.gfx = None;
+                } else {
+                    app.pace(true);
+                    if let Some(g) = &mut app.gfx
+                        && g.resize(w, h, app.dpi).is_err()
+                    {
+                        app.gfx = None;
+                    }
                 }
                 app.dirty = true;
                 LRESULT(0)
@@ -1098,6 +1144,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             }
             WM_ACTIVATE => {
                 app.dirty = true;
+                app.pace(true);
                 DefWindowProcW(hwnd, msg, wp, lp)
             }
             WM_CLOSE => {
@@ -1239,7 +1286,9 @@ pub fn run(hidden: bool) -> Result<()> {
         app.check_for_update(Duration::from_secs(15));
         let hidden = hidden && app.tray_icon;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
-        SetTimer(Some(hwnd), 1, 33, None);
+        if let Some(app) = app_of(hwnd) {
+            app.pace(!hidden);
+        }
         if !hidden {
             let _ = ShowWindow(hwnd, SW_SHOW);
         }
