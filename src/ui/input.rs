@@ -94,6 +94,7 @@ impl App {
             Hit::Preset(p) => self.choose(Fav::Preset(p), false),
             Hit::DropPreset(p) => self.drop_preset(p),
             Hit::SavePreset => self.save_preset(),
+            Hit::Update => self.install_update(),
             Hit::Advanced => {
                 self.advanced = !self.advanced;
                 self.dirty = true;
@@ -123,6 +124,13 @@ impl App {
                     Switch::Autostart => {
                         install::set_start_with_windows(!self.autostart);
                         self.autostart = install::starts_with_windows();
+                    }
+                    Switch::Updates => {
+                        self.settings.updates = !self.settings.updates;
+                        if self.settings.updates {
+                            self.settings.update_checked = 0;
+                            self.check_for_update(Duration::ZERO);
+                        }
                     }
                     Switch::Hotkeys => {
                         self.settings.hotkeys = !self.settings.hotkeys;

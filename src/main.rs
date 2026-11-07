@@ -16,6 +16,7 @@ mod settings;
 mod theme;
 mod tray;
 mod ui;
+mod update;
 mod voices;
 
 fn main() -> windows::core::Result<()> {
@@ -27,10 +28,15 @@ fn main() -> windows::core::Result<()> {
         ["--name-cable", render, capture, play_name, record_name] => {
             policy::name_cable(render, capture, (play_name, record_name))
         }
-        // Silent install for scripts and package managers.
+        // Silent install for scripts and package managers; with `--run`, as an update does
+        // it, the installed copy starts afterwards.
         ["--install", rest @ ..] => {
-            if install::install(rest.contains(&"--desktop")).is_err() {
+            let Ok(exe) = install::install(rest.contains(&"--desktop")) else {
                 std::process::exit(1);
+            };
+            if rest.contains(&"--run") {
+                let exe = windows::core::HSTRING::from(exe.as_os_str());
+                install::launch(&exe, "", None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
             }
             Ok(())
         }
@@ -41,6 +47,7 @@ fn main() -> windows::core::Result<()> {
         // Debug builds and `--portable` skip the setup question.
         rest if cfg!(debug_assertions) || rest.contains(&"--portable") || install::is_installed_copy() => {
             install::tidy();
+            update::tidy();
             ui::run(rest.contains(&"--tray"))
         }
         _ => match install::ask() {

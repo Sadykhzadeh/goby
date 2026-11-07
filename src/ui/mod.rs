@@ -40,6 +40,7 @@ mod controls;
 mod input;
 mod library;
 mod pages;
+mod updates;
 
 // Layout, in DIPs.
 /// Default and smallest client sizes, in DIPs.
@@ -79,6 +80,7 @@ enum Switch {
     Tray,
     Autostart,
     Hotkeys,
+    Updates,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -140,6 +142,8 @@ enum Hit {
     SavePreset,
     /// Unfold or fold the advanced microphone settings.
     Advanced,
+    /// Install the newer release, or open its page for a portable copy.
+    Update,
     Slider(Knob),
     Toggle(Switch),
     Pick(Pick),
@@ -332,11 +336,15 @@ struct App {
     settings_scroll: Anim,
     gallery_max: f32,
     settings_max: f32,
-    switches: [Anim; 7],
+    switches: [Anim; 8],
     /// Windows starts Goby at sign-in; kept in the registry, read once here.
     autostart: bool,
     /// Every hotkey registered; false when another program holds one.
     hotkeys_ok: bool,
+    /// A newer verified release, and where installing it has got to.
+    update: Option<crate::update::Manifest>,
+    updating: updates::Updating,
+    inbox: Arc<std::sync::Mutex<updates::Inbox>>,
     /// The notification-area icon is up, and the tip it shows.
     tray_icon: bool,
     tray_tip: String,
@@ -515,9 +523,12 @@ impl App {
             settings_scroll: Anim::default(),
             gallery_max: 0.0,
             settings_max: 0.0,
-            switches: [Anim::default(); 7],
+            switches: [Anim::default(); 8],
             autostart: install::starts_with_windows(),
             hotkeys_ok: true,
+            update: None,
+            updating: updates::Updating::Idle,
+            inbox: updates::inbox(),
             tray_icon: false,
             tray_tip: String::new(),
             tab_x: Anim::default(),
@@ -531,7 +542,7 @@ impl App {
             quiet_frames: 0,
         };
         let s = &app.settings;
-        let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys];
+        let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys, s.updates];
         for (i, on) in switched.into_iter().enumerate() {
             let v = if on { 1.0 } else { 0.0 };
             app.switches[i] = Anim { value: v, target: v };
@@ -802,7 +813,7 @@ impl App {
             self.restart();
         }
         let s = &self.settings;
-        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, self.autostart, s.hotkeys];
+        let on = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, self.autostart, s.hotkeys, s.updates];
         let mut moving = false;
         for (a, on) in self.switches.iter_mut().zip(on) {
             a.target = if on { 1.0 } else { 0.0 };
@@ -1057,6 +1068,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 }
                 LRESULT(0)
             }
+            updates::WM_UPDATE_CHECKED => {
+                app.update_checked();
+                LRESULT(0)
+            }
+            updates::WM_UPDATE_READY => {
+                app.update_ready();
+                LRESULT(0)
+            }
             tray::WM_QUIT_GOBY => {
                 let _ = DestroyWindow(hwnd);
                 LRESULT(0)
@@ -1173,6 +1192,7 @@ pub fn run(hidden: bool) -> Result<()> {
         app.apply_frame();
         app.add_tray_icon();
         app.use_hotkeys();
+        app.check_for_update(Duration::from_secs(15));
         let hidden = hidden && app.tray_icon;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         SetTimer(Some(hwnd), 1, 33, None);

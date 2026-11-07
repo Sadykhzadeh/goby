@@ -379,6 +379,7 @@ pub mod glyph {
     pub const CHEVRON_UP: u16 = 0xE70E;
     pub const MORE: u16 = 0xE712;
     pub const CHECK: u16 = 0xE73E;
+    pub const UPDATE: u16 = 0xE896;
     pub const OPEN: u16 = 0xE8A7;
     pub const CHAT: u16 = 0xE8BD;
     pub const ADD: u16 = 0xE710;

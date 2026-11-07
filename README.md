@@ -4,7 +4,7 @@ A small, fast voice changer for Windows. It takes your real microphone, turns yo
 minion, a demon, a robot, a walkie-talkie or one of 61 voices, and hands the result to any
 game or chat app through a virtual audio cable.
 
-One ~476 KB executable that installs itself for your user, no administrator rights
+One ~500 KB executable that installs itself for your user, no administrator rights
 needed, or runs without installing. No background service, no driver of its own, no
 account, nothing sent anywhere. The window is plain Win32 in the Windows 11 style: Mica,
 the system accent colour, light or dark to match Windows, English or Russian to match
@@ -34,7 +34,7 @@ when the app starts and the result is drawn.
 
 ## Using it in CS2 (or Discord, OBS, anything)
 
-1. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
+1. Run the downloaded `goby-0.3.0-windows-x64.exe` and choose **Install Goby** (or
    **Just run it**).
 2. Goby needs [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free) to reach other
    programs. Without it Goby opens on three steps: download it, install it, and wait
@@ -88,7 +88,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 
 | | |
 |---|---|
-| Executable | 476 KB, icons, installer and tray included |
+| Executable | 502 KB, icons, installer, tray and updates included |
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
@@ -170,10 +170,29 @@ shortcuts, settings and folder.
 For scripts and package managers:
 
 ```
-goby-0.2.0-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
+goby-0.3.0-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
 goby.exe --uninstall --quiet                        # silent uninstall
-goby-0.2.0-windows-x64.exe --portable               # run without installing or asking
+goby-0.3.0-windows-x64.exe --portable               # run without installing or asking
 ```
+
+## Updates
+
+Once a day, a little after it starts, Goby asks GitHub and got.az for the manifest of
+their latest release: a few lines naming the version, the size and SHA-256 of the
+executable, and where to download it. Every release is published to both, and the
+newest version either one offers wins, so Goby keeps updating while one of them is down.
+When a newer one is out, Settings says so and installs it with one click; a portable copy
+gets a link to the release page instead.
+
+Neither host is trusted with what Goby runs. The manifest counts only with a valid
+ECDSA P-256 signature from the release key, whose public half is built into Goby and whose
+private half never leaves the author. The download must match the size and SHA-256 the
+signed manifest names, it is checked again after it is written, and it stays locked
+against writes until it starts. A manifest for an older version than the running one is
+ignored, so an old release cannot be replayed. Signatures and hashes go through Windows'
+own CNG and the downloads through WinHTTP over HTTPS: no extra code to trust and almost
+nothing added to the executable. Nothing else is sent, and **Check for updates** under
+Settings turns it off.
 
 ## Author
 

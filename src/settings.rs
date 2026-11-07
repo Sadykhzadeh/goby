@@ -36,6 +36,10 @@ pub struct Settings {
     pub favorites: Vec<String>,
     /// Voices saved with their own pitch, volume and mix, in the order they were saved.
     pub presets: Vec<Preset>,
+    /// Look for a newer signed release once a day.
+    pub updates: bool,
+    /// When that was last done, in seconds since 1970.
+    pub update_checked: u64,
 }
 
 /// A voice as someone tuned it, saved under the name of the voice and its changes.
@@ -99,6 +103,8 @@ impl Default for Settings {
             hotkeys: true,
             favorites: Vec::new(),
             presets: Vec::new(),
+            updates: true,
+            update_checked: 0,
         }
     }
 }
@@ -142,6 +148,8 @@ impl Settings {
                 "hotkeys" => s.hotkeys = v != "0",
                 "favorites" => s.favorites = list(v),
                 "presets" => s.presets = presets(v),
+                "updates" => s.updates = v != "0",
+                "update_checked" => s.update_checked = v.parse().unwrap_or(0),
                 "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
                 _ => {}
             }
@@ -156,7 +164,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\n",
             self.input,
             self.output,
             self.voice,
@@ -181,6 +189,8 @@ impl Settings {
                 .map(|p| format!("{}:{}:{}:{}", p.voice, p.semitones, p.dry_mix, p.volume))
                 .collect::<Vec<_>>()
                 .join(";"),
+            self.updates as u8,
+            self.update_checked,
         )
     }
 
@@ -232,6 +242,8 @@ mod tests {
                 Preset { voice: "demon".into(), semitones: 3.0, dry_mix: 0.2, volume: 1.0 },
                 Preset { voice: "robot".into(), semitones: -2.5, dry_mix: 0.0, volume: 1.25 },
             ],
+            updates: false,
+            update_checked: 1_794_000_000,
         };
         assert_eq!(Settings::parse(&s.render()), s);
     }

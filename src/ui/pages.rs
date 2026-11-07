@@ -62,6 +62,10 @@ impl App {
                 g.fill(R::new(r.l, r.t + 12.0, 3.0, 16.0), 1.5, th.accent());
             }
             g.icon(icon, Font::Icon16, r, th.text())?;
+            // A dot on Settings while a newer release waits there.
+            if page == Page::Settings && self.update.is_some() {
+                g.circle(r.r - 14.0, r.t + 10.0, 4.0, th.accent());
+            }
             self.hits.push((r, hit));
         }
         Ok(())
@@ -430,6 +434,7 @@ impl App {
             *y += 28.0;
             Ok(())
         };
+        self.update_card(g, &mut y)?;
 
         section(g, &mut y, self.t("Микрофон", "Microphone"))?;
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
@@ -472,6 +477,10 @@ impl App {
             false => self.t("Некоторые клавиши заняты", "Some keys are taken elsewhere"),
         };
         self.row_card(g, &mut y, Hit::Toggle(Switch::Hotkeys), glyph::KEYBOARD, keys, keys_desc)?;
+        let check = self.t("Проверять обновления", "Check for updates");
+        let check_desc =
+            self.t("Раз в день, только релизы с подписью автора", "Once a day, only releases the author signed");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Updates), glyph::UPDATE, check, check_desc)?;
 
         y += 20.0;
         let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
