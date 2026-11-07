@@ -1,0 +1,68 @@
+# Deploy hook for the instance of this service that the author runs. It is only
+# useful together with a deploy receiver of your own; if you run a fork, delete
+# this file or point DEPLOY_URL at your own endpoint. Forgejo/Gitea Actions read
+# it, GitHub ignores it.
+#
+# It carries no deployment steps of its own on purpose. What deploys the service
+# is a script on the host, and this workflow only says "that commit landed" and
+# fails the pipeline when the host reports that the deploy did not take.
+#
+# Repository secrets it reads:
+#   DEPLOY_URL    the endpoint to POST to
+#   DEPLOY_TOKEN  bearer token that endpoint accepts
+name: deploy
+
+on:
+  push:
+    # Whichever of the two the repository uses. The branch that actually gets
+    # deployed is decided on the host, not here, so a workflow file cannot
+    # send a branch to production that was never meant to get there.
+    branches: [main, master]
+  workflow_dispatch:
+
+# No `permissions:` block. Forgejo does not implement the field: it warns on
+# every run that the key is unsupported and then ignores it. Nothing in this
+# workflow reads the repository anyway: no checkout, no API call, no use of the
+# automatic token.
+
+# Two deploys of the same service at once are pointless rather than dangerous,
+# but a queued run that deploys a commit already superseded is just noise.
+concurrency:
+  group: deploy-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # The label of the runner this forge provides; change it to match yours.
+    runs-on: docker
+
+    steps:
+      # No checkout. The host does its own, at the branch it was configured
+      # with; handing it a ref from here would mean any branch that can run a
+      # workflow could put itself into production.
+      - name: Ask the host to deploy
+        env:
+          DEPLOY_URL: ${{ secrets.DEPLOY_URL }}
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${DEPLOY_URL:-}" ] || [ -z "${DEPLOY_TOKEN:-}" ]; then
+            echo "DEPLOY_URL or DEPLOY_TOKEN is missing from this repository's secrets."
+            exit 1
+          fi
+
+          # The request is held open for the length of the deploy, so what
+          # comes back is the deploy's own log and its exit status rather than
+          # an acknowledgement that something was started. --max-time is above
+          # the receiver's own timeout, so the receiver decides when a deploy
+          # has gone on too long.
+          code=$(curl --silent --show-error --max-time 960 \
+                      --output /tmp/deploy.log --write-out '%{http_code}' \
+                      --request POST \
+                      --header "Authorization: Bearer $DEPLOY_TOKEN" \
+                      "$DEPLOY_URL")
+
+          echo "--- host said ($code) ---"
+          cat /tmp/deploy.log || true
+
+          test "$code" = "200"
