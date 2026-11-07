@@ -1,6 +1,6 @@
 [package]
 name = "goby"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 authors = ["Azer Sadykhzadeh"]
 homepage = "https://azer.one"
@@ -47,6 +47,9 @@ features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+    # Updates: HTTPS through WinHTTP, signatures and hashes through CNG.
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography",
 ]
 
 [profile.release]
