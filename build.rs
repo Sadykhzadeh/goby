@@ -298,4 +298,10 @@ fn main() {
     let path = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("goby.res");
     std::fs::write(&path, res).expect("write goby.res");
     println!("cargo:rustc-link-arg-bins={}", path.display());
+
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        // strip = true still leaves rustc passing /DEBUG, so the exe carries a debug directory
+        // naming a goby.pdb that no release keeps. Debug builds keep their PDB.
+        println!("cargo:rustc-link-arg-bins=/DEBUG:NONE");
+    }
 }
