@@ -4,14 +4,15 @@
 
 use std::sync::OnceLock;
 
-/// A file from `lang/`, packed while compiling: comments and spaces around keys go, `\n`
-/// becomes a new line, and what is left is `key\0text\0` for every line.
+/// A file from `lang/`, packed while compiling: its texts only, `\n` turned into a new line,
+/// as `text\0` in the order of en.lang's keys, empty where the file lacks a line. The keys
+/// themselves are kept once, as hashes in `KEYS`.
 macro_rules! file {
     ($code:literal) => {{
         const TEXT: &str = include_str!(concat!("../lang/", $code, ".lang"));
-        const PACKED: [u8; pack(TEXT.as_bytes(), &mut [])] = {
-            let mut out = [0; pack(TEXT.as_bytes(), &mut [])];
-            pack(TEXT.as_bytes(), &mut out);
+        const PACKED: [u8; texts(TEXT.as_bytes(), EN, &mut [])] = {
+            let mut out = [0; texts(TEXT.as_bytes(), EN, &mut [])];
+            texts(TEXT.as_bytes(), EN, &mut out);
             out
         };
         match std::str::from_utf8(&PACKED) {
@@ -25,64 +26,140 @@ macro_rules! file {
 /// the one the others fall back to. A new language is one more file and one more line.
 pub const LANGUAGES: &[(&str, &str, &str)] = &[("en", "English", file!("en")), ("ru", "Русский", file!("ru"))];
 
-/// Writes `text` packed into `out` as far as it fits, and says how long it is in full.
-const fn pack(text: &[u8], out: &mut [u8]) -> usize {
-    const fn trim(t: &[u8], mut from: usize, mut to: usize) -> (usize, usize) {
-        while from < to && t[from].is_ascii_whitespace() {
-            from += 1;
-        }
-        while to > from && t[to - 1].is_ascii_whitespace() {
-            to -= 1;
-        }
-        (from, to)
+const EN: &[u8] = include_str!("../lang/en.lang").as_bytes();
+
+/// en.lang's keys, hashed, in the order of the file.
+static KEYS: [u32; keys(EN, &mut [])] = {
+    let mut out = [0; keys(EN, &mut [])];
+    keys(EN, &mut out);
+    out
+};
+
+const fn trim(t: &[u8], mut from: usize, mut to: usize) -> (usize, usize) {
+    while from < to && t[from].is_ascii_whitespace() {
+        from += 1;
     }
-    const fn put(out: &mut [u8], n: usize, b: u8) -> usize {
-        if n < out.len() {
-            out[n] = b;
-        }
-        n + 1
+    while to > from && t[to - 1].is_ascii_whitespace() {
+        to -= 1;
     }
-    let (mut n, mut line) = (0, 0);
-    while line < text.len() {
-        let mut end = line;
-        while end < text.len() && text[end] != b'\n' {
+    (from, to)
+}
+
+/// The first `key = text` line at or after `at`: where its key and its text start and end,
+/// trimmed, and where the next line starts. Comments, blank lines and lines without `=` are
+/// passed over.
+const fn line(t: &[u8], mut at: usize) -> Option<[usize; 5]> {
+    while at < t.len() {
+        let mut end = at;
+        while end < t.len() && t[end] != b'\n' {
             end += 1;
         }
-        let (from, to) = trim(text, line, end);
+        let (from, to) = trim(t, at, end);
         let mut eq = from;
-        while eq < to && text[eq] != b'=' {
+        while eq < to && t[eq] != b'=' {
             eq += 1;
         }
-        if eq < to && text[from] != b'#' {
-            let (mut i, key_end) = trim(text, from, eq);
-            while i < key_end {
-                n = put(out, n, text[i]);
+        if eq < to && t[from] != b'#' {
+            let ((k0, k1), (v0, v1)) = (trim(t, from, eq), trim(t, eq + 1, to));
+            return Some([k0, k1, v0, v1, end + 1]);
+        }
+        at = end + 1;
+    }
+    None
+}
+
+/// FNV-1a over `t[from..to]`, carrying on from `h`.
+const fn hash(mut h: u32, t: &[u8], mut from: usize, to: usize) -> u32 {
+    while from < to {
+        h = (h ^ t[from] as u32).wrapping_mul(0x0100_0193);
+        from += 1;
+    }
+    h
+}
+
+const FNV: u32 = 0x811c_9dc5;
+
+const fn put(out: &mut [u8], n: usize, b: u8) -> usize {
+    if n < out.len() {
+        out[n] = b;
+    }
+    n + 1
+}
+
+/// Writes the hash of every key in `en` into `out` as far as it fits, and says how many
+/// there are. Two keys with one hash stop the build.
+const fn keys(en: &[u8], out: &mut [u32]) -> usize {
+    let (mut n, mut at) = (0, 0);
+    while let Some([k0, k1, _, _, next]) = line(en, at) {
+        if n < out.len() {
+            out[n] = hash(FNV, en, k0, k1);
+            let mut i = 0;
+            while i < n {
+                assert!(out[i] != out[n], "two keys in en.lang have the same hash");
                 i += 1;
             }
-            n = put(out, n, 0);
-            let (mut i, to) = trim(text, eq + 1, to);
-            while i < to {
-                let new_line = text[i] == b'\\' && i + 1 < to && text[i + 1] == b'n';
-                n = put(out, n, if new_line { b'\n' } else { text[i] });
-                i += 1 + new_line as usize;
-            }
-            n = put(out, n, 0);
         }
-        line = end + 1;
+        (n, at) = (n + 1, next);
     }
     n
 }
 
-/// One language's lines, in the order of its file.
-type Table = Vec<(&'static str, &'static str)>;
+/// The line of `file` whose key is `en[k0..k1]`, looked for from `from` to `to`.
+const fn seek(file: &[u8], mut from: usize, to: usize, en: &[u8], k0: usize, k1: usize) -> Option<[usize; 5]> {
+    while let Some(l) = line(file, from) {
+        if l[0] >= to {
+            break;
+        }
+        if l[1] - l[0] == k1 - k0 {
+            let mut i = 0;
+            while i < k1 - k0 && file[l[0] + i] == en[k0 + i] {
+                i += 1;
+            }
+            if i == k1 - k0 {
+                return Some(l);
+            }
+        }
+        from = l[4];
+    }
+    None
+}
 
-// Inlined, it is copied once per language: 1.4 KB more in the executable.
+/// Writes the texts of `file` packed into `out` as far as they fit, one for each key of
+/// `en` in its order, and says how long they are in full.
+const fn texts(file: &[u8], en: &[u8], out: &mut [u8]) -> usize {
+    let (mut n, mut at, mut last) = (0, 0, 0);
+    while let Some([k0, k1, _, _, next]) = line(en, at) {
+        // Files keep en.lang's order, so the search goes on from the line found last and
+        // only wraps around for a file that does not.
+        let found = match seek(file, last, file.len(), en, k0, k1) {
+            Some(l) => Some(l),
+            None => seek(file, 0, last, en, k0, k1),
+        };
+        if let Some([_, _, mut i, to, after]) = found {
+            while i < to {
+                let new_line = file[i] == b'\\' && i + 1 < to && file[i + 1] == b'n';
+                n = put(out, n, if new_line { b'\n' } else { file[i] });
+                i += 1 + new_line as usize;
+            }
+            last = after;
+        }
+        n = put(out, n, 0);
+        at = next;
+    }
+    n
+}
+
+/// One language's texts, in the order of `KEYS`; empty where it falls back to English.
+type Table = Vec<&'static str>;
+
+// Inlined, it is copied once per language.
 #[inline(never)]
 fn parse(packed: &'static str) -> Table {
-    let (mut table, mut parts) = (Table::new(), packed.split('\0'));
-    while let (Some(key), Some(text)) = (parts.next(), parts.next()) {
-        table.push((key, text));
+    let mut table = Table::new();
+    for text in packed.split('\0') {
+        table.push(text);
     }
+    table.pop(); // after the last \0
     table
 }
 
@@ -133,19 +210,27 @@ pub fn find(code: &str) -> Option<usize> {
 
 /// The text for `key` in the current language, else in English, else the key itself.
 pub fn tr(key: &'static str) -> &'static str {
-    look(tables(), now(), |k| k == key).unwrap_or(key)
+    text(FNV, key)
 }
 
 /// A voice's name, under `voice.` and its id; the id itself if no file has one.
 pub fn voice(id: &'static str) -> &'static str {
-    look(tables(), now(), |k| k.strip_prefix("voice.") == Some(id)).unwrap_or(id)
+    const VOICE: u32 = hash(FNV, b"voice.", 0, 6);
+    text(VOICE, id)
 }
 
-/// The text in language `at`, else in English, under the first key `is` accepts. A look
-/// through a couple of hundred short keys takes well under a microsecond.
-fn look(tables: &'static [Table], at: usize, is: impl Fn(&str) -> bool) -> Option<&'static str> {
-    let get = |t: &'static Table| t.iter().find(|(k, _)| is(k)).map(|(_, text)| *text);
-    get(&tables[at]).or_else(|| get(&tables[0]))
+/// The text under the key whose hash, begun as `h`, ends with `rest`; `rest` itself if
+/// en.lang has no such key. A look through a couple of hundred hashes takes well under a
+/// microsecond.
+// Inlined, it is copied into each of a hundred callers.
+#[inline(never)]
+fn text(h: u32, rest: &'static str) -> &'static str {
+    let h = hash(h, rest.as_bytes(), 0, rest.len());
+    KEYS.iter().position(|&k| k == h).map_or(rest, |i| look(tables(), now(), i))
+}
+/// Text `i` in language `at`, else in English.
+fn look(tables: &'static [Table], at: usize, i: usize) -> &'static str {
+    Some(tables[at][i]).filter(|t| !t.is_empty()).unwrap_or(tables[0][i])
 }
 
 /// `tr`, with each `{name}` replaced by its value.
@@ -171,25 +256,51 @@ mod tests {
         found
     }
 
-    fn packed(text: &str) -> String {
-        let mut out = vec![0; pack(text.as_bytes(), &mut [])];
-        pack(text.as_bytes(), &mut out);
+    fn packed(text: &str, en: &str) -> String {
+        let mut out = vec![0; texts(text.as_bytes(), en.as_bytes(), &mut [])];
+        texts(text.as_bytes(), en.as_bytes(), &mut out);
         String::from_utf8(out).unwrap()
     }
 
+    /// Every key and its text in a file, in its order.
+    fn lines(text: &str) -> Vec<(&str, String)> {
+        let (mut out, mut at) = (Vec::new(), 0);
+        while let Some([k0, k1, v0, v1, next]) = line(text.as_bytes(), at) {
+            out.push((&text[k0..k1], text[v0..v1].replace("\\n", "\n")));
+            at = next;
+        }
+        out
+    }
+
     #[test]
-    fn files_are_packed_into_keys_and_texts() {
-        let text = "# A comment = not a line\n  a = x\\ny \r\nb=2 = 3\n\nno equals sign\nc = a \\ b\n";
-        assert_eq!(packed(text), "a\0x\ny\0b\x002 = 3\0c\0a \\ b\0");
-        let table = parse(packed(text).leak());
-        assert_eq!(table, [("a", "x\ny"), ("b", "2 = 3"), ("c", "a \\ b")]);
+    fn files_are_packed_into_texts_in_the_order_of_english() {
+        let en = "# A comment = not a line\n  a = x\\ny \r\nb=2 = 3\n\nno equals sign\nc = a \\ b\n";
+        assert_eq!(packed(en, en), "x\ny\x002 = 3\0a \\ b\0");
+        assert_eq!(parse(packed(en, en).leak()), ["x\ny", "2 = 3", "a \\ b"]);
+        // Out of order, a line missing, and one English lacks.
+        assert_eq!(packed("c = C\nd = D\nb = B\n", en), "\0B\0C\0");
+        let keys: Vec<&str> = lines(en).iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, ["a", "b", "c"]);
+        let mut hashes = [0; 3];
+        assert_eq!(super::keys(en.as_bytes(), &mut hashes), 3);
+        assert_eq!(hashes[1], hash(FNV, b"b", 0, 1));
     }
 
     #[test]
     fn every_file_has_the_same_keys_once_and_the_same_placeholders() {
-        let tables = tables();
-        let english = &tables[0];
-        for ((code, name, _), table) in LANGUAGES.iter().zip(tables) {
+        let read = |code: &str| {
+            let path = format!("{}/lang/{code}.lang", env!("CARGO_MANIFEST_DIR"));
+            std::fs::read_to_string(path).unwrap()
+        };
+        let en_file = read("en");
+        let english = lines(&en_file);
+        assert_eq!(english.len(), KEYS.len());
+        for (i, (key, _)) in english.iter().enumerate() {
+            assert_eq!(KEYS[i], hash(FNV, key.as_bytes(), 0, key.len()), "{key}");
+        }
+        for (at, (code, name, _)) in LANGUAGES.iter().enumerate() {
+            let file = read(code);
+            let table = lines(&file);
             for (i, (key, text)) in table.iter().enumerate() {
                 assert!(!table[..i].iter().any(|(k, _)| k == key), "{code}: {key} is there twice");
                 let Some((_, en)) = english.iter().find(|(k, _)| k == key) else {
@@ -198,8 +309,11 @@ mod tests {
                 assert_eq!(placeholders(text), placeholders(en), "{code}: {key}");
                 assert!(!text.is_empty(), "{code}: {key} is empty");
             }
-            for (key, _) in english {
-                assert!(table.iter().any(|(k, _)| k == key), "{code}: {key} is missing");
+            for (i, (key, _)) in english.iter().enumerate() {
+                let Some((_, text)) = table.iter().find(|(k, _)| k == key) else {
+                    panic!("{code}: {key} is missing");
+                };
+                assert_eq!(look(tables(), at, i), text, "{code}: {key} is packed wrong");
             }
             assert!(!name.is_empty() && code.len() == 2, "{code}");
             // Every line that is not a comment is a key and its text.
@@ -250,7 +364,8 @@ mod tests {
     #[test]
     fn every_key_the_code_uses_is_there_and_every_key_there_is_used() {
         let used = used();
-        let english: Vec<&str> = tables()[0].iter().map(|(k, _)| *k).collect();
+        let file = include_str!("../lang/en.lang");
+        let english: Vec<&str> = lines(file).into_iter().map(|(k, _)| k).collect();
         assert!(used.len() > 100, "the scan found {} keys", used.len());
         for key in &used {
             assert!(english.contains(&key.as_str()), "{key} is used but not in en.lang");
@@ -281,10 +396,9 @@ mod tests {
 
     #[test]
     fn a_missing_line_falls_back_to_english() {
-        let tables = Box::leak(Box::new([parse("a\0A\0b\0B\0"), parse("b\0Б\0")]));
-        let at = |key: &str| look(tables, 1, |k| k == key);
-        assert_eq!(at("a"), Some("A"));
-        assert_eq!(at("b"), Some("Б"));
-        assert_eq!(at("c"), None);
+        let en = "a = A\nb = B\n";
+        let tables = Box::leak(Box::new([parse(packed(en, en).leak()), parse(packed("b = Б\n", en).leak())]));
+        assert_eq!(look(tables, 1, 0), "A");
+        assert_eq!(look(tables, 1, 1), "Б");
     }
 }
