@@ -20,8 +20,8 @@ pub struct PitchShifter {
     write: usize,
     ratio: f32,
     delay: f32,
-    /// Delay of the incoming tap and progress of the crossfade towards it.
-    fade: Option<(f32, usize)>,
+    /// Delay of the incoming tap, progress of the crossfade towards it, and its length.
+    fade: Option<(f32, usize, usize)>,
     min_delay: f32,
     min_lag: usize,
     max_lag: usize,
@@ -153,19 +153,29 @@ impl PitchShifter {
         self.buf[self.write] = x;
         let drift = 1.0 - self.ratio;
         let mut y = self.tap(self.delay);
-        if let Some((next, t)) = self.fade {
-            y += (self.tap(next) - y) * self.fade_gain[t];
-            self.fade = if t + 1 >= self.fade_len {
+        if let Some((next, t, len)) = self.fade {
+            // A shortened fade steps through the same curve faster.
+            y += (self.tap(next) - y) * self.fade_gain[t * self.fade_len / len];
+            self.fade = if t + 1 >= len {
                 self.delay = next;
                 None
             } else {
-                Some((next + drift, t + 1))
+                Some((next + drift, t + 1, len))
             };
         }
         self.delay += drift;
 
         if self.fade.is_none() {
-            let room = self.fade_len as f32 * drift.abs() + 1.0;
+            // Far up the tap races towards the write head: over a full-length fade it
+            // covered more than a whole period, the next jump was due before this one
+            // ended, and the tap ran off into stale audio (Minion at +12 st, about +20
+            // in all). A shorter fade keeps each one inside part of a period.
+            let len = if drift < 0.0 {
+                self.fade_len.min((0.8 * self.min_lag as f32 / -drift) as usize).max(32)
+            } else {
+                self.fade_len
+            };
+            let room = len as f32 * drift.abs() + 1.0;
             if drift > 0.0 {
                 // Shifting down the tap falls behind. Jump forward as soon as one period
                 // (the last lag) fits, if the waveform lines up well; only when the full lag
@@ -180,14 +190,14 @@ impl PitchShifter {
                         if forced || score > 0.6 {
                             self.last_lag = lag;
                             self.wait = 0;
-                            self.fade = Some((self.delay - lag as f32, 0));
+                            self.fade = Some((self.delay - lag as f32, 0, len));
                         }
                     }
                 }
             } else if drift < 0.0 && self.delay < self.min_delay + room {
                 let (lag, _) = self.best_lag(self.delay, 1, self.max_lag);
                 self.last_lag = lag;
-                self.fade = Some((self.delay + lag as f32, 0));
+                self.fade = Some((self.delay + lag as f32, 0, len));
             }
         }
         // Kept masked: an ever-growing index would lose precision as f32 after a few minutes.
@@ -688,6 +698,45 @@ mod tests {
             let (lag, score) = p.best_lag(from, sign, longest);
             let (want, best) = plain(&p, from, sign, longest);
             assert!(lag == want && (score - best).abs() < 1e-4, "{lag} {score} vs {want} {best}");
+        }
+    }
+
+    /// Minion with the tone slider at the top is +20 st. With full-length fades the tap
+    /// outran the write head there and nine tenths of the output was off the harmonics.
+    #[test]
+    fn very_high_shifts_stay_on_the_voice() {
+        let f0 = 130.0f32;
+        let input: Vec<f32> = (0..SR as usize * 2)
+            .map(|i| {
+                (1..10).map(|h| (i as f32 * f0 * h as f32 * 2.0 * PI / SR as f32).sin() / h as f32).sum::<f32>() * 0.2
+            })
+            .collect();
+        for semis in [19.0f32, 20.0, 24.0] {
+            let r = 2f32.powf(semis / 12.0);
+            let mut p = PitchShifter::new(SR);
+            p.set_ratio(r);
+            let mut out = Vec::new();
+            for s in &input {
+                out.push(p.process(*s));
+                assert!(p.delay >= p.min_delay - 1.0, "{semis:+} st: tap at {} samples", p.delay);
+            }
+            let x = &out[SR as usize..];
+            let total: f32 = x.iter().map(|v| v * v).sum();
+            let mut harmonics = 0.0f32;
+            let mut k = 1.0;
+            while f0 * r * k < 20_000.0 {
+                let w = 2.0 * PI * f0 * r * k / SR as f32;
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, s) in x.iter().enumerate() {
+                    let (sn, cs) = (w * i as f32).sin_cos();
+                    re += s * cs;
+                    im += s * sn;
+                }
+                harmonics += 2.0 * (re * re + im * im) / x.len() as f32;
+                k += 1.0;
+            }
+            let off = 1.0 - harmonics / total;
+            assert!(off < 0.5, "{semis:+} st: {:.0} % off the harmonics", off * 100.0);
         }
     }
 
