@@ -94,7 +94,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
-| DSP cost, Minion / heaviest voice | 0.09 % / 0.37 % of one core |
+| DSP cost, Minion / heaviest voice | 0.09 % / 0.33 % of one core |
 | Mic to cable, Minion | 29 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 

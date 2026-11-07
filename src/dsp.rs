@@ -34,6 +34,8 @@ pub struct PitchShifter {
     /// Scratch for `best_lag`: the searched stretch of `buf` unwrapped, and its running energy.
     line: Vec<f32>,
     energy: Vec<f64>,
+    /// Raised-cosine crossfade gain for each step of a fade.
+    fade_gain: Vec<f32>,
 }
 
 impl PitchShifter {
@@ -62,6 +64,7 @@ impl PitchShifter {
             wait: 0,
             line: vec![0.0; corr_len + max_lag],
             energy: vec![0.0; corr_len + max_lag + 1],
+            fade_gain: (0..fade_len).map(|t| 0.5 - 0.5 * (PI * t as f32 / fade_len as f32).cos()).collect(),
         }
     }
 
@@ -151,8 +154,7 @@ impl PitchShifter {
         let drift = 1.0 - self.ratio;
         let mut y = self.tap(self.delay);
         if let Some((next, t)) = self.fade {
-            let g = 0.5 - 0.5 * (PI * t as f32 / self.fade_len as f32).cos();
-            y += (self.tap(next) - y) * g;
+            y += (self.tap(next) - y) * self.fade_gain[t];
             self.fade = if t + 1 >= self.fade_len {
                 self.delay = next;
                 None
