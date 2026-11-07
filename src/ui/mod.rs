@@ -217,6 +217,7 @@ struct Anim {
 }
 
 impl Anim {
+    #[inline(never)]
     fn step(&mut self, rate: f32) -> bool {
         let d = self.target - self.value;
         if d.abs() < 0.001 {
