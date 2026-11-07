@@ -23,7 +23,7 @@ use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
 use crate::dsp::Voice;
 use crate::host::{Endpoint, SCOPE_LEN};
-use crate::lang::pick;
+use crate::lang::{tr, trf};
 use crate::mic::Mic;
 use crate::ring::{Consumer, Producer, ring};
 use crate::voices;
@@ -415,7 +415,7 @@ impl Engine {
             match ready_rx.recv_timeout(Duration::from_secs(8)) {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => return Err(e),
-                Err(_) => return Err(pick("Аудиоустройство не ответило", "The audio device did not respond").into()),
+                Err(_) => return Err(tr("error.no_answer").into()),
             }
         }
         Ok(engine)
@@ -433,11 +433,9 @@ impl Drop for Engine {
 
 fn friendly(e: windows::core::Error) -> String {
     match e.code() {
-        AUDCLNT_E_DEVICE_IN_USE => {
-            pick("Устройство занято другой программой", "Another program holds the device exclusively").into()
-        }
-        AUDCLNT_E_DEVICE_INVALIDATED => pick("Устройство отключено", "The device was unplugged").into(),
-        _ => format!("{}: {}", pick("Ошибка звука", "Audio error"), e.message()),
+        AUDCLNT_E_DEVICE_IN_USE => tr("error.in_use").into(),
+        AUDCLNT_E_DEVICE_INVALIDATED => tr("error.unplugged").into(),
+        _ => trf("error.audio", &[("message", &e.message())]),
     }
 }
 

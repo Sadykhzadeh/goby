@@ -29,6 +29,8 @@ mod demo;
 mod draw;
 #[path = "../../../src/host.rs"]
 mod host;
+#[path = "../../../src/lang.rs"]
+mod lang;
 #[path = "../../../src/settings.rs"]
 mod settings;
 #[path = "../../../src/theme.rs"]

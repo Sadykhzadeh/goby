@@ -2,6 +2,7 @@
 //! what people hear. Starting values were tuned by ear and checked by the tests below.
 
 use crate::dsp::{Recipe, Voice};
+use crate::lang::tr;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
@@ -25,22 +26,15 @@ impl Category {
         Category::Fun,
     ];
 
-    pub fn name(self, ru: bool) -> &'static str {
-        match (self, ru) {
-            (Category::Basics, true) => "Основные",
-            (Category::Basics, false) => "Basics",
-            (Category::People, true) => "Люди",
-            (Category::People, false) => "People",
-            (Category::Creatures, true) => "Существа",
-            (Category::Creatures, false) => "Creatures",
-            (Category::Robots, true) => "Роботы",
-            (Category::Robots, false) => "Robots",
-            (Category::Places, true) => "Места",
-            (Category::Places, false) => "Places",
-            (Category::Devices, true) => "Устройства",
-            (Category::Devices, false) => "Devices",
-            (Category::Fun, true) => "Приколы",
-            (Category::Fun, false) => "Fun",
+    pub fn name(self) -> &'static str {
+        match self {
+            Category::Basics => tr("category.basics"),
+            Category::People => tr("category.people"),
+            Category::Creatures => tr("category.creatures"),
+            Category::Robots => tr("category.robots"),
+            Category::Places => tr("category.places"),
+            Category::Devices => tr("category.devices"),
+            Category::Fun => tr("category.fun"),
         }
     }
 }
@@ -48,95 +42,93 @@ impl Category {
 pub struct VoiceDef {
     /// Stable key for settings files; never rename.
     pub id: &'static str,
-    pub ru: &'static str,
-    pub en: &'static str,
     pub category: Category,
     pub recipe: Recipe,
 }
 
 impl VoiceDef {
-    pub fn name(&self, ru: bool) -> &'static str {
-        if ru { self.ru } else { self.en }
+    pub fn name(&self) -> &'static str {
+        crate::lang::voice(self.id)
     }
 }
 
 const D: Recipe = Recipe::DRY;
 
 macro_rules! voice {
-    ($id:literal, $ru:literal, $en:literal, $cat:ident, { $($field:ident: $value:expr),* $(,)? }) => {
-        VoiceDef { id: $id, ru: $ru, en: $en, category: Category::$cat, recipe: Recipe { $($field: $value,)* ..D } }
+    ($id:literal, $cat:ident, { $($field:ident: $value:expr),* $(,)? }) => {
+        VoiceDef { id: $id, category: Category::$cat, recipe: Recipe { $($field: $value,)* ..D } }
     };
 }
 
 pub static ALL: &[VoiceDef] = &[
     // Basics: the first six keep the ids the app started with.
-    voice!("off", "Без эффекта", "Off", Basics, {}),
-    voice!("minion", "Миньон", "Minion", Basics, { pitch: 8.0 }),
-    voice!("helium", "Гелий", "Helium", Basics, { pitch: 12.0 }),
-    voice!("giant", "Великан", "Giant", Basics, { pitch: -6.0, reverb_size: 0.3, reverb_damp: 0.5, reverb_mix: 0.12 }),
-    voice!("robot", "Робот", "Robot", Basics, { ring_hz: 55.0, ring_mix: 1.0, comb_ms: 6.0, comb_feedback: 0.55, gain: 1.4 }),
-    voice!("radio", "Рация", "Radio", Basics, { highpass_hz: 450.0, lowpass_hz: 2800.0, drive: 4.0, gain: 1.2 }),
+    voice!("off", Basics, {}),
+    voice!("minion", Basics, { pitch: 8.0 }),
+    voice!("helium", Basics, { pitch: 12.0 }),
+    voice!("giant", Basics, { pitch: -6.0, reverb_size: 0.3, reverb_damp: 0.5, reverb_mix: 0.12 }),
+    voice!("robot", Basics, { ring_hz: 55.0, ring_mix: 1.0, comb_ms: 6.0, comb_feedback: 0.55, gain: 1.4 }),
+    voice!("radio", Basics, { highpass_hz: 450.0, lowpass_hz: 2800.0, drive: 4.0, gain: 1.2 }),
     // People
-    voice!("kid", "Ребёнок", "Kid", People, { pitch: 5.0, chorus: 0.15 }),
-    voice!("baby", "Младенец", "Baby", People, { pitch: 9.0, tremolo_hz: 6.0, tremolo_depth: 0.15 }),
-    voice!("woman", "Женский", "Woman", People, { pitch: 4.0, highpass_hz: 120.0 }),
-    voice!("man", "Мужской", "Man", People, { pitch: -3.0 }),
-    voice!("bass", "Бас", "Deep voice", People, { pitch: -7.0, lowpass_hz: 6000.0, reverb_size: 0.2, reverb_damp: 0.6, reverb_mix: 0.1 }),
-    voice!("grandpa", "Дедушка", "Grandpa", People, { pitch: -2.0, vibrato_hz: 5.0, vibrato_cents: 18.0, lowpass_hz: 4000.0 }),
-    voice!("grandma", "Бабушка", "Grandma", People, { pitch: 2.0, vibrato_hz: 5.5, vibrato_cents: 28.0, highpass_hz: 200.0 }),
-    voice!("teen", "Подросток", "Teen", People, { pitch: 2.0, wobble_hz: 2.0, wobble_cents: 45.0 }),
-    voice!("pirate", "Пират", "Pirate", People, { pitch: -4.0, drive: 2.0, reverb_size: 0.25, reverb_damp: 0.5, reverb_mix: 0.12 }),
-    voice!("nervous", "Волнуется", "Nervous", People, { vibrato_hz: 7.0, vibrato_cents: 35.0, tremolo_hz: 7.0, tremolo_depth: 0.2 }),
-    voice!("drunk", "Пьяный", "Tipsy", People, { pitch: -1.0, wobble_hz: 1.2, wobble_cents: 70.0, echo_ms: 140.0, echo_feedback: 0.2, echo_mix: 0.2 }),
-    voice!("whisper", "Шёпот", "Whisper", People, { whisper: 1.0, highpass_hz: 300.0, gain: 1.6 }),
-    voice!("sleepy", "Сонный", "Sleepy", People, { pitch: -2.0, lowpass_hz: 3500.0, tremolo_hz: 0.5, tremolo_depth: 0.25 }),
-    voice!("announcer", "Ведущий", "Announcer", People, { pitch: -2.0, drive: 1.5, echo_ms: 260.0, echo_feedback: 0.25, echo_mix: 0.2, reverb_size: 0.7, reverb_damp: 0.4, reverb_mix: 0.2 }),
+    voice!("kid", People, { pitch: 5.0, chorus: 0.15 }),
+    voice!("baby", People, { pitch: 9.0, tremolo_hz: 6.0, tremolo_depth: 0.15 }),
+    voice!("woman", People, { pitch: 4.0, highpass_hz: 120.0 }),
+    voice!("man", People, { pitch: -3.0 }),
+    voice!("bass", People, { pitch: -7.0, lowpass_hz: 6000.0, reverb_size: 0.2, reverb_damp: 0.6, reverb_mix: 0.1 }),
+    voice!("grandpa", People, { pitch: -2.0, vibrato_hz: 5.0, vibrato_cents: 18.0, lowpass_hz: 4000.0 }),
+    voice!("grandma", People, { pitch: 2.0, vibrato_hz: 5.5, vibrato_cents: 28.0, highpass_hz: 200.0 }),
+    voice!("teen", People, { pitch: 2.0, wobble_hz: 2.0, wobble_cents: 45.0 }),
+    voice!("pirate", People, { pitch: -4.0, drive: 2.0, reverb_size: 0.25, reverb_damp: 0.5, reverb_mix: 0.12 }),
+    voice!("nervous", People, { vibrato_hz: 7.0, vibrato_cents: 35.0, tremolo_hz: 7.0, tremolo_depth: 0.2 }),
+    voice!("drunk", People, { pitch: -1.0, wobble_hz: 1.2, wobble_cents: 70.0, echo_ms: 140.0, echo_feedback: 0.2, echo_mix: 0.2 }),
+    voice!("whisper", People, { whisper: 1.0, highpass_hz: 300.0, gain: 1.6 }),
+    voice!("sleepy", People, { pitch: -2.0, lowpass_hz: 3500.0, tremolo_hz: 0.5, tremolo_depth: 0.25 }),
+    voice!("announcer", People, { pitch: -2.0, drive: 1.5, echo_ms: 260.0, echo_feedback: 0.25, echo_mix: 0.2, reverb_size: 0.7, reverb_damp: 0.4, reverb_mix: 0.2 }),
     // Creatures
-    voice!("gremlin", "Гремлин", "Gremlin", Creatures, { pitch: 6.0, ring_hz: 90.0, ring_mix: 0.15, drive: 1.5 }),
-    voice!("rodent", "Грызун", "Rodent", Creatures, { pitch: 10.0, chorus: 0.3 }),
-    voice!("ogre", "Огр", "Ogre", Creatures, { pitch: -6.0, drive: 2.5, lowpass_hz: 5000.0 }),
-    voice!("troll", "Тролль", "Troll", Creatures, { pitch: -7.0, ring_hz: 30.0, ring_mix: 0.3, reverb_size: 0.3, reverb_damp: 0.5, reverb_mix: 0.15 }),
-    voice!("demon", "Демон", "Demon", Creatures, { pitch: -8.0, harmony: [-12.0, 0.0], harmony_mix: 0.45, drive: 2.5, reverb_size: 0.8, reverb_damp: 0.4, reverb_mix: 0.25 }),
-    voice!("zombie", "Зомби", "Zombie", Creatures, { pitch: -3.0, vibrato_hz: 3.0, vibrato_cents: 25.0, crush_hz: 12000.0, crush_bits: 8, lowpass_hz: 2500.0, gain: 1.3 }),
-    voice!("ghost", "Привидение", "Ghost", Creatures, { pitch: 1.0, whisper: 0.35, flanger_hz: 0.2, flanger_mix: 0.5, reverb_size: 0.75, reverb_damp: 0.35, reverb_mix: 0.4 }),
-    voice!("possessed", "Одержимый", "Possessed", Creatures, { harmony: [-5.0, 4.0], harmony_mix: 0.5, ring_hz: 60.0, ring_mix: 0.15, reverb_size: 0.8, reverb_damp: 0.5, reverb_mix: 0.3 }),
-    voice!("vampire", "Вампир", "Vampire", Creatures, { pitch: -3.0, chorus: 0.3, reverb_size: 0.8, reverb_damp: 0.3, reverb_mix: 0.2 }),
-    voice!("dragon", "Дракон", "Dragon", Creatures, { pitch: -10.0, harmony: [-5.0, 0.0], harmony_mix: 0.4, drive: 3.0, reverb_size: 0.9, reverb_damp: 0.5, reverb_mix: 0.25 }),
-    voice!("swarm", "Рой", "Swarm", Creatures, { ring_hz: 110.0, ring_mix: 0.4, tremolo_hz: 20.0, tremolo_depth: 0.4 }),
-    voice!("alien", "Пришелец", "Alien", Creatures, { pitch: 3.0, ring_hz: 250.0, ring_mix: 0.3, flanger_hz: 1.5, flanger_mix: 0.4 }),
+    voice!("gremlin", Creatures, { pitch: 6.0, ring_hz: 90.0, ring_mix: 0.15, drive: 1.5 }),
+    voice!("rodent", Creatures, { pitch: 10.0, chorus: 0.3 }),
+    voice!("ogre", Creatures, { pitch: -6.0, drive: 2.5, lowpass_hz: 5000.0 }),
+    voice!("troll", Creatures, { pitch: -7.0, ring_hz: 30.0, ring_mix: 0.3, reverb_size: 0.3, reverb_damp: 0.5, reverb_mix: 0.15 }),
+    voice!("demon", Creatures, { pitch: -8.0, harmony: [-12.0, 0.0], harmony_mix: 0.45, drive: 2.5, reverb_size: 0.8, reverb_damp: 0.4, reverb_mix: 0.25 }),
+    voice!("zombie", Creatures, { pitch: -3.0, vibrato_hz: 3.0, vibrato_cents: 25.0, crush_hz: 12000.0, crush_bits: 8, lowpass_hz: 2500.0, gain: 1.3 }),
+    voice!("ghost", Creatures, { pitch: 1.0, whisper: 0.35, flanger_hz: 0.2, flanger_mix: 0.5, reverb_size: 0.75, reverb_damp: 0.35, reverb_mix: 0.4 }),
+    voice!("possessed", Creatures, { harmony: [-5.0, 4.0], harmony_mix: 0.5, ring_hz: 60.0, ring_mix: 0.15, reverb_size: 0.8, reverb_damp: 0.5, reverb_mix: 0.3 }),
+    voice!("vampire", Creatures, { pitch: -3.0, chorus: 0.3, reverb_size: 0.8, reverb_damp: 0.3, reverb_mix: 0.2 }),
+    voice!("dragon", Creatures, { pitch: -10.0, harmony: [-5.0, 0.0], harmony_mix: 0.4, drive: 3.0, reverb_size: 0.9, reverb_damp: 0.5, reverb_mix: 0.25 }),
+    voice!("swarm", Creatures, { ring_hz: 110.0, ring_mix: 0.4, tremolo_hz: 20.0, tremolo_depth: 0.4 }),
+    voice!("alien", Creatures, { pitch: 3.0, ring_hz: 250.0, ring_mix: 0.3, flanger_hz: 1.5, flanger_mix: 0.4 }),
     // Robots & sci-fi
-    voice!("android", "Андроид", "Android", Robots, { vocoder_hz: 110.0, gain: 1.4 }),
-    voice!("dictator", "Диктатор", "Dictator", Robots, { ring_hz: 30.0, ring_mix: 1.0, highpass_hz: 400.0, lowpass_hz: 3400.0, drive: 3.0, hard_clip: true, gain: 1.4 }),
-    voice!("cyborg", "Киборг", "Cyborg", Robots, { pitch: -4.0, comb_ms: 3.0, comb_feedback: 0.6, reverb_size: 0.3, reverb_damp: 0.4, reverb_mix: 0.12 }),
-    voice!("mutant", "Мутант", "Mutant", Robots, { wobble_hz: 2.0, wobble_cents: 300.0, chorus: 0.3 }),
-    voice!("8bit", "8-бит", "8-bit", Robots, { crush_hz: 8000.0, crush_bits: 5, ring_hz: 440.0, ring_mix: 0.1, gain: 1.2 }),
-    voice!("synth_choir", "Синт-хор", "Synth choir", Robots, { vocoder_hz: 220.0, vocoder_chord: true, reverb_size: 0.6, reverb_damp: 0.4, reverb_mix: 0.2, gain: 1.4 }),
-    voice!("hologram", "Голограмма", "Hologram", Robots, { ring_hz: 8.0, ring_mix: 0.25, flanger_hz: 0.6, flanger_mix: 0.5, echo_ms: 90.0, echo_feedback: 0.3, echo_mix: 0.25 }),
-    voice!("spaceship", "Борт корабля", "Spaceship", Robots, { highpass_hz: 500.0, lowpass_hz: 2500.0, hiss: 0.02, drive: 2.0, comb_ms: 1.5, comb_feedback: 0.3 }),
+    voice!("android", Robots, { vocoder_hz: 110.0, gain: 1.4 }),
+    voice!("dictator", Robots, { ring_hz: 30.0, ring_mix: 1.0, highpass_hz: 400.0, lowpass_hz: 3400.0, drive: 3.0, hard_clip: true, gain: 1.4 }),
+    voice!("cyborg", Robots, { pitch: -4.0, comb_ms: 3.0, comb_feedback: 0.6, reverb_size: 0.3, reverb_damp: 0.4, reverb_mix: 0.12 }),
+    voice!("mutant", Robots, { wobble_hz: 2.0, wobble_cents: 300.0, chorus: 0.3 }),
+    voice!("8bit", Robots, { crush_hz: 8000.0, crush_bits: 5, ring_hz: 440.0, ring_mix: 0.1, gain: 1.2 }),
+    voice!("synth_choir", Robots, { vocoder_hz: 220.0, vocoder_chord: true, reverb_size: 0.6, reverb_damp: 0.4, reverb_mix: 0.2, gain: 1.4 }),
+    voice!("hologram", Robots, { ring_hz: 8.0, ring_mix: 0.25, flanger_hz: 0.6, flanger_mix: 0.5, echo_ms: 90.0, echo_feedback: 0.3, echo_mix: 0.25 }),
+    voice!("spaceship", Robots, { highpass_hz: 500.0, lowpass_hz: 2500.0, hiss: 0.02, drive: 2.0, comb_ms: 1.5, comb_feedback: 0.3 }),
     // Places
-    voice!("cave", "Пещера", "Cave", Places, { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5 }),
-    voice!("cathedral", "Собор", "Cathedral", Places, { reverb_size: 1.0, reverb_damp: 0.15, reverb_mix: 0.45 }),
-    voice!("bathroom", "Ванная", "Bathroom", Places, { reverb_size: 0.3, reverb_damp: 0.05, reverb_mix: 0.4 }),
-    voice!("stadium", "Стадион", "Stadium", Places, { echo_ms: 300.0, echo_feedback: 0.25, echo_mix: 0.35, reverb_size: 0.8, reverb_damp: 0.3, reverb_mix: 0.25 }),
-    voice!("underwater", "Под водой", "Underwater", Places, { lowpass_hz: 900.0, chorus: 0.5, vibrato_hz: 3.0, vibrato_cents: 25.0, gain: 1.5 }),
-    voice!("canyon", "Каньон", "Canyon", Places, { echo_ms: 380.0, echo_feedback: 0.28, echo_mix: 0.5 }),
-    voice!("tin_can", "Консервная банка", "Tin can", Places, { comb_ms: 1.2, comb_feedback: 0.7, highpass_hz: 300.0 }),
+    voice!("cave", Places, { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5 }),
+    voice!("cathedral", Places, { reverb_size: 1.0, reverb_damp: 0.15, reverb_mix: 0.45 }),
+    voice!("bathroom", Places, { reverb_size: 0.3, reverb_damp: 0.05, reverb_mix: 0.4 }),
+    voice!("stadium", Places, { echo_ms: 300.0, echo_feedback: 0.25, echo_mix: 0.35, reverb_size: 0.8, reverb_damp: 0.3, reverb_mix: 0.25 }),
+    voice!("underwater", Places, { lowpass_hz: 900.0, chorus: 0.5, vibrato_hz: 3.0, vibrato_cents: 25.0, gain: 1.5 }),
+    voice!("canyon", Places, { echo_ms: 380.0, echo_feedback: 0.28, echo_mix: 0.5 }),
+    voice!("tin_can", Places, { comb_ms: 1.2, comb_feedback: 0.7, highpass_hz: 300.0 }),
     // Devices
-    voice!("phone", "Телефон", "Phone", Devices, { highpass_hz: 300.0, lowpass_hz: 3400.0, drive: 1.5, gain: 1.3 }),
-    voice!("megaphone", "Мегафон", "Megaphone", Devices, { highpass_hz: 500.0, lowpass_hz: 4000.0, drive: 5.0, hard_clip: true, reverb_size: 0.4, reverb_damp: 0.4, reverb_mix: 0.15 }),
-    voice!("walkie", "Рация с помехами", "Walkie-talkie", Devices, { highpass_hz: 400.0, lowpass_hz: 3000.0, crush_hz: 8000.0, crush_bits: 8, hiss: 0.04, drive: 2.0 }),
-    voice!("old_radio", "Старое радио", "Old radio", Devices, { highpass_hz: 300.0, lowpass_hz: 3500.0, drive: 2.5, hiss: 0.02, tremolo_hz: 0.5, tremolo_depth: 0.2 }),
-    voice!("drive_thru", "Окно заказа", "Drive-thru", Devices, { highpass_hz: 600.0, lowpass_hz: 3000.0, drive: 4.0, hiss: 0.03 }),
-    voice!("cassette", "Кассета", "Cassette", Devices, { wobble_hz: 0.8, wobble_cents: 20.0, lowpass_hz: 7000.0, hiss: 0.01, drive: 1.3 }),
+    voice!("phone", Devices, { highpass_hz: 300.0, lowpass_hz: 3400.0, drive: 1.5, gain: 1.3 }),
+    voice!("megaphone", Devices, { highpass_hz: 500.0, lowpass_hz: 4000.0, drive: 5.0, hard_clip: true, reverb_size: 0.4, reverb_damp: 0.4, reverb_mix: 0.15 }),
+    voice!("walkie", Devices, { highpass_hz: 400.0, lowpass_hz: 3000.0, crush_hz: 8000.0, crush_bits: 8, hiss: 0.04, drive: 2.0 }),
+    voice!("old_radio", Devices, { highpass_hz: 300.0, lowpass_hz: 3500.0, drive: 2.5, hiss: 0.02, tremolo_hz: 0.5, tremolo_depth: 0.2 }),
+    voice!("drive_thru", Devices, { highpass_hz: 600.0, lowpass_hz: 3000.0, drive: 4.0, hiss: 0.03 }),
+    voice!("cassette", Devices, { wobble_hz: 0.8, wobble_cents: 20.0, lowpass_hz: 7000.0, hiss: 0.01, drive: 1.3 }),
     // Fun
-    voice!("chipmunk_choir", "Хор бурундуков", "Squeaky choir", Fun, { pitch: 12.0, harmony: [16.0, 19.0], harmony_mix: 0.5 }),
-    voice!("opera", "Опера", "Opera", Fun, { vibrato_hz: 5.5, vibrato_cents: 45.0, reverb_size: 0.9, reverb_damp: 0.3, reverb_mix: 0.3 }),
-    voice!("choir", "Хор", "Choir", Fun, { harmony: [4.0, 7.0], harmony_mix: 0.5, chorus: 0.3, reverb_size: 0.9, reverb_damp: 0.3, reverb_mix: 0.3 }),
-    voice!("karaoke", "Караоке", "Karaoke", Fun, { echo_ms: 180.0, echo_feedback: 0.3, echo_mix: 0.3, reverb_size: 0.5, reverb_damp: 0.2, reverb_mix: 0.2 }),
-    voice!("glitch", "Глюк", "Glitch", Fun, { wobble_hz: 8.0, wobble_cents: 60.0, crush_hz: 11000.0, crush_bits: 10, ring_hz: 15.0, ring_mix: 0.2 }),
-    voice!("duet", "Дуэт с басом", "Duet", Fun, { harmony: [-12.0, 0.0], harmony_mix: 0.5 }),
-    voice!("jet", "Реактивный", "Jet", Fun, { flanger_hz: 0.25, flanger_mix: 0.9 }),
-    voice!("helium_robot", "Робочипмунк", "Squeaky robot", Fun, { pitch: 9.0, ring_hz: 70.0, ring_mix: 0.7, comb_ms: 4.0, comb_feedback: 0.4 }),
+    voice!("chipmunk_choir", Fun, { pitch: 12.0, harmony: [16.0, 19.0], harmony_mix: 0.5 }),
+    voice!("opera", Fun, { vibrato_hz: 5.5, vibrato_cents: 45.0, reverb_size: 0.9, reverb_damp: 0.3, reverb_mix: 0.3 }),
+    voice!("choir", Fun, { harmony: [4.0, 7.0], harmony_mix: 0.5, chorus: 0.3, reverb_size: 0.9, reverb_damp: 0.3, reverb_mix: 0.3 }),
+    voice!("karaoke", Fun, { echo_ms: 180.0, echo_feedback: 0.3, echo_mix: 0.3, reverb_size: 0.5, reverb_damp: 0.2, reverb_mix: 0.2 }),
+    voice!("glitch", Fun, { wobble_hz: 8.0, wobble_cents: 60.0, crush_hz: 11000.0, crush_bits: 10, ring_hz: 15.0, ring_mix: 0.2 }),
+    voice!("duet", Fun, { harmony: [-12.0, 0.0], harmony_mix: 0.5 }),
+    voice!("jet", Fun, { flanger_hz: 0.25, flanger_mix: 0.9 }),
+    voice!("helium_robot", Fun, { pitch: 9.0, ring_hz: 70.0, ring_mix: 0.7, comb_ms: 4.0, comb_feedback: 0.4 }),
 ];
 
 pub fn index_of(id: &str) -> Option<usize> {
@@ -173,15 +165,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_name_exists_in_both_languages() {
+    fn ids_are_plain() {
         for v in ALL {
-            assert!(!v.ru.trim().is_empty() && !v.en.trim().is_empty(), "{}", v.id);
             assert!(v.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "id {}", v.id);
         }
-        for c in Category::ALL {
-            assert!(!c.name(true).is_empty() && !c.name(false).is_empty());
-        }
     }
+
     use std::f32::consts::TAU;
 
     const SR: u32 = 48_000;

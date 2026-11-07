@@ -105,7 +105,7 @@ pub extern "C" fn ui_start(w: f32, h: f32, still: bool) {
     let theme = Theme::new(true, [0xFFE38C, 0xFFB900, 0xF7A100, 0xD18A00, 0x9A6400, 0x6E4500, 0x412700]);
     let mut host = DemoHost::default();
     host.animations = !still;
-    let mut app = App::new(host, demo::settings(), theme, false, 96.0);
+    let mut app = App::new(host, demo::settings(), theme, 96.0);
     app.still = still;
     app.shown = true;
     app.resize(w, h);

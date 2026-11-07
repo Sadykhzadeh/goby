@@ -14,6 +14,7 @@ use windows::core::{HSTRING, w};
 use super::desktop::Desktop;
 use super::{Win, tray};
 use crate::install;
+use crate::lang::tr;
 use crate::settings::Settings;
 use crate::ui::Updating;
 use crate::update::{self, Manifest};
@@ -87,14 +88,7 @@ impl Win {
         let hidden = unsafe { !IsWindowVisible(self.host.hwnd).as_bool() };
         if hidden && self.host.tray_icon {
             let title = format!("Goby {}", update::show(m.version));
-            tray::notify(
-                self.host.hwnd,
-                &title,
-                self.t(
-                    "Доступна новая версия. Откройте Goby, чтобы обновить.",
-                    "A new version is out. Open Goby to update.",
-                ),
-            );
+            tray::notify(self.host.hwnd, &title, tr("update.notify"));
         }
         self.update = Some(update::show(m.version));
         self.host.manifest = Some(m);

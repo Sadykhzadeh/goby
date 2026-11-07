@@ -20,7 +20,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SHOW_WINDOW_CMD, SW_HIDE, WM_CLOSE};
 use windows::core::{BOOL, GUID, HSTRING, Interface, PCWSTR, Result, w};
 
-use crate::lang::pick;
+use crate::lang::{self, tr, trf};
 use crate::{apps, engine, policy, settings::Settings};
 
 const UNINSTALL_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Goby");
@@ -271,29 +271,32 @@ pub enum Choice {
 const INSTALL: i32 = 100;
 const RUN_ONCE: i32 = 101;
 
+/// Windows' display language, as a tag such as "ru-RU".
+pub fn display_language() -> String {
+    use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
+    let mut name = [0u16; 85];
+    let n = unsafe { LCIDToLocaleName(GetUserDefaultUILanguage() as u32, Some(&mut name), 0) };
+    String::from_utf16_lossy(&name[..(n.max(1) - 1) as usize])
+}
+
+/// The dialogs here come before the window, which picks the language itself.
+fn use_chosen_language() {
+    lang::choose("auto", &display_language());
+}
+
 /// The first-run question, as a native task dialog with command links.
 pub fn ask() -> Choice {
+    use_chosen_language();
     let installed = install_dir().is_some_and(|d| d.join("goby.exe").exists());
-    let install_text = if installed {
-        HSTRING::from(pick(
-            "Обновить Goby\nЗаменить установленную копию этой версией",
-            "Update Goby\nReplace the installed copy with this version",
-        ))
-    } else {
-        HSTRING::from(pick(
-            "Установить Goby\nВ меню «Пуск» и «Приложения», без прав администратора",
-            "Install Goby\nTo the Start menu and Settings > Apps, no admin rights needed",
-        ))
-    };
-    let run_text =
-        HSTRING::from(pick("Просто запустить\nНичего не устанавливая", "Just run it\nWithout installing anything"));
+    let install_text = if installed { HSTRING::from(tr("setup.update")) } else { HSTRING::from(tr("setup.install")) };
+    let run_text = HSTRING::from(tr("setup.run"));
     let buttons = [
         TASKDIALOG_BUTTON { nButtonID: INSTALL, pszButtonText: PCWSTR(install_text.as_ptr()) },
         TASKDIALOG_BUTTON { nButtonID: RUN_ONCE, pszButtonText: PCWSTR(run_text.as_ptr()) },
     ];
     let title = HSTRING::from(format!("Goby {VERSION}"));
-    let heading = HSTRING::from(pick("Изменитель голоса для игр и чатов", "A voice changer for games and chats"));
-    let desktop = HSTRING::from(pick("Ярлык на рабочем столе", "Desktop shortcut"));
+    let heading = HSTRING::from(tr("setup.heading"));
+    let desktop = HSTRING::from(tr("setup.desktop"));
     let footer = HSTRING::from(format!("{AUTHOR} · <a href=\"{WEBSITE}\">azer.one</a>"));
     let config = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
@@ -363,8 +366,8 @@ fn message(heading: &str, text: &str, question: bool) -> bool {
 
 /// Tells the user why installing did not work; Goby then runs without installing.
 pub fn failed(error: &std::io::Error) {
-    let heading = pick("Не получилось установить Goby", "Goby could not be installed");
-    let text = format!("{error}\n\n{}", pick("Goby запустится без установки.", "Goby will run without installing."));
+    let heading = tr("setup.failed");
+    let text = trf("setup.failed.desc", &[("error", &error.to_string())]);
     message(heading, &text, false);
 }
 
@@ -394,16 +397,10 @@ pub fn uninstall(quiet: bool) {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
-    if !quiet
-        && !message(
-            pick("Удалить Goby?", "Uninstall Goby?"),
-            pick(
-                "Программы, которые слышали Goby, получат обратно обычный микрофон, а кабелю вернётся прежнее имя.",
-                "Programs that heard Goby get your own microphone back, and the cable gets its old name back.",
-            ),
-            true,
-        )
-    {
+    if !quiet {
+        use_chosen_language();
+    }
+    if !quiet && !message(tr("uninstall.ask"), tr("uninstall.ask.desc"), true) {
         return;
     }
     close_running();
@@ -438,16 +435,9 @@ pub fn uninstall(quiet: bool) {
     }
     if !quiet {
         let note = if left.is_empty() {
-            pick("Goby удалён.", "Goby is uninstalled.").to_string()
+            tr("uninstall.done").to_string()
         } else {
-            format!(
-                "{} {}",
-                pick(
-                    "Goby удалён. Эти программы были закрыты и пока слушают кабель; выберите им микрофон в «Микшере громкости»:",
-                    "Goby is uninstalled. These programs were closed and still listen to the cable; pick their mic in the Volume mixer:"
-                ),
-                left.join(", ")
-            )
+            trf("uninstall.done.left", &[("programs", &left.join(", "))])
         };
         message("Goby", &note, false);
     }

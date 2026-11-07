@@ -86,6 +86,8 @@ pub trait Host {
     fn now(&self) -> Duration;
     /// Pages may animate (Windows' "Animation effects", or no reduced-motion request).
     fn animations(&self) -> bool;
+    /// The language the system shows itself in, as a tag such as "ru-RU".
+    fn language(&self) -> String;
     fn save(&self, settings: &Settings);
 
     /// Active microphones (`capture`) or outputs, cable included.

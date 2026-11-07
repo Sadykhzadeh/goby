@@ -1,0 +1,192 @@
+# Goby по-русски. Ключи и {подстановки} те же, что в en.lang.
+
+# The navigation rail and page titles
+page.voices = Голоса
+page.programs = Программы
+page.settings = Настройки
+
+# The voices page
+scope.effect = Эффект
+scope.saved = В избранном
+scope.save = Сохранить как мой голос
+scope.no_cable = Нет виртуального кабеля: откройте «Программы»
+scope.nobody = Пока никто не слышит Goby: выберите программы
+scope.off = Эффект выключен: в игру идёт ваш голос
+scope.latency = {category} · задержка {ms} мс
+quick.pitch = Тон
+quick.volume = Громкость
+quick.hear = Слышать себя
+quick.hear.desc = В ваших наушниках
+shelf.all = Все
+shelf.favorites = Избранное
+favorites.empty = Отметьте голос звёздочкой или правой кнопкой мыши
+favorites.empty.desc = Избранное есть и в меню значка в трее, а Ctrl+Alt+PgUp/PgDn листают только его
+preset.own = {percent}% своего
+unit.semitones = {value} пт
+unit.db = {value} дБ
+
+# Device trouble
+status.no_mic = Микрофон не найден
+status.no_output = Нет устройств вывода
+status.lost = Устройство пропало, переподключаюсь…
+error.no_answer = Аудиоустройство не ответило
+error.in_use = Устройство занято другой программой
+error.unplugged = Устройство отключено
+error.audio = Ошибка звука: {message}
+
+# The programs page
+programs.note = Выбранные программы слышат Goby вместо микрофона. Остальные слышат ваш обычный микрофон.
+programs.setup = Подключите Goby к играм
+programs.setup.desc = Голос попадает в программы через бесплатный виртуальный кабель. Это делается один раз.
+programs.step1 = Скачайте VB-Cable
+programs.step1.desc = Бесплатно, с сайта его автора, vb-audio.com
+programs.step2 = Установите его
+programs.step2.desc = Распакуйте, запустите VBCABLE_Setup_x64.exe от администратора, Install Driver
+programs.step3 = Goby подключится сам
+programs.step3.desc = Ждём кабель… Если его долго нет, перезагрузите Windows
+programs.cable.found = Готово: кабель найден и подключён
+programs.cable = Через него Goby попадает в программы
+programs.chosen = Слышат Goby
+programs.elsewhere = Пишет с «{mic}», а не с Goby: выберите в ней микрофон «По умолчанию»
+programs.live = Слышит Goby прямо сейчас
+programs.on = Запущена и слышит Goby
+programs.waiting = Услышит Goby при запуске
+programs.pending = Услышит, когда откроет микрофон
+programs.add = Добавить программу
+programs.add.first = Например CS2 или Discord
+programs.add.desc = Из списка или любой exe-файл
+programs.recent = Недавно открывали микрофон
+programs.recent.active = Слушает микрофон сейчас · добавить
+programs.recent.idle = Добавить, чтобы слышала Goby
+programs.menu.active = слушает сейчас
+programs.menu.other = Другая программа…
+programs.menu.title = Какая программа должна слышать Goby?
+programs.menu.filter = Программы (*.exe)
+
+# Settings
+settings.mic = Микрофон
+settings.mic.device = Устройство
+settings.gate = Шумовой гейт
+settings.gate.desc = Тишина между фразами
+settings.advanced = Дополнительно
+settings.advanced.desc = Задержка, усиление, порог гейта
+settings.exclusive = Низкая задержка
+settings.exclusive.on = Другие программы не слышат микрофон
+settings.exclusive.refused = Микрофон не разрешил
+settings.exclusive.off = −10 мс, но микрофон будет только у Goby
+settings.gain = Усиление
+settings.gate_db = Порог гейта
+settings.output = Вывод
+settings.output.device = Куда отдавать
+settings.mix = Свой голос в миксе
+settings.general = Общие
+settings.tray.title = Работать в трее
+settings.tray.desc = Голос работает и после закрытия
+settings.autostart.title = Запускать вместе с Windows
+settings.autostart.desc = Сразу в трей, без окна
+settings.hotkeys.title = Горячие клавиши
+settings.hotkeys.desc = Ctrl+Alt+G эффект, PgUp/PgDn голос
+settings.hotkeys.taken = Некоторые клавиши заняты
+settings.updates.title = Проверять обновления
+settings.updates.desc = Раз в день, только релизы с подписью автора
+
+# Updates
+update.out = Goby {version} уже вышел
+update.downloading = Скачиваю и проверяю подпись…
+update.failed = Не удалось скачать файл с верной подписью. Попробуйте позже
+update.install = Установить: файл проверяется по подписи автора
+update.download = Скачать со страницы релизов
+update.notify = Доступна новая версия. Откройте Goby, чтобы обновить.
+
+# The tray icon
+tray.off = Goby: эффект выключен
+tray.told = Goby работает в трее
+tray.told.desc = Голос остаётся включённым. Щёлкните значок, чтобы открыть окно, или правой кнопкой, чтобы выйти.
+tray.open = Открыть Goby
+tray.effect = Эффект: {voice}
+tray.quit = Выйти
+
+# Installing and uninstalling
+setup.heading = Изменитель голоса для игр и чатов
+setup.install = Установить Goby\nВ меню «Пуск» и «Приложения», без прав администратора
+setup.update = Обновить Goby\nЗаменить установленную копию этой версией
+setup.run = Просто запустить\nНичего не устанавливая
+setup.desktop = Ярлык на рабочем столе
+setup.failed = Не получилось установить Goby
+setup.failed.desc = {error}\n\nGoby запустится без установки.
+uninstall.ask = Удалить Goby?
+uninstall.ask.desc = Программы, которые слышали Goby, получат обратно обычный микрофон, а кабелю вернётся прежнее имя.
+uninstall.done = Goby удалён.
+uninstall.done.left = Goby удалён. Эти программы были закрыты и пока слушают кабель; выберите им микрофон в «Микшере громкости»: {programs}
+
+# Voice groups
+category.basics = Основные
+category.people = Люди
+category.creatures = Существа
+category.robots = Роботы
+category.places = Места
+category.devices = Устройства
+category.fun = Приколы
+
+# Voices
+voice.off = Без эффекта
+voice.minion = Миньон
+voice.helium = Гелий
+voice.giant = Великан
+voice.robot = Робот
+voice.radio = Рация
+voice.kid = Ребёнок
+voice.baby = Младенец
+voice.woman = Женский
+voice.man = Мужской
+voice.bass = Бас
+voice.grandpa = Дедушка
+voice.grandma = Бабушка
+voice.teen = Подросток
+voice.pirate = Пират
+voice.nervous = Волнуется
+voice.drunk = Пьяный
+voice.whisper = Шёпот
+voice.sleepy = Сонный
+voice.announcer = Ведущий
+voice.gremlin = Гремлин
+voice.rodent = Грызун
+voice.ogre = Огр
+voice.troll = Тролль
+voice.demon = Демон
+voice.zombie = Зомби
+voice.ghost = Привидение
+voice.possessed = Одержимый
+voice.vampire = Вампир
+voice.dragon = Дракон
+voice.swarm = Рой
+voice.alien = Пришелец
+voice.android = Андроид
+voice.dictator = Диктатор
+voice.cyborg = Киборг
+voice.mutant = Мутант
+voice.8bit = 8-бит
+voice.synth_choir = Синт-хор
+voice.hologram = Голограмма
+voice.spaceship = Борт корабля
+voice.cave = Пещера
+voice.cathedral = Собор
+voice.bathroom = Ванная
+voice.stadium = Стадион
+voice.underwater = Под водой
+voice.canyon = Каньон
+voice.tin_can = Консервная банка
+voice.phone = Телефон
+voice.megaphone = Мегафон
+voice.walkie = Рация с помехами
+voice.old_radio = Старое радио
+voice.drive_thru = Окно заказа
+voice.cassette = Кассета
+voice.chipmunk_choir = Хор бурундуков
+voice.opera = Опера
+voice.choir = Хор
+voice.karaoke = Караоке
+voice.glitch = Глюк
+voice.duet = Дуэт с басом
+voice.jet = Реактивный
+voice.helium_robot = Робочипмунк

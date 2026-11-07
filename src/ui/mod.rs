@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use crate::draw::{Align, Canvas, Font, R, glyph};
 use crate::host::{AppState, Endpoint, Host, Hotkey, Key, Link, MicApp, SCOPE_LEN};
+use crate::lang::{self, tr, trf};
 use crate::settings::{Preset, Settings};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
@@ -239,7 +240,6 @@ pub struct App<H: Host> {
     tab_scroll: f32,
     tab_max: f32,
     theme: Theme,
-    ru: bool,
     dpi: f32,
 
     settings: Settings,
@@ -334,13 +334,12 @@ fn short(name: &str) -> &str {
 }
 
 impl<H: Host> App<H> {
-    pub fn new(host: H, settings: Settings, theme: Theme, ru: bool, dpi: f32) -> App<H> {
+    pub fn new(host: H, settings: Settings, theme: Theme, dpi: f32) -> App<H> {
         let mut app = App {
             lay: Layout::new(WIDTH, HEIGHT),
             tab_scroll: 0.0,
             tab_max: 0.0,
             theme,
-            ru,
             dpi,
             voice: voices::index_of(&settings.voice).unwrap_or(1),
             settings,
@@ -393,6 +392,7 @@ impl<H: Host> App<H> {
             still: false,
             host,
         };
+        lang::choose("auto", &app.host.language());
         let s = &app.settings;
         let switched = [s.enabled, s.gate, s.monitor, s.exclusive, s.tray, app.autostart, s.hotkeys, s.updates];
         for (i, on) in switched.into_iter().enumerate() {
@@ -412,10 +412,6 @@ impl<H: Host> App<H> {
         app.apply();
         app.restart();
         app
-    }
-
-    fn t(&self, ru: &'static str, en: &'static str) -> &'static str {
-        if self.ru { ru } else { en }
     }
 
     fn save(&self) {
@@ -557,11 +553,8 @@ impl<H: Host> App<H> {
         self.retry_at = None;
         let (Some(mic), Some(out)) = (self.inputs.get(self.input), self.outputs.get(self.output)) else {
             self.healthy = false;
-            self.status = if self.inputs.is_empty() {
-                self.t("Микрофон не найден", "No microphone found").into()
-            } else {
-                self.t("Нет устройств вывода", "No output devices").into()
-            };
+            self.status =
+                if self.inputs.is_empty() { tr("status.no_mic").into() } else { tr("status.no_output").into() };
             return;
         };
         // A device opened in place of an unplugged one is not a choice: the setting keeps
@@ -622,9 +615,9 @@ impl<H: Host> App<H> {
         let v = self.knob(k);
         let signed = |v: f32| if v > 0.0 { format!("+{v}") } else { format!("{v}").replace('-', "−") };
         match k {
-            Knob::Tone => format!("{} {}", signed(v), self.t("пт", "st")),
+            Knob::Tone => trf("unit.semitones", &[("value", &signed(v))]),
             Knob::Volume | Knob::Mix => format!("{} %", (v * 100.0).round()),
-            Knob::Gain | Knob::Gate => format!("{} {}", signed(v), self.t("дБ", "dB")),
+            Knob::Gain | Knob::Gate => trf("unit.db", &[("value", &signed(v))]),
         }
     }
 
@@ -647,7 +640,7 @@ impl<H: Host> App<H> {
         if self.host.failed() && self.retry_at.is_none() {
             self.host.stop();
             self.healthy = false;
-            self.status = self.t("Устройство пропало, переподключаюсь…", "Device lost, reconnecting…").into();
+            self.status = tr("status.lost").into();
             self.retry_at = Some(now + Duration::from_secs(2));
             self.dirty = true;
         }

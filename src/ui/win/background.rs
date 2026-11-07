@@ -6,6 +6,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{Win, make_icon};
+use crate::lang::{tr, trf};
 use crate::ui::Fav;
 use crate::{icon, tray, voices};
 
@@ -22,10 +23,10 @@ pub(super) enum TrayAct {
 impl Win {
     /// What the icon says on hover: the voice that is on, or that the effect is off.
     pub(super) fn tip(&self) -> String {
-        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
+        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name());
         match self.settings.enabled {
             true => format!("Goby: {voice}"),
-            false => format!("Goby: {}", self.t("эффект выключен", "effect off")),
+            false => tr("tray.off").into(),
         }
     }
 
@@ -69,14 +70,7 @@ impl Win {
         if !self.settings.tray_told {
             self.settings.tray_told = true;
             self.save();
-            tray::notify(
-                self.host.hwnd,
-                self.t("Goby работает в трее", "Goby is still running"),
-                self.t(
-                    "Голос остаётся включённым. Щёлкните значок, чтобы открыть окно, или правой кнопкой, чтобы выйти.",
-                    "Your voice stays on. Click the icon to open the window, or right-click it to quit.",
-                ),
-            );
+            tray::notify(self.host.hwnd, tr("tray.told"), tr("tray.told.desc"));
         }
         false
     }
@@ -88,7 +82,7 @@ impl Win {
             (tray::Item { label: Some(label.to_string()), checked, default }, act)
         };
         let line = || (tray::Item { label: None, checked: false, default: false }, TrayAct::None);
-        let mut menu = vec![item(self.t("Открыть Goby", "Open Goby"), false, TrayAct::Open), line()];
+        let mut menu = vec![item(tr("tray.open"), false, TrayAct::Open), line()];
         let favorites = self.favorites();
         let current = self.current();
         for &f in favorites.iter().take(12) {
@@ -98,11 +92,11 @@ impl Win {
         if !favorites.is_empty() {
             menu.push(line());
         }
-        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name(self.ru));
-        let effect = format!("{}: {voice}", self.t("Эффект", "Effect"));
+        let voice = voices::ALL.get(self.voice).map_or("", |v| v.name());
+        let effect = trf("tray.effect", &[("voice", voice)]);
         menu.push(item(&effect, self.settings.enabled, TrayAct::Effect));
         menu.push(line());
-        menu.push(item(self.t("Выйти", "Quit"), false, TrayAct::Quit));
+        menu.push(item(tr("tray.quit"), false, TrayAct::Quit));
         menu
     }
 

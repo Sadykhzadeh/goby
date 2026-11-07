@@ -10,23 +10,14 @@ impl<H: Host> App<H> {
         let labels = self
             .mic_apps
             .iter()
-            .map(|a| {
-                if a.active {
-                    format!("{}\t{}", a.name, self.t("слушает сейчас", "listening now"))
-                } else {
-                    a.name.clone()
-                }
-            })
+            .map(|a| if a.active { format!("{}\t{}", a.name, tr("programs.menu.active")) } else { a.name.clone() })
             .collect();
         Some(Popup {
             pick: None,
             labels,
             keys: self.mic_apps.iter().map(|a| a.exe.clone()).collect(),
             checked: None,
-            browse: Some((
-                self.t("Другая программа…", "Other program…").into(),
-                self.t("Какая программа должна слышать Goby?", "Which program should hear Goby?").into(),
-            )),
+            browse: Some((tr("programs.menu.other").into(), tr("programs.menu.title").into())),
             at: (row.l + 52.0, row.b),
         })
     }

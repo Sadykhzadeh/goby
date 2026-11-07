@@ -1,0 +1,193 @@
+# Goby in English. Every other language falls back to this file.
+# key = text; \n starts a new line; {name} is filled in by the app.
+
+# The navigation rail and page titles
+page.voices = Voices
+page.programs = Programs
+page.settings = Settings
+
+# The voices page
+scope.effect = Effect
+scope.saved = In Favorites
+scope.save = Save as my voice
+scope.no_cable = No virtual cable: open Programs
+scope.nobody = Nobody hears Goby yet: pick the programs
+scope.off = Effect off: your own voice goes through
+scope.latency = {category} · latency {ms} ms
+quick.pitch = Pitch
+quick.volume = Volume
+quick.hear = Hear myself
+quick.hear.desc = In your headphones
+shelf.all = All
+shelf.favorites = Favorites
+favorites.empty = Star a voice, or right-click it, to keep it here
+favorites.empty.desc = Favorites are in the tray menu too, and Ctrl+Alt+PgUp/PgDn step through them only
+preset.own = {percent}% own
+unit.semitones = {value} st
+unit.db = {value} dB
+
+# Device trouble
+status.no_mic = No microphone found
+status.no_output = No output devices
+status.lost = Device lost, reconnecting…
+error.no_answer = The audio device did not respond
+error.in_use = Another program holds the device exclusively
+error.unplugged = The device was unplugged
+error.audio = Audio error: {message}
+
+# The programs page
+programs.note = The programs chosen here hear Goby instead of your microphone. Everything else hears your own mic.
+programs.setup = Connect Goby to games
+programs.setup.desc = The voice reaches programs through a free virtual cable. This is done once.
+programs.step1 = Download VB-Cable
+programs.step1.desc = Free, from its author's site, vb-audio.com
+programs.step2 = Install it
+programs.step2.desc = Unzip it, run VBCABLE_Setup_x64.exe as administrator, press Install Driver
+programs.step3 = Goby connects by itself
+programs.step3.desc = Waiting for the cable… If it takes long, restart Windows
+programs.cable.found = Done: the cable is found and connected
+programs.cable = Goby reaches the programs through it
+programs.chosen = Hear Goby
+programs.elsewhere = Records from {mic}, not Goby: set its microphone to Default
+programs.live = Hearing Goby right now
+programs.on = Running, hears Goby
+programs.waiting = Hears Goby once it starts
+programs.pending = Hears Goby once it opens the mic
+programs.add = Add a program
+programs.add.first = For example CS2 or Discord
+programs.add.desc = From the list or any program file
+programs.recent = Recently used the microphone
+programs.recent.active = Listening now · add
+programs.recent.idle = Add it to hear Goby
+programs.menu.active = listening now
+programs.menu.other = Other program…
+programs.menu.title = Which program should hear Goby?
+programs.menu.filter = Programs (*.exe)
+
+# Settings
+settings.mic = Microphone
+settings.mic.device = Device
+settings.gate = Noise gate
+settings.gate.desc = Silence between phrases
+settings.advanced = Advanced
+settings.advanced.desc = Latency, gain, gate threshold
+settings.exclusive = Low latency
+settings.exclusive.on = Other programs lose the mic
+settings.exclusive.refused = The mic did not allow it
+settings.exclusive.off = −10 ms, but only Goby gets the mic
+settings.gain = Gain
+settings.gate_db = Gate threshold
+settings.output = Output
+settings.output.device = Send to
+settings.mix = Original voice in mix
+settings.general = General
+settings.tray.title = Keep running in the tray
+settings.tray.desc = The voice stays on when closed
+settings.autostart.title = Start with Windows
+settings.autostart.desc = Straight to the tray, no window
+settings.hotkeys.title = Hotkeys
+settings.hotkeys.desc = Ctrl+Alt+G effect, PgUp/PgDn voice
+settings.hotkeys.taken = Some keys are taken elsewhere
+settings.updates.title = Check for updates
+settings.updates.desc = Once a day, only releases the author signed
+
+# Updates
+update.out = Goby {version} is out
+update.downloading = Downloading and checking the signature…
+update.failed = Could not download a file that matches the signature. Try again later
+update.install = Install: the file is checked against the author's signature
+update.download = Download it from the releases page
+update.notify = A new version is out. Open Goby to update.
+
+# The tray icon
+tray.off = Goby: effect off
+tray.told = Goby is still running
+tray.told.desc = Your voice stays on. Click the icon to open the window, or right-click it to quit.
+tray.open = Open Goby
+tray.effect = Effect: {voice}
+tray.quit = Quit
+
+# Installing and uninstalling
+setup.heading = A voice changer for games and chats
+setup.install = Install Goby\nTo the Start menu and Settings > Apps, no admin rights needed
+setup.update = Update Goby\nReplace the installed copy with this version
+setup.run = Just run it\nWithout installing anything
+setup.desktop = Desktop shortcut
+setup.failed = Goby could not be installed
+setup.failed.desc = {error}\n\nGoby will run without installing.
+uninstall.ask = Uninstall Goby?
+uninstall.ask.desc = Programs that heard Goby get your own microphone back, and the cable gets its old name back.
+uninstall.done = Goby is uninstalled.
+uninstall.done.left = Goby is uninstalled. These programs were closed and still listen to the cable; pick their mic in the Volume mixer: {programs}
+
+# Voice groups
+category.basics = Basics
+category.people = People
+category.creatures = Creatures
+category.robots = Robots
+category.places = Places
+category.devices = Devices
+category.fun = Fun
+
+# Voices
+voice.off = Off
+voice.minion = Minion
+voice.helium = Helium
+voice.giant = Giant
+voice.robot = Robot
+voice.radio = Radio
+voice.kid = Kid
+voice.baby = Baby
+voice.woman = Woman
+voice.man = Man
+voice.bass = Deep voice
+voice.grandpa = Grandpa
+voice.grandma = Grandma
+voice.teen = Teen
+voice.pirate = Pirate
+voice.nervous = Nervous
+voice.drunk = Tipsy
+voice.whisper = Whisper
+voice.sleepy = Sleepy
+voice.announcer = Announcer
+voice.gremlin = Gremlin
+voice.rodent = Rodent
+voice.ogre = Ogre
+voice.troll = Troll
+voice.demon = Demon
+voice.zombie = Zombie
+voice.ghost = Ghost
+voice.possessed = Possessed
+voice.vampire = Vampire
+voice.dragon = Dragon
+voice.swarm = Swarm
+voice.alien = Alien
+voice.android = Android
+voice.dictator = Dictator
+voice.cyborg = Cyborg
+voice.mutant = Mutant
+voice.8bit = 8-bit
+voice.synth_choir = Synth choir
+voice.hologram = Hologram
+voice.spaceship = Spaceship
+voice.cave = Cave
+voice.cathedral = Cathedral
+voice.bathroom = Bathroom
+voice.stadium = Stadium
+voice.underwater = Underwater
+voice.canyon = Canyon
+voice.tin_can = Tin can
+voice.phone = Phone
+voice.megaphone = Megaphone
+voice.walkie = Walkie-talkie
+voice.old_radio = Old radio
+voice.drive_thru = Drive-thru
+voice.cassette = Cassette
+voice.chipmunk_choir = Squeaky choir
+voice.opera = Opera
+voice.choir = Choir
+voice.karaoke = Karaoke
+voice.glitch = Glitch
+voice.duet = Duet
+voice.jet = Jet
+voice.helium_robot = Squeaky robot

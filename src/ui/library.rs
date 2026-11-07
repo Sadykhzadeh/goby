@@ -33,10 +33,10 @@ impl<H: Host> App<H> {
 
     pub(super) fn label(&self, f: Fav) -> String {
         match f {
-            Fav::Voice(i) => voices::ALL[i].name(self.ru).to_string(),
+            Fav::Voice(i) => voices::ALL[i].name().to_string(),
             Fav::Preset(p) => {
-                let name = voices::ALL[self.voice_of(f)].name(self.ru);
-                self.settings.presets.get(p).map_or(name.to_string(), |p| preset_label(name, p, self.ru))
+                let name = voices::ALL[self.voice_of(f)].name();
+                self.settings.presets.get(p).map_or(name.to_string(), |p| preset_label(name, p))
             }
         }
     }
@@ -148,7 +148,7 @@ pub(super) fn preset_tweaks(p: &Preset) -> String {
 }
 
 /// A saved voice's name: the voice and what was changed, e.g. "Demon +3 · 20% own".
-pub(super) fn preset_label(name: &str, p: &Preset, ru: bool) -> String {
+pub(super) fn preset_label(name: &str, p: &Preset) -> String {
     let mut label = name.to_string();
     if p.semitones != 0.0 {
         label.push_str(&format!(" {:+}", p.semitones));
@@ -157,8 +157,8 @@ pub(super) fn preset_label(name: &str, p: &Preset, ru: bool) -> String {
         label.push_str(&format!(" · {}%", (p.volume * 100.0).round()));
     }
     if p.dry_mix > 0.0 {
-        let own = if ru { "своего" } else { "own" };
-        label.push_str(&format!(" · {}% {own}", (p.dry_mix * 100.0).round()));
+        let own = trf("preset.own", &[("percent", &(p.dry_mix * 100.0).round().to_string())]);
+        label.push_str(&format!(" · {own}"));
     }
     label
 }
@@ -170,9 +170,12 @@ mod tests {
     #[test]
     fn a_saved_voice_is_named_after_what_was_changed() {
         let p = |semitones, dry_mix, volume| Preset { voice: "demon".into(), semitones, dry_mix, volume };
-        assert_eq!(preset_label("Demon", &p(3.0, 0.0, 1.0), false), "Demon +3");
-        assert_eq!(preset_label("Demon", &p(-2.5, 0.2, 1.0), false), "Demon -2.5 · 20% own");
-        assert_eq!(preset_label("Демон", &p(0.0, 0.0, 1.25), true), "Демон · 125%");
+        lang::choose("en", "");
+        assert_eq!(preset_label("Demon", &p(3.0, 0.0, 1.0)), "Demon +3");
+        assert_eq!(preset_label("Demon", &p(-2.5, 0.2, 1.0)), "Demon -2.5 · 20% own");
+        lang::choose("ru", "");
+        assert_eq!(preset_label("Демон", &p(0.0, 0.0, 1.25)), "Демон · 125%");
+        assert_eq!(preset_label("Демон", &p(0.0, 0.5, 1.0)), "Демон · 50% своего");
         assert_eq!(preset_tweaks(&p(3.0, 0.2, 1.25)), "+3 · 125% · 20%");
         assert_eq!(preset_tweaks(&p(-2.5, 0.0, 1.0)), "-2.5");
     }

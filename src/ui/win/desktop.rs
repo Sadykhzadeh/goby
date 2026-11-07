@@ -74,6 +74,10 @@ impl Host for Desktop {
         super::animations_on()
     }
 
+    fn language(&self) -> String {
+        install::display_language()
+    }
+
     fn save(&self, settings: &Settings) {
         settings.save();
     }

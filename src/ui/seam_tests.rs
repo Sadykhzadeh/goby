@@ -38,7 +38,9 @@ impl Canvas for Record {
 }
 
 fn window(settings: Settings, ru: bool, w: f32) -> (App<DemoHost>, Record) {
-    let mut app = App::new(DemoHost::default(), settings, Theme::new(true, [0; 7]), ru, 96.0);
+    let mut host = DemoHost::default();
+    host.language = if ru { "ru-RU" } else { "en-US" }.into();
+    let mut app = App::new(host, settings, Theme::new(true, [0; 7]), 96.0);
     app.resize(w, MIN_H);
     let g = Record::default();
     app.draw(&g);

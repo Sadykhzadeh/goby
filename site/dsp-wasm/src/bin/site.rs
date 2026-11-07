@@ -11,6 +11,8 @@
 mod dsp;
 #[path = "../../../../src/fx.rs"]
 mod fx;
+#[path = "../../../../src/lang.rs"]
+mod lang;
 #[path = "../../../../src/voices.rs"]
 mod voices;
 
@@ -21,7 +23,7 @@ fn hero() -> String {
         .zip(voices::glyphs(60))
         .map(|(v, g)| {
             let points: Vec<String> = g.iter().map(|x| format!("{}", (x * 100.0).round() / 100.0 + 0.0)).collect();
-            format!("[\"{}\",[{}]]", v.en, points.join(","))
+            format!("[\"{}\",[{}]]", v.name(), points.join(","))
         })
         .collect();
     format!("[{}]", rows.join(","))

@@ -31,6 +31,8 @@ pub struct DemoHost {
     /// Set by whoever drives the window, since there is no clock of its own on the web.
     pub clock: Duration,
     pub animations: bool,
+    /// The browser's language, `navigator.language`.
+    pub language: String,
     pub params: Cell<Params>,
     /// The voice should be heard: the window sends it to a real output, not just the cable.
     pub live: bool,
@@ -51,6 +53,7 @@ impl Default for DemoHost {
         DemoHost {
             clock: Duration::ZERO,
             animations: true,
+            language: "en".into(),
             params: Cell::new(Params::default()),
             live: false,
             heard: Box::new([0.0; 2 * SCOPE_LEN]),
@@ -112,6 +115,10 @@ impl Host for DemoHost {
 
     fn animations(&self) -> bool {
         self.animations
+    }
+
+    fn language(&self) -> String {
+        self.language.clone()
     }
 
     fn save(&self, _: &Settings) {

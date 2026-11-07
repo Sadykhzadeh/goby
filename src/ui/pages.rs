@@ -32,9 +32,9 @@ impl<H: Host> App<H> {
 
     pub(super) fn rail(&self) -> [(Page, R, u16, &'static str); 3] {
         [
-            (Page::Voices, self.lay.nav_voices, glyph::VOICES, self.t("Голоса", "Voices")),
-            (Page::Programs, self.lay.nav_programs, glyph::APPS, self.t("Программы", "Programs")),
-            (Page::Settings, self.lay.nav_settings, glyph::SETTINGS, self.t("Настройки", "Settings")),
+            (Page::Voices, self.lay.nav_voices, glyph::VOICES, tr("page.voices")),
+            (Page::Programs, self.lay.nav_programs, glyph::APPS, tr("page.programs")),
+            (Page::Settings, self.lay.nav_settings, glyph::SETTINGS, tr("page.settings")),
         ]
     }
 
@@ -75,59 +75,38 @@ impl<H: Host> App<H> {
     pub(super) fn draw_programs(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let title = self.lay.title;
-        g.text(self.t("Программы", "Programs"), Font::Title, title, Align::Start, th.text());
+        g.text(tr("page.programs"), Font::Title, title, Align::Start, th.text());
         let scroll = self.settings_scroll.value.min(self.settings_max);
         let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
         let mut y = self.lay.pane.t - scroll;
         g.clip(self.lay.pane);
 
-        let note = self.t(
-            "Выбранные программы слышат Goby вместо микрофона. Остальные слышат ваш обычный микрофон.",
-            "The programs chosen here hear Goby instead of your microphone. Everything else hears your own mic.",
-        );
+        let note = tr("programs.note");
         g.text(note, Font::Body, R::new(x + 2.0, y, w, 22.0), Align::Start, th.text_secondary());
         y += 36.0;
 
         match &self.cable {
             // Setup in three steps; the last one ticks itself once the cable shows up.
             None => {
-                let title = self.t("Подключите Goby к играм", "Connect Goby to games");
+                let title = tr("programs.setup");
                 g.text(title, Font::Strong, R::new(x + 2.0, y, w, 20.0), Align::Start, th.text());
                 y += 24.0;
-                let why = self.t(
-                    "Голос попадает в программы через бесплатный виртуальный кабель. Это делается один раз.",
-                    "The voice reaches programs through a free virtual cable. This is done once.",
-                );
+                let why = tr("programs.setup.desc");
                 g.text(why, Font::Caption, R::new(x + 2.0, y, w, 18.0), Align::Start, th.text_secondary());
                 y += 28.0;
-                let (title, desc) = (
-                    self.t("Скачайте VB-Cable", "Download VB-Cable"),
-                    self.t("Бесплатно, с сайта его автора, vb-audio.com", "Free, from its author's site, vb-audio.com"),
-                );
+                let (title, desc) = (tr("programs.step1"), tr("programs.step1.desc"));
                 self.step_card(g, &mut y, 1, self.cable_opened, Hit::CableSite, title, desc);
-                let (title, desc) = (
-                    self.t("Установите его", "Install it"),
-                    self.t(
-                        "Распакуйте, запустите VBCABLE_Setup_x64.exe от администратора, Install Driver",
-                        "Unzip it, run VBCABLE_Setup_x64.exe as administrator, press Install Driver",
-                    ),
-                );
+                let (title, desc) = (tr("programs.step2"), tr("programs.step2.desc"));
                 self.step_card(g, &mut y, 2, false, Hit::Downloads, title, desc);
-                let (title, desc) = (
-                    self.t("Goby подключится сам", "Goby connects by itself"),
-                    self.t(
-                        "Ждём кабель… Если его долго нет, перезагрузите Windows",
-                        "Waiting for the cable… If it takes long, restart Windows",
-                    ),
-                );
+                let (title, desc) = (tr("programs.step3"), tr("programs.step3.desc"));
                 self.step_card(g, &mut y, 3, false, Hit::None, title, desc);
             }
             Some((_, record)) => {
                 let fresh =
                     self.cable_found.is_some_and(|t| self.host.now().saturating_sub(t) < Duration::from_secs(30));
                 let ready = match fresh {
-                    true => self.t("Готово: кабель найден и подключён", "Done: the cable is found and connected"),
-                    false => self.t("Через него Goby попадает в программы", "Goby reaches the programs through it"),
+                    true => tr("programs.cable.found"),
+                    false => tr("programs.cable"),
                 };
                 let name = short(&record.name).to_string();
                 let icon = if fresh { glyph::CHECK } else { glyph::MIC };
@@ -140,7 +119,7 @@ impl<H: Host> App<H> {
             g.text(title, Font::Strong, R::new(x + 2.0, *y, w, 20.0), Align::Start, th.text());
             *y += 28.0;
         };
-        section(g, &mut y, self.t("Слышат Goby", "Hear Goby"));
+        section(g, &mut y, tr("programs.chosen"));
         for i in 0..self.settings.routed.len() {
             let exe = self.settings.routed[i].clone();
             let talking = self.app_live.get(i).copied().unwrap_or(false);
@@ -148,35 +127,26 @@ impl<H: Host> App<H> {
             let desc = match (self.app_state.get(i).copied().unwrap_or(AppState::Waiting), talking, elsewhere) {
                 // Recording, but from a real mic: it chose one in its own settings, and only
                 // switching that to Default lets Windows hand it Goby.
-                (_, false, Some(mic)) => match self.ru {
-                    true => format!("Пишет с «{mic}», а не с Goby: выберите в ней микрофон «По умолчанию»"),
-                    false => format!("Records from {mic}, not Goby: set its microphone to Default"),
-                },
-                (_, true, _) => self.t("Слышит Goby прямо сейчас", "Hearing Goby right now").into(),
-                (AppState::OnGoby, ..) => self.t("Запущена и слышит Goby", "Running, hears Goby").into(),
-                (AppState::Waiting, ..) => self.t("Услышит Goby при запуске", "Hears Goby once it starts").into(),
-                (AppState::Pending, ..) => {
-                    self.t("Услышит, когда откроет микрофон", "Hears Goby once it opens the mic").into()
-                }
+                (_, false, Some(mic)) => trf("programs.elsewhere", &[("mic", &mic)]),
+                (_, true, _) => tr("programs.live").into(),
+                (AppState::OnGoby, ..) => tr("programs.on").into(),
+                (AppState::Waiting, ..) => tr("programs.waiting").into(),
+                (AppState::Pending, ..) => tr("programs.pending").into(),
             };
             self.row_card(g, &mut y, Hit::Remove(i), Icon::Exe(&exe), &crate::host::display_name(&exe), &desc);
         }
-        let hint = if self.settings.routed.is_empty() {
-            self.t("Например CS2 или Discord", "For example CS2 or Discord")
-        } else {
-            self.t("Из списка или любой exe-файл", "From the list or any program file")
-        };
-        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, self.t("Добавить программу", "Add a program"), hint);
+        let hint = if self.settings.routed.is_empty() { tr("programs.add.first") } else { tr("programs.add.desc") };
+        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, tr("programs.add"), hint);
 
         if !self.mic_apps.is_empty() {
             y += 20.0;
-            section(g, &mut y, self.t("Недавно открывали микрофон", "Recently used the microphone"));
+            section(g, &mut y, tr("programs.recent"));
             for i in 0..self.mic_apps.len().min(6) {
                 let app = &self.mic_apps[i];
                 let (name, exe) = (app.name.clone(), app.exe.clone());
                 let desc = match app.active {
-                    true => self.t("Слушает микрофон сейчас · добавить", "Listening now · add"),
-                    false => self.t("Добавить, чтобы слышала Goby", "Add it to hear Goby"),
+                    true => tr("programs.recent.active"),
+                    false => tr("programs.recent.idle"),
                 };
                 self.row_card(g, &mut y, Hit::Offer(i), Icon::Exe(&exe), &name, desc);
             }
@@ -195,12 +165,10 @@ impl<H: Host> App<H> {
         let r = self.lay.quick;
         self.card(g, r, 8.0, false);
         let w = r.w() / 3.0;
-        for (i, (k, icon, title)) in [
-            (Knob::Tone, glyph::TONE, self.t("Тон", "Pitch")),
-            (Knob::Volume, glyph::VOLUME, self.t("Громкость", "Volume")),
-        ]
-        .into_iter()
-        .enumerate()
+        for (i, (k, icon, title)) in
+            [(Knob::Tone, glyph::TONE, tr("quick.pitch")), (Knob::Volume, glyph::VOLUME, tr("quick.volume"))]
+                .into_iter()
+                .enumerate()
         {
             let s = R::new(r.l + w * i as f32, r.t, w, r.h());
             g.icon(icon, Font::Icon16, R::new(s.l + 16.0, s.t + 12.0, 20.0, 24.0), th.text());
@@ -213,9 +181,9 @@ impl<H: Host> App<H> {
         let s = R::new(r.l + w * 2.0, r.t, w, r.h());
         g.icon(glyph::HEADPHONE, Font::Icon16, R::new(s.l + 16.0, s.t + 30.0, 20.0, 24.0), th.text());
         let text_w = s.w() - 48.0 - 72.0;
-        let hear = self.t("Слышать себя", "Hear myself");
+        let hear = tr("quick.hear");
         g.text(hear, Font::Body, R::new(s.l + 48.0, s.t + 20.0, text_w, 22.0), Align::Start, th.text());
-        let mon = self.t("В ваших наушниках", "In your headphones");
+        let mon = tr("quick.hear.desc");
         g.text(mon, Font::Caption, R::new(s.l + 48.0, s.t + 42.0, text_w, 18.0), Align::Start, th.text_secondary());
         self.toggle(g, s.r - 60.0, s.t + 32.0, Switch::Monitor);
         self.hits.push((s.inset(4.0), Hit::Toggle(Switch::Monitor)));
@@ -231,8 +199,7 @@ impl<H: Host> App<H> {
         // Both sit left of the Effect switch, and the name and the line under it end before
         // them, however narrow the window.
         let kept = self.active_preset().is_some();
-        let (saved, save) =
-            (self.t("В избранном", "In Favorites"), self.t("Сохранить как мой голос", "Save as my voice"));
+        let (saved, save) = (tr("scope.saved"), tr("scope.save"));
         let aside = if kept {
             let w = g.measure(saved, Font::Caption) + 22.0;
             Some(R::new(r.r - 176.0 - w, r.t + 14.0, w, 24.0))
@@ -258,18 +225,17 @@ impl<H: Host> App<H> {
         let (line, color) = if !self.healthy {
             (self.status.clone(), argb(if th.dark { 0xFFFF99A4 } else { 0xFFC42B1C }))
         } else if self.cable.is_none() {
-            let none = self.t("Нет виртуального кабеля: откройте «Программы»", "No virtual cable: open Programs");
+            let none = tr("scope.no_cable");
             (none.into(), th.accent())
         } else if self.settings.routed.is_empty() {
-            let none =
-                self.t("Пока никто не слышит Goby: выберите программы", "Nobody hears Goby yet: pick the programs");
+            let none = tr("scope.nobody");
             (none.into(), th.accent())
         } else if !self.settings.enabled {
-            let off = self.t("Эффект выключен: в игру идёт ваш голос", "Effect off: your own voice goes through");
+            let off = tr("scope.off");
             (off.into(), th.text_secondary())
         } else {
-            let lat = format!("{} {} {}", self.t("задержка", "latency"), self.latency.round(), self.t("мс", "ms"));
-            (format!("{} · {}", def.category.name(self.ru), lat), th.text_secondary())
+            let ms = self.latency.round().to_string();
+            (trf("scope.latency", &[("category", def.category.name()), ("ms", &ms)]), th.text_secondary())
         };
         let line_r = R::new(r.l + 20.0, r.t + 40.0, text_w(420.0), 18.0);
         g.text(&line, Font::Caption, line_r, Align::Start, color);
@@ -294,7 +260,7 @@ impl<H: Host> App<H> {
             None => {}
         }
 
-        let label = self.t("Эффект", "Effect");
+        let label = tr("scope.effect");
         g.text(label, Font::Body, R::new(r.r - 160.0, r.t + 14.0, 88.0, 24.0), Align::End, th.text());
         self.toggle(g, r.r - 60.0, r.t + 16.0, Switch::Effect);
         self.hits.push((R::new(r.r - 170.0, r.t + 8.0, 156.0, 36.0), Hit::Toggle(Switch::Effect)));
@@ -307,8 +273,8 @@ impl<H: Host> App<H> {
     pub(super) fn draw_tabs(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let mut items: Vec<(Shelf, &'static str)> =
-            vec![(Shelf::All, self.t("Все", "All")), (Shelf::Favorites, self.t("Избранное", "Favorites"))];
-        items.extend(Category::ALL.iter().map(|c| (Shelf::Group(*c), c.name(self.ru))));
+            vec![(Shelf::All, tr("shelf.all")), (Shelf::Favorites, tr("shelf.favorites"))];
+        items.extend(Category::ALL.iter().map(|c| (Shelf::Group(*c), c.name())));
         if self.tab_widths.len() != items.len() {
             self.tab_widths = items.iter().map(|(_, s)| g.measure(s, Font::Strong)).collect();
         }
@@ -393,7 +359,7 @@ impl<H: Host> App<H> {
             };
             let width = r.w() - 28.0 - 24.0;
             if let Some(tweaks) = tweaks.filter(|t| !t.is_empty()) {
-                let name = voices::ALL[self.voice_of(f)].name(self.ru);
+                let name = voices::ALL[self.voice_of(f)].name();
                 g.text(name, Font::Body, R::new(r.l + 14.0, r.t + 38.0, width, 20.0), Align::Start, th.text());
                 let second = R::new(r.l + 14.0, r.t + 55.0, width, 16.0);
                 g.text(&tweaks, Font::Caption, second, Align::Start, th.text_secondary());
@@ -426,15 +392,9 @@ impl<H: Host> App<H> {
         }
         if list.is_empty() && self.shelf == Shelf::Favorites {
             let (l, t, w) = (self.lay.gallery.l + 2.0, self.lay.gallery.t + 8.0, self.lay.gallery.w() - GUTTER);
-            let first = self.t(
-                "Отметьте голос звёздочкой или правой кнопкой мыши",
-                "Star a voice, or right-click it, to keep it here",
-            );
+            let first = tr("favorites.empty");
             g.text(first, Font::Strong, R::new(l, t, w, 22.0), Align::Start, th.text());
-            let second = self.t(
-                "Избранное есть и в меню значка в трее, а Ctrl+Alt+PgUp/PgDn листают только его",
-                "Favorites are in the tray menu too, and Ctrl+Alt+PgUp/PgDn step through them only",
-            );
+            let second = tr("favorites.empty.desc");
             g.text(second, Font::Body, R::new(l, t + 26.0, w, 22.0), Align::Start, th.text_secondary());
         }
         g.unclip();
@@ -444,7 +404,7 @@ impl<H: Host> App<H> {
     pub(super) fn draw_settings(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let title = self.lay.title;
-        g.text(self.t("Настройки", "Settings"), Font::Title, title, Align::Start, th.text());
+        g.text(tr("page.settings"), Font::Title, title, Align::Start, th.text());
 
         let scroll = self.settings_scroll.value.min(self.settings_max);
         let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
@@ -457,50 +417,49 @@ impl<H: Host> App<H> {
         };
         self.update_card(g, &mut y);
 
-        section(g, &mut y, self.t("Микрофон", "Microphone"));
+        section(g, &mut y, tr("settings.mic"));
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, self.t("Устройство", "Device"), &mic);
-        let gate = self.t("Тишина между фразами", "Silence between phrases");
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, self.t("Шумовой гейт", "Noise gate"), gate);
+        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, tr("settings.mic.device"), &mic);
+        let gate = tr("settings.gate.desc");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, tr("settings.gate"), gate);
         // Rarely touched once set: folded away like an expander in Windows Settings.
-        let more = self.t("Дополнительно", "Advanced");
-        let more_desc = self.t("Задержка, усиление, порог гейта", "Latency, gain, gate threshold");
+        let more = tr("settings.advanced");
+        let more_desc = tr("settings.advanced.desc");
         self.row_card(g, &mut y, Hit::Advanced, glyph::MORE, more, more_desc);
         if self.advanced {
-            let fast = self.t("Низкая задержка", "Low latency");
+            let fast = tr("settings.exclusive");
             let mode = match (self.settings.exclusive, self.host.exclusive()) {
-                (true, true) => self.t("Другие программы не слышат микрофон", "Other programs lose the mic"),
-                (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
-                _ => self.t("−10 мс, но микрофон будет только у Goby", "−10 ms, but only Goby gets the mic"),
+                (true, true) => tr("settings.exclusive.on"),
+                (true, false) => tr("settings.exclusive.refused"),
+                _ => tr("settings.exclusive.off"),
             };
             self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode);
-            self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"));
-            self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, self.t("Порог гейта", "Gate threshold"));
+            self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, tr("settings.gain"));
+            self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, tr("settings.gate_db"));
         }
         y += 20.0;
 
-        section(g, &mut y, self.t("Вывод", "Output"));
+        section(g, &mut y, tr("settings.output"));
         let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, self.t("Куда отдавать", "Send to"), &out);
-        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, self.t("Свой голос в миксе", "Original voice in mix"));
+        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, tr("settings.output.device"), &out);
+        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, tr("settings.mix"));
         y += 20.0;
 
-        section(g, &mut y, self.t("Общие", "General"));
-        let tray = self.t("Работать в трее", "Keep running in the tray");
-        let tray_desc = self.t("Голос работает и после закрытия", "The voice stays on when closed");
+        section(g, &mut y, tr("settings.general"));
+        let tray = tr("settings.tray.title");
+        let tray_desc = tr("settings.tray.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc);
-        let start = self.t("Запускать вместе с Windows", "Start with Windows");
-        let start_desc = self.t("Сразу в трей, без окна", "Straight to the tray, no window");
+        let start = tr("settings.autostart.title");
+        let start_desc = tr("settings.autostart.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Autostart), glyph::POWER, start, start_desc);
-        let keys = self.t("Горячие клавиши", "Hotkeys");
+        let keys = tr("settings.hotkeys.title");
         let keys_desc = match self.hotkeys_ok {
-            true => self.t("Ctrl+Alt+G эффект, PgUp/PgDn голос", "Ctrl+Alt+G effect, PgUp/PgDn voice"),
-            false => self.t("Некоторые клавиши заняты", "Some keys are taken elsewhere"),
+            true => tr("settings.hotkeys.desc"),
+            false => tr("settings.hotkeys.taken"),
         };
         self.row_card(g, &mut y, Hit::Toggle(Switch::Hotkeys), glyph::KEYBOARD, keys, keys_desc);
-        let check = self.t("Проверять обновления", "Check for updates");
-        let check_desc =
-            self.t("Раз в день, только релизы с подписью автора", "Once a day, only releases the author signed");
+        let check = tr("settings.updates.title");
+        let check_desc = tr("settings.updates.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Updates), glyph::UPDATE, check, check_desc);
 
         y += 20.0;
@@ -522,20 +481,12 @@ impl<H: Host> App<H> {
     /// The card that offers a newer release, at the top of Settings.
     fn update_card(&mut self, g: &dyn Canvas, y: &mut f32) {
         let Some(version) = &self.update else { return };
-        let title = format!("Goby {version} {}", self.t("уже вышел", "is out"));
+        let title = trf("update.out", &[("version", version)]);
         let desc = match (self.updating, self.host.installed()) {
-            (Updating::Downloading, _) => {
-                self.t("Скачиваю и проверяю подпись…", "Downloading and checking the signature…")
-            }
-            (Updating::Failed, _) => self.t(
-                "Не удалось скачать файл с верной подписью. Попробуйте позже",
-                "Could not download a file that matches the signature. Try again later",
-            ),
-            (_, true) => self.t(
-                "Установить: файл проверяется по подписи автора",
-                "Install: the file is checked against the author's signature",
-            ),
-            (_, false) => self.t("Скачать со страницы релизов", "Download it from the releases page"),
+            (Updating::Downloading, _) => tr("update.downloading"),
+            (Updating::Failed, _) => tr("update.failed"),
+            (_, true) => tr("update.install"),
+            (_, false) => tr("update.download"),
         };
         let hit = if self.updating == Updating::Downloading { Hit::None } else { Hit::Update };
         self.row_card(g, y, hit, glyph::UPDATE, &title, desc);
