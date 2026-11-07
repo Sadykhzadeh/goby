@@ -69,8 +69,11 @@ impl Preset {
 }
 
 /// `voice:semitones:mix:volume` entries separated by `;`; malformed ones are dropped.
-fn presets(v: &str) -> Vec<Preset> {
-    v.split(';')
+/// Out of line, like `number` and `parse`: inlined, each copy costs more than the call.
+#[inline(never)]
+fn presets(dst: &mut Vec<Preset>, v: &str) {
+    *dst = v
+        .split(';')
         .filter_map(|entry| {
             let mut parts = entry.trim().split(':');
             let voice = parts.next()?.trim().to_ascii_lowercase();
@@ -83,7 +86,7 @@ fn presets(v: &str) -> Vec<Preset> {
                 volume: volume.clamp(0.0, 2.0),
             })
         })
-        .collect()
+        .collect();
 }
 
 impl Default for Settings {
@@ -117,12 +120,13 @@ impl Default for Settings {
 }
 
 /// Comma-separated executable names, lower-cased, empty entries dropped.
-fn list(v: &str) -> Vec<String> {
-    v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect()
+fn list(dst: &mut Vec<String>, v: &str) {
+    *dst = v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect();
 }
 
 /// A knob's value, or `default` when it is not a finite number. "NaN" parses as a float
 /// and comes through `clamp` unchanged, and one NaN gain turns every sample after it to NaN.
+#[inline(never)]
 fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
     decimal(v).unwrap_or(default).clamp(lo, hi)
 }
@@ -194,6 +198,13 @@ pub fn decimal(s: &str) -> Option<f32> {
     v.is_finite().then_some(v)
 }
 
+/// Replaces a text value in place.
+#[inline(never)]
+fn set(dst: &mut String, v: &str) {
+    dst.clear();
+    dst.push_str(v);
+}
+
 #[cfg(windows)]
 fn path() -> Option<String> {
     Settings::dir().map(|d| format!("{d}\\settings.ini"))
@@ -206,6 +217,7 @@ impl Settings {
         std::env::var("APPDATA").ok().map(|d| format!("{}\\Goby", d.trim_end_matches('\\')))
     }
 
+    #[inline(never)]
     pub fn parse(text: &str) -> Settings {
         // Notepad can put a byte-order mark in front of the first key when it saves.
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
@@ -213,9 +225,9 @@ impl Settings {
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
             let v = v.trim();
             match k.trim() {
-                "input" => s.input = v.to_string(),
-                "output" => s.output = v.to_string(),
-                "voice" => s.voice = v.to_string(),
+                "input" => set(&mut s.input, v),
+                "output" => set(&mut s.output, v),
+                "voice" => set(&mut s.voice, v),
                 "semitones" => s.semitones = number(v, s.semitones, -12.0, 12.0),
                 "volume" => s.volume = number(v, s.volume, 0.0, 2.0),
                 "monitor" => s.monitor = v == "1",
@@ -224,18 +236,18 @@ impl Settings {
                 "gate" => s.gate = v == "1",
                 "gate_db" => s.gate_db = number(v, s.gate_db, -80.0, -10.0),
                 "exclusive_mic" => s.exclusive = v == "1",
-                "routed" => s.routed = list(v),
-                "unroute" => s.unroute = list(v),
+                "routed" => list(&mut s.routed, v),
+                "unroute" => list(&mut s.unroute, v),
                 "cable_named_tried" => s.cable_named_tried = v == "1",
                 "tray" => s.tray = v != "0",
                 "tray_told" => s.tray_told = v == "1",
                 "hotkeys" => s.hotkeys = v != "0",
-                "favorites" => s.favorites = list(v),
-                "presets" => s.presets = presets(v),
+                "favorites" => list(&mut s.favorites, v),
+                "presets" => presets(&mut s.presets, v),
                 "updates" => s.updates = v != "0",
                 "update_checked" => s.update_checked = whole(v).unwrap_or(0),
                 "dry_mix" => s.dry_mix = number(v, s.dry_mix, 0.0, 1.0),
-                "lang" if crate::lang::find(v).is_some() => s.lang = v.to_string(),
+                "lang" if crate::lang::find(v).is_some() => set(&mut s.lang, v),
                 _ => {}
             }
         }
