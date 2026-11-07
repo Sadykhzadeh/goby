@@ -1,5 +1,8 @@
 //! Goby's voice engine for the website's "try it" button. It compiles the app's own
-//! DSP files unchanged and exposes them as plain wasm exports for an AudioWorklet:
+//! DSP files unchanged and exposes them as plain wasm exports for an AudioWorklet.
+//!
+//! The site's deploy builds it from the commit it publishes, so the site always plays
+//! the voices in main. To preview the site locally:
 //!
 //!   cargo build --release --target wasm32-unknown-unknown
 //!   cp target/wasm32-unknown-unknown/release/goby_dsp_wasm.wasm ../../docs/goby.wasm
