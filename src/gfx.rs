@@ -312,11 +312,14 @@ impl Gfx {
     }
 }
 
+// Only one Canvas is built into the app, so LTO turns every call into a direct one and
+// inlines it into each of the hundred or so call sites; one copy of each is enough.
 impl Canvas for Gfx {
     fn dpi(&self) -> f32 {
         self.dpi
     }
 
+    #[inline(never)]
     fn fill(&self, r: R, radius: f32, c: Color) {
         unsafe {
             self.brush.SetColor(&color(c));
@@ -327,6 +330,7 @@ impl Canvas for Gfx {
         }
     }
 
+    #[inline(never)]
     fn stroke(&self, r: R, radius: f32, c: Color, width: f32) {
         unsafe {
             self.brush.SetColor(&color(c));
@@ -340,6 +344,7 @@ impl Canvas for Gfx {
         }
     }
 
+    #[inline(never)]
     fn circle(&self, x: f32, y: f32, radius: f32, c: Color) {
         unsafe {
             self.brush.SetColor(&color(c));
@@ -350,14 +355,17 @@ impl Canvas for Gfx {
         }
     }
 
+    #[inline(never)]
     fn line(&self, pts: &[(f32, f32)], c: Color, width: f32) {
         self.keep(self.try_line(pts, c, width));
     }
 
+    #[inline(never)]
     fn text(&self, s: &str, f: Font, r: R, align: Align, c: Color) {
         self.keep(self.try_text(s, f, r, align, c));
     }
 
+    #[inline(never)]
     fn picture(&self, key: &str, px: u32, make: &mut dyn FnMut() -> Option<Vec<u8>>, r: R) -> bool {
         let mut cache = self.pictures.borrow_mut();
         let at = match cache.iter().position(|(k, _)| k == key) {
@@ -389,10 +397,12 @@ impl Canvas for Gfx {
     }
 
     /// A glyph from the system icon font (Segoe Fluent Icons code points).
+    #[inline(never)]
     fn icon(&self, code: u16, f: Font, r: R, c: Color) {
         self.text(&String::from_utf16_lossy(&[code]), f, r, Align::Center, c)
     }
 
+    #[inline(never)]
     fn measure(&self, s: &str, f: Font) -> f32 {
         let w = self.try_measure(s, f);
         let width = *w.as_ref().unwrap_or(&0.0);
