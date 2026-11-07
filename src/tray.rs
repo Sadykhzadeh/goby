@@ -29,7 +29,8 @@ pub struct Item {
 
 /// `s` as a NUL-terminated wide string cut to fit `dst`.
 fn copy(dst: &mut [u16], s: &str) {
-    let wide: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
+    let mut wide: Vec<u16> = s.encode_utf16().collect();
+    wide.truncate(dst.len() - 1);
     dst[..wide.len()].copy_from_slice(&wide);
     dst[wide.len()] = 0;
 }

@@ -182,7 +182,8 @@ pub fn exe_path(pid: u32) -> Option<String> {
 /// when the file has no icon to give.
 pub fn icon_pixels(path: &str, size: i32) -> Option<Vec<u8>> {
     unsafe {
-        let wide: Vec<u16> = path.encode_utf16().chain([0]).collect();
+        let mut wide: Vec<u16> = path.encode_utf16().collect();
+        wide.push(0);
         let mut name = [0u16; 260];
         let n = wide.len().min(name.len());
         name[..n].copy_from_slice(&wide[..n]);

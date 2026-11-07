@@ -78,7 +78,9 @@ fn make_shortcut(link: &str, target: &str) -> Result<()> {
 }
 
 fn set_string(key: HKEY, name: &str, value: &str) {
-    let data: Vec<u8> = value.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
+    let mut wide: Vec<u16> = value.encode_utf16().collect();
+    wide.push(0);
+    let data: Vec<u8> = wide.iter().flat_map(|c| c.to_le_bytes()).collect();
     unsafe {
         let _ = RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(&data));
     }
