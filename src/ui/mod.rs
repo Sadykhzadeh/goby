@@ -332,6 +332,8 @@ fn first_present(list: &[Endpoint], ids: &[&str]) -> usize {
     ids.iter().filter(|id| !id.is_empty()).find_map(|id| list.iter().position(|e| e.id == *id)).unwrap_or(0)
 }
 
+// Out of line: the split's searcher is sizeable and every device and cable name goes through here.
+#[inline(never)]
 fn short(name: &str) -> &str {
     name.split(" (").next().unwrap_or(name)
 }
