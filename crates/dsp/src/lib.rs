@@ -5,3 +5,4 @@
 pub mod dsp;
 pub mod fx;
 pub mod mic;
+pub mod ring;

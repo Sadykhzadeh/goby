@@ -43,6 +43,8 @@ impl Producer {
     }
 }
 
+// Nobody asks whether it is empty: the reader wants the fill as a number.
+#[allow(clippy::len_without_is_empty)]
 impl Consumer {
     pub fn len(&self) -> usize {
         self.0.head.load(Acquire) - self.0.tail.load(Relaxed)

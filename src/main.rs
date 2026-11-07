@@ -12,7 +12,6 @@ mod icon;
 mod install;
 mod lang;
 mod policy;
-mod ring;
 mod settings;
 mod theme;
 mod tray;
@@ -21,7 +20,7 @@ mod update;
 mod voices;
 
 // The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
-use goby_dsp::{dsp, mic};
+use goby_dsp::{dsp, mic, ring};
 
 fn main() -> windows::core::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
