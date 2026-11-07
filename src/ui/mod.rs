@@ -392,6 +392,11 @@ fn app_glyph(exe: &str) -> u16 {
     }
 }
 
+/// The place in `list` of the first of `ids` that is in it, or 0.
+fn first_present(list: &[Endpoint], ids: &[&str]) -> usize {
+    ids.iter().filter(|id| !id.is_empty()).find_map(|id| list.iter().position(|e| e.id == *id)).unwrap_or(0)
+}
+
 fn short(name: &str) -> &str {
     name.split(" (").next().unwrap_or(name)
 }
@@ -584,19 +589,36 @@ impl App {
         if self.ru { ru } else { en }
     }
 
+    /// Re-reads the endpoints. The devices chosen in Settings win whenever they are plugged
+    /// in; while one is away the one in use stays, or else Windows' default mic and the cable.
     fn refresh_devices(&mut self) {
-        let keep_in = self.inputs.get(self.input).map(|e| e.id.clone()).unwrap_or(self.settings.input.clone());
-        let keep_out = self.outputs.get(self.output).map(|e| e.id.clone()).unwrap_or(self.settings.output.clone());
+        let open_in = self.inputs.get(self.input).map(|e| e.id.clone()).unwrap_or_default();
+        let open_out = self.outputs.get(self.output).map(|e| e.id.clone()).unwrap_or_default();
         self.inputs = engine::list(true);
         self.outputs = engine::list(false);
         self.cable = engine::cable();
-        let pick = |list: &[Endpoint], id: &str| list.iter().position(|e| e.id == id);
-        self.input = pick(&self.inputs, &keep_in)
-            .or_else(|| engine::default_endpoint(true).and_then(|d| pick(&self.inputs, &d.id)))
-            .unwrap_or(0);
-        self.output = pick(&self.outputs, &keep_out)
-            .or_else(|| self.cable.as_ref().and_then(|(play, _)| pick(&self.outputs, &play.id)))
-            .unwrap_or(0);
+        let default_mic = engine::default_endpoint(true).map(|d| d.id).unwrap_or_default();
+        let cable = self.cable.as_ref().map(|(play, _)| play.id.clone()).unwrap_or_default();
+        self.input = first_present(&self.inputs, &[&self.settings.input, &open_in, &default_mic]);
+        self.output = first_present(&self.outputs, &[&self.settings.output, &open_out, &cable]);
+    }
+
+    /// Unplugging the chosen mic (or output) moves Goby to another one; this moves it back
+    /// once the chosen one is plugged in again. Only lists endpoints while that is pending.
+    fn rejoin_chosen_devices(&mut self) {
+        if self.retry_at.is_some() {
+            return;
+        }
+        let running = self.engine.is_some();
+        let in_use = |chosen: &str, open: Option<&Endpoint>| running && open.is_some_and(|e| e.id == chosen);
+        let away = |chosen: &str, open: Option<&Endpoint>| !chosen.is_empty() && !in_use(chosen, open);
+        let mic_away = away(&self.settings.input, self.inputs.get(self.input));
+        let out_away = away(&self.settings.output, self.outputs.get(self.output));
+        let back = |capture: bool, id: &str| engine::list(capture).iter().any(|e| e.id == id);
+        if (mic_away && back(true, &self.settings.input)) || (out_away && back(false, &self.settings.output)) {
+            self.refresh_devices();
+            self.restart();
+        }
     }
 
     /// A cable installed while Goby runs is picked up within two seconds: the voice goes
@@ -782,8 +804,14 @@ impl App {
             };
             return;
         };
-        self.settings.input = mic.id.clone();
-        self.settings.output = out.id.clone();
+        // A device opened in place of an unplugged one is not a choice: the setting keeps
+        // naming the one to go back to. Only a first run with nothing chosen adopts these.
+        if self.settings.input.is_empty() {
+            self.settings.input = mic.id.clone();
+        }
+        if self.settings.output.is_empty() {
+            self.settings.output = out.id.clone();
+        }
         let mut targets = vec![out.id.clone()];
         if self.settings.monitor
             && let Some(d) = engine::default_endpoint(false).filter(|d| d.id != out.id)
@@ -859,6 +887,7 @@ impl App {
         }
         if self.apps_at.elapsed() >= Duration::from_secs(2) {
             self.sync_apps();
+            self.rejoin_chosen_devices();
         }
         if self.recheck_at.is_some_and(|t| Instant::now() >= t) {
             self.recheck_at = None;
@@ -1327,6 +1356,22 @@ mod tests {
             let steps = (hi - lo) / step;
             assert!((steps - steps.round()).abs() < 1e-3, "{k:?} range is not a whole number of steps");
         }
+    }
+
+    #[test]
+    fn an_unplugged_mic_is_taken_back_when_it_returns() {
+        let ep = |id: &str| Endpoint { id: id.into(), name: id.into() };
+        let (usb, webcam) = (ep("usb"), ep("webcam"));
+        // The order refresh_devices asks in: the chosen mic, the open one, Windows' default.
+        let pick = |list: &[Endpoint], open: &str| first_present(list, &["usb", open, "webcam"]);
+        let both = [webcam.clone(), usb.clone()];
+        assert_eq!(both[pick(&both, "")].id, "usb", "first start");
+        let unplugged = [webcam.clone()];
+        assert_eq!(unplugged[pick(&unplugged, "usb")].id, "webcam", "unplugged: Windows' default stands in");
+        // Plugged back in while the webcam is open: the old order (open one first) stayed on it.
+        assert_eq!(both[pick(&both, "webcam")].id, "usb", "replugged");
+        assert_eq!(first_present(&both, &["", "gone"]), 0);
+        assert_eq!(first_present(&[], &["usb"]), 0);
     }
 
     #[test]

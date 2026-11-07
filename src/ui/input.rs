@@ -65,8 +65,8 @@ impl App {
                 let list = if pick == Pick::Mic { &self.inputs } else { &self.outputs };
                 if let Some(i) = list.iter().position(|e| e.id == key) {
                     match pick {
-                        Pick::Mic => self.input = i,
-                        Pick::Out => self.output = i,
+                        Pick::Mic => (self.input, self.settings.input) = (i, key),
+                        Pick::Out => (self.output, self.settings.output) = (i, key),
                     }
                     self.restart();
                 }
