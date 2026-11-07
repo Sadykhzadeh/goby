@@ -59,10 +59,17 @@ features = [
 ]
 
 [profile.release]
-# One small binary that is as fast as the compiler can make it.
-lto = "fat"
+# The window, setup and updates are built for size; the voices (crates/dsp) for speed.
+opt-level = "z"
+# No LTO: with it, LLVM optimizes the whole program again at the app's opt-level, which
+# skips vectorizing, and the pitched-up voices came out 1.8 times slower even with
+# goby-dsp at 3. Without it each crate keeps the code its own opt-level made.
+lto = "off"
 codegen-units = 1
 strip = true
 # No unwinding tables or landing pads: 100 KB less, and nothing here catches a panic.
 panic = "abort"
-# opt-level stays at 3: "s" makes the heaviest voice 15-25 % slower and "z" six times.
+
+[profile.release.package.goby-dsp]
+# Never lower: "s" makes the heaviest voice 15-25 % slower and "z" six times.
+opt-level = 3
