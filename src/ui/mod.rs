@@ -650,7 +650,10 @@ impl App {
             self.pinned.clear();
             self.pinned_to = ours.clone();
         }
-        let snapshot = apps::processes();
+        // Listing every process takes 4 to 6 ms of kernel time; with no program to pin or
+        // hand back, nothing below looks at it.
+        let idle = self.settings.routed.is_empty() && self.settings.unroute.is_empty();
+        let snapshot = if idle { Vec::new() } else { apps::processes() };
         self.pinned.retain(|pid| snapshot.iter().any(|(_, p)| p == pid));
 
         let mut states = Vec::with_capacity(self.settings.routed.len());
