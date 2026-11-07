@@ -77,7 +77,7 @@ fn presets(dst: &mut Vec<Preset>, v: &str) {
         .filter_map(|entry| {
             let mut parts = entry.trim().split(':');
             let voice = parts.next()?.trim().to_ascii_lowercase();
-            let mut number = || decimal(parts.next()?.trim());
+            let mut number = || parse_decimal(parts.next()?.trim());
             let (semitones, dry_mix, volume) = (number()?, number()?, number()?);
             (!voice.is_empty()).then(|| Preset {
                 voice,
@@ -128,7 +128,7 @@ fn list(dst: &mut Vec<String>, v: &str) {
 /// and comes through `clamp` unchanged, and one NaN gain turns every sample after it to NaN.
 #[inline(never)]
 fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
-    decimal(v).unwrap_or(default).clamp(lo, hi)
+    goby_dsp::fx::clamp(parse_decimal(v).unwrap_or(default), lo, hi)
 }
 
 /// What `str::parse::<u64>` reads: an optional `+`, then decimal digits that fit.
@@ -145,7 +145,7 @@ pub fn whole(s: &str) -> Option<u64> {
 /// fraction, an optional exponent. The std parser handles every corner of IEEE rounding and
 /// brings 15 KB of tables with it; the numbers in settings.ini are short, and for them one
 /// exact division in f64 lands on the same f32 (the tests compare the two widely).
-pub fn decimal(s: &str) -> Option<f32> {
+pub fn parse_decimal(s: &str) -> Option<f32> {
     let (neg, s) = match s.as_bytes().first() {
         Some(b'-') => (true, &s[1..]),
         Some(b'+') => (false, &s[1..]),
@@ -203,6 +203,72 @@ pub fn decimal(s: &str) -> Option<f32> {
 fn set(dst: &mut String, v: &str) {
     dst.clear();
     dst.push_str(v);
+}
+
+/// `format!("{v}")` without core's float printer (Grisu with a Dragon fallback, about 15 KB
+/// of the exe): the fewest decimals that read back as the same f32. `v` times 10^12 is
+/// still exact in an f64, so this matches `{}` for everything with at most 12 decimals,
+/// which covers every f32 from 0.001 up to 2^24; the knobs, presets and latency all stay
+/// inside that. Smaller fractions come out rounded to 12 decimals instead.
+pub fn write_decimal(v: f32) -> String {
+    if v.is_nan() {
+        return "NaN".into();
+    }
+    let mut out = String::new();
+    if v.is_sign_negative() {
+        out.push('-');
+    }
+    let a = v.abs();
+    if a.is_infinite() {
+        out.push_str("inf");
+        return out;
+    }
+    let x = a as f64;
+    let mut buf = [0u8; 48];
+    let mut scale = 1.0f64;
+    for places in 0..=12 {
+        let scaled = x * scale;
+        let low = scaled as u64;
+        let frac = scaled - low as f64;
+        let near = if frac >= 0.5 { [low + 1, low] } else { [low, low + 1] };
+        for n in near {
+            let s = fixed(&mut buf, n, places);
+            if parse_decimal(s) == Some(a) {
+                out.push_str(s);
+                return out;
+            }
+            if places == 12 {
+                out.push_str(s.trim_end_matches('0').trim_end_matches('.'));
+                return out;
+            }
+        }
+        scale *= 10.0;
+    }
+    out
+}
+
+/// `format!("{v:+}")` for a finite `v`.
+pub fn signed(v: f32) -> String {
+    let s = write_decimal(v);
+    if v.is_sign_negative() { s } else { "+".to_string() + &s }
+}
+
+/// `n / 10^places` written out with exactly `places` decimals.
+#[inline(never)]
+fn fixed(buf: &mut [u8; 48], mut n: u64, places: usize) -> &str {
+    let mut i = buf.len();
+    let mut digits = 0;
+    while n > 0 || digits <= places {
+        if digits == places && places > 0 {
+            i -= 1;
+            buf[i] = b'.';
+        }
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        digits += 1;
+    }
+    std::str::from_utf8(&buf[i..]).unwrap_or_default()
 }
 
 #[cfg(windows)]
@@ -265,14 +331,14 @@ impl Settings {
             self.input,
             self.output,
             self.voice,
-            self.semitones,
-            self.volume,
+            write_decimal(self.semitones),
+            write_decimal(self.volume),
             self.monitor as u8,
             self.enabled as u8,
-            self.mic_gain_db,
+            write_decimal(self.mic_gain_db),
             self.gate as u8,
-            self.gate_db,
-            self.dry_mix,
+            write_decimal(self.gate_db),
+            write_decimal(self.dry_mix),
             self.exclusive as u8,
             self.routed.join(","),
             self.unroute.join(","),
@@ -283,7 +349,13 @@ impl Settings {
             self.favorites.join(","),
             self.presets
                 .iter()
-                .map(|p| format!("{}:{}:{}:{}", p.voice, p.semitones, p.dry_mix, p.volume))
+                .map(|p| format!(
+                    "{}:{}:{}:{}",
+                    p.voice,
+                    write_decimal(p.semitones),
+                    write_decimal(p.dry_mix),
+                    write_decimal(p.volume)
+                ))
                 .collect::<Vec<_>>()
                 .join(";"),
             self.updates as u8,
@@ -489,7 +561,7 @@ mod tests {
             "24",
         ];
         for s in odd {
-            assert_eq!(decimal(s).map(f32::to_bits), std_decimal(s), "{s:?}");
+            assert_eq!(parse_decimal(s).map(f32::to_bits), std_decimal(s), "{s:?}");
         }
     }
 
@@ -503,7 +575,7 @@ mod tests {
             let mut x = lo;
             while x.abs() <= 80.0 {
                 for s in [format!("{x}"), format!("{x:e}"), format!("{x:.3}")] {
-                    assert_eq!(decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
+                    assert_eq!(parse_decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
                 }
                 checked += 1;
                 x = f32::from_bits(x.to_bits() + 4099);
@@ -526,7 +598,7 @@ mod tests {
             if digits < 0 {
                 s.insert(0, '-');
             }
-            assert_eq!(decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
+            assert_eq!(parse_decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
         }
     }
 
@@ -580,5 +652,61 @@ mod tests {
         let s = Settings::parse("semitones=banana\nvolume=99\nnoise");
         assert_eq!(s.semitones, Settings::default().semitones);
         assert_eq!(s.volume, 2.0);
+    }
+
+    /// `decimal` against core's `{}` for `v` and `-v`, and `signed` against `{:+}`.
+    fn same_as_display(v: f32) {
+        for v in [v, -v] {
+            assert_eq!(write_decimal(v), format!("{v}"), "bits {:#x}", v.to_bits());
+            assert_eq!(signed(v), format!("{v:+}"), "bits {:#x}", v.to_bits());
+        }
+    }
+
+    #[test]
+    fn decimal_writes_what_display_wrote() {
+        for v in [0.0, 1.0, 0.05, 0.1, 0.2, 0.3, 1.25, 2.5, 3.0, 12.0, 24.0, 50.0, 80.0, 125.0, 1e-3, 0.1 + 0.2] {
+            same_as_display(v);
+        }
+        for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(write_decimal(v), format!("{v}"));
+        }
+        // What the sliders and presets can hold, and their percentages.
+        for (lo, hi, step) in [(-12.0, 12.0, 1.0), (0.0, 2.0, 0.05), (0.0, 1.0, 0.05), (-80.0, -10.0, 1.0f32)] {
+            for i in 0..=((hi - lo) / step).round() as i32 {
+                let v = ((lo + i as f32 * step) / step).round() * step;
+                same_as_display(v);
+                same_as_display((v * 100.0).round());
+            }
+        }
+        // Hand-edited files and smoothed latencies: every 4093rd f32 from 0.001 to 2^24.
+        let mut bits = 0.001f32.to_bits();
+        while bits < 16_777_216f32.to_bits() {
+            same_as_display(f32::from_bits(bits));
+            bits += 4093;
+        }
+        for i in 0..20_000 {
+            same_as_display(i as f32 / 16.0);
+            same_as_display(i as f32 * 0.01);
+        }
+    }
+
+    #[test]
+    fn decimal_rounds_tiny_fractions_to_twelve_places() {
+        assert_eq!(write_decimal(1e-30), "0");
+        assert_eq!(write_decimal(-1e-30), "-0");
+        assert_eq!(write_decimal(1.2345678e-5), "0.000012345678");
+        assert_eq!(write_decimal(1e-5), format!("{}", 1e-5f32));
+    }
+
+    /// Every f32 from 0.001 to 128 against `{}`; a few minutes in release.
+    #[test]
+    #[ignore]
+    fn decimal_writes_what_display_wrote_everywhere() {
+        let mut bits = 0.001f32.to_bits();
+        while bits < 128f32.to_bits() {
+            let v = f32::from_bits(bits);
+            assert_eq!(write_decimal(v), format!("{v}"), "bits {bits:#x}");
+            bits += 1;
+        }
     }
 }

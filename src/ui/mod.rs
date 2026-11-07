@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::draw::{Align, Canvas, Font, R, glyph};
 use crate::host::{AppState, Endpoint, Host, Hotkey, Key, Link, MicApp, SCOPE_LEN};
 use crate::lang::{self, tr, trf};
-use crate::settings::{Preset, Settings};
+use crate::settings::{Preset, Settings, signed, write_decimal};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
 use goby_dsp::fx::clamp;
@@ -615,10 +615,11 @@ impl<H: Host> App<H> {
 
     fn readout(&self, k: Knob) -> String {
         let v = self.knob(k);
-        let signed = |v: f32| if v > 0.0 { format!("+{v}") } else { format!("{v}").replace('-', "−") };
+        let signed =
+            |v: f32| if v > 0.0 { format!("+{}", write_decimal(v)) } else { write_decimal(v).replace('-', "−") };
         match k {
             Knob::Tone => trf("unit.semitones", &[("value", &signed(v))]),
-            Knob::Volume | Knob::Mix => format!("{} %", (v * 100.0).round()),
+            Knob::Volume | Knob::Mix => format!("{} %", write_decimal((v * 100.0).round())),
             Knob::Gain | Knob::Gate => trf("unit.db", &[("value", &signed(v))]),
         }
     }

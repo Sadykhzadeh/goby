@@ -135,14 +135,14 @@ impl<H: Host> App<H> {
 pub(super) fn preset_tweaks(p: &Preset) -> String {
     let mut parts = Vec::new();
     if p.semitones != 0.0 {
-        parts.push(format!("{:+}", p.semitones));
+        parts.push(signed(p.semitones));
     }
     if (p.volume - 1.0).abs() > 0.005 {
-        parts.push(format!("{}%", (p.volume * 100.0).round()));
+        parts.push(write_decimal((p.volume * 100.0).round()) + "%");
     }
     if p.dry_mix > 0.0 {
         // "own" is left to the full name in the header: the tile has no room for it.
-        parts.push(format!("{}%", (p.dry_mix * 100.0).round()));
+        parts.push(write_decimal((p.dry_mix * 100.0).round()) + "%");
     }
     parts.join(" · ")
 }
@@ -151,13 +151,13 @@ pub(super) fn preset_tweaks(p: &Preset) -> String {
 pub(super) fn preset_label(name: &str, p: &Preset) -> String {
     let mut label = name.to_string();
     if p.semitones != 0.0 {
-        label.push_str(&format!(" {:+}", p.semitones));
+        label.push_str(&format!(" {}", signed(p.semitones)));
     }
     if (p.volume - 1.0).abs() > 0.005 {
-        label.push_str(&format!(" · {}%", (p.volume * 100.0).round()));
+        label.push_str(&format!(" · {}%", write_decimal((p.volume * 100.0).round())));
     }
     if p.dry_mix > 0.0 {
-        let own = trf("preset.own", &[("percent", &(p.dry_mix * 100.0).round().to_string())]);
+        let own = trf("preset.own", &[("percent", &write_decimal((p.dry_mix * 100.0).round()))]);
         label.push_str(&format!(" · {own}"));
     }
     label

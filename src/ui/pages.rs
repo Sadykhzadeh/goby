@@ -234,7 +234,7 @@ impl<H: Host> App<H> {
             let off = tr("scope.off");
             (off.into(), th.text_secondary())
         } else {
-            let ms = self.latency.round().to_string();
+            let ms = write_decimal(self.latency.round());
             (trf("scope.latency", &[("category", def.category.name()), ("ms", &ms)]), th.text_secondary())
         };
         let line_r = R::new(r.l + 20.0, r.t + 40.0, text_w(420.0), 18.0);

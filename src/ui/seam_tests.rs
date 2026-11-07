@@ -151,3 +151,27 @@ fn the_language_menu_switches_the_whole_window_at_once() {
     assert!(texts.iter().any(|t| t == "Настройки") && texts.iter().any(|t| t == "Русский"), "{texts:?}");
     assert!(!texts.iter().any(|t| t == "Settings"));
 }
+
+#[test]
+fn slider_readouts_read_as_they_did_with_float_formatting() {
+    for ru in [false, true] {
+        let (mut app, _) = window(demo::settings(), ru, WIDTH);
+        for k in [Knob::Tone, Knob::Volume, Knob::Mix, Knob::Gain, Knob::Gate] {
+            let (lo, hi, step, _) = k.range();
+            // Every notch, and points between them that the knob rounds back onto one.
+            let mut at = lo - step;
+            while at <= hi + step {
+                app.set_knob(k, at);
+                at += step * 0.37;
+                let v = app.knob(k);
+                let signed = |v: f32| if v > 0.0 { format!("+{v}") } else { format!("{v}").replace('-', "−") };
+                let old = match k {
+                    Knob::Tone => trf("unit.semitones", &[("value", &signed(v))]),
+                    Knob::Volume | Knob::Mix => format!("{} %", (v * 100.0).round()),
+                    Knob::Gain | Knob::Gate => trf("unit.db", &[("value", &signed(v))]),
+                };
+                assert_eq!(app.readout(k), old, "{k:?} at {v}");
+            }
+        }
+    }
+}
