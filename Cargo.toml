@@ -10,7 +10,13 @@ categories = ["multimedia::audio"]
 license = "GPL-3.0-or-later"
 readme = "README.md"
 
+[workspace]
+members = ["crates/dsp"]
+# `cargo test` and `cargo clippy` at the top cover the voices too.
+default-members = [".", "crates/dsp"]
+
 [dependencies]
+goby-dsp = { path = "crates/dsp" }
 windows-core = "0.62.2"
 windows-numerics = "0.3.1"
 

@@ -249,6 +249,47 @@ mod tests {
         assert!(peak < 0.15, "80 Hz leaked at {peak}");
     }
 
+    /// A buzzy vowel with a gliding pitch and syllables, closer to speech than a sine.
+    fn speech(secs: f32) -> Vec<f32> {
+        let mut phase = 0.0f32;
+        (0..(SR as f32 * secs) as usize)
+            .map(|i| {
+                let t = i as f32 / SR as f32;
+                phase += (120.0 + 30.0 * (t * 1.3).sin()) / SR as f32;
+                let syllables = (0.5 + 0.5 * (t * TAU * 3.0).sin()).powi(2);
+                (1..12).map(|h| (phase * h as f32 * TAU).sin() / h as f32).sum::<f32>() * 0.15 * syllables
+            })
+            .collect()
+    }
+
+    /// Largest step between two neighbouring samples: a click is a big one.
+    fn biggest_step(x: &[f32]) -> f32 {
+        x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn switching_voices_does_not_click() {
+        let ids = ["off", "minion", "giant", "radio", "bass", "helium", "robot", "demon", "man"];
+        let recipes: Vec<crate::dsp::Recipe> = ids.iter().map(|id| ALL[index_of(id).unwrap()].recipe).collect();
+        let input = speech(3.0);
+        let run = |pick: &dyn Fn(usize) -> usize| {
+            let mut v = Voice::new(SR);
+            let mut out = Vec::new();
+            for (b, chunk) in input.chunks(144).enumerate() {
+                v.set(&recipes[pick(b)], 0.0, 1.0);
+                let mut c = chunk.to_vec();
+                v.process(&mut c);
+                out.extend(c);
+            }
+            out
+        };
+        let steady = (0..ids.len()).map(|i| biggest_step(&run(&|_| i))).fold(0.0, f32::max);
+        // A new voice every 37 ms, hopping around the list. Without the dip this came out
+        // three times the steady figure; a little over it is just a modulator in another phase.
+        let hopping = biggest_step(&run(&|b| (b / 12 * 5) % ids.len()));
+        assert!(hopping <= steady * 1.25, "switching steps {hopping}, a voice alone at most {steady}");
+    }
+
     #[test]
     fn glyphs_are_normalised() {
         for (def, g) in ALL.iter().zip(glyphs(64)) {
@@ -282,7 +323,7 @@ mod tests {
     #[ignore = "benchmark"]
     fn gated_cost() {
         crate::dsp::flush_denormals();
-        let mut noise = crate::fx::Noise::default();
+        let mut noise = goby_dsp::fx::Noise::default();
         let mut input = voiced(1.0);
         input.extend((0..SR * 9).map(|_| noise.next() * 0.0003));
         let mut worst = (0.0f64, "");

@@ -6,10 +6,15 @@ version = 4
 name = "goby"
 version = "0.4.0"
 dependencies = [
+ "goby-dsp",
  "windows",
  "windows-core",
  "windows-numerics",
 ]
+
+[[package]]
+name = "goby-dsp"
+version = "0.4.0"
 
 [[package]]
 name = "proc-macro2"

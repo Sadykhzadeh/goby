@@ -28,6 +28,8 @@ impl Default for Noise {
 }
 
 impl Noise {
+    /// Not an `Iterator`: it never ends, and `Option` would only get in the way.
+    #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn next(&mut self) -> f32 {
         let mut x = self.0;

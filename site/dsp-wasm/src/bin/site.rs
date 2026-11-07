@@ -7,9 +7,9 @@
 //! without JavaScript, docs/images/window.webp shows the same window.
 #![allow(dead_code)]
 
-#[path = "../../../../src/dsp.rs"]
+#[path = "../../../../crates/dsp/src/dsp.rs"]
 mod dsp;
-#[path = "../../../../src/fx.rs"]
+#[path = "../../../../crates/dsp/src/fx.rs"]
 mod fx;
 #[path = "../../../../src/lang.rs"]
 mod lang;

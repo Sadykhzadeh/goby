@@ -565,35 +565,6 @@ mod tests {
             .collect()
     }
 
-    /// Largest step between two neighbouring samples: a click is a big one.
-    fn biggest_step(x: &[f32]) -> f32 {
-        x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
-    }
-
-    #[test]
-    fn switching_voices_does_not_click() {
-        let ids = ["off", "minion", "giant", "radio", "bass", "helium", "robot", "demon", "man"];
-        let recipes: Vec<Recipe> =
-            ids.iter().map(|id| crate::voices::ALL[crate::voices::index_of(id).unwrap()].recipe).collect();
-        let input = speech(3.0);
-        let run = |pick: &dyn Fn(usize) -> usize| {
-            let mut v = Voice::new(SR);
-            let mut out = Vec::new();
-            for (b, chunk) in input.chunks(144).enumerate() {
-                v.set(&recipes[pick(b)], 0.0, 1.0);
-                let mut c = chunk.to_vec();
-                v.process(&mut c);
-                out.extend(c);
-            }
-            out
-        };
-        let steady = (0..ids.len()).map(|i| biggest_step(&run(&|_| i))).fold(0.0, f32::max);
-        // A new voice every 37 ms, hopping around the list. Without the dip this came out
-        // three times the steady figure; a little over it is just a modulator in another phase.
-        let hopping = biggest_step(&run(&|b| (b / 12 * 5) % ids.len()));
-        assert!(hopping <= steady * 1.25, "switching steps {hopping}, a voice alone at most {steady}");
-    }
-
     #[test]
     fn dry_voice_without_tone_is_bit_exact() {
         let mut v = Voice::new(SR);

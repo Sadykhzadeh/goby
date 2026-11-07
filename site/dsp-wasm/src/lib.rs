@@ -14,11 +14,11 @@
 //! One instance per thread, so the state lives in statics; calls come one at a time.
 #![allow(dead_code)]
 
-#[path = "../../../src/dsp.rs"]
+#[path = "../../../crates/dsp/src/dsp.rs"]
 mod dsp;
-#[path = "../../../src/fx.rs"]
+#[path = "../../../crates/dsp/src/fx.rs"]
 mod fx;
-#[path = "../../../src/mic.rs"]
+#[path = "../../../crates/dsp/src/mic.rs"]
 mod mic;
 #[path = "../../../src/voices.rs"]
 mod voices;

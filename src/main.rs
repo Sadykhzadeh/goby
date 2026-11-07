@@ -4,16 +4,13 @@ mod apps;
 #[cfg(test)]
 mod demo;
 mod draw;
-mod dsp;
 mod engine;
-mod fx;
 mod gfx;
 mod host;
 mod hotkeys;
 mod icon;
 mod install;
 mod lang;
-mod mic;
 mod policy;
 mod ring;
 mod settings;
@@ -22,6 +19,9 @@ mod tray;
 mod ui;
 mod update;
 mod voices;
+
+// The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
+use goby_dsp::{dsp, mic};
 
 fn main() -> windows::core::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
