@@ -177,4 +177,12 @@ Made by [Azer Sadykhzadeh](https://azer.one).
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+Copyright © 2026 Azer Sadykhzadeh.
+
+Goby is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, either version 3
+of the License, or (at your option) any later version. It is distributed in the hope that
+it will be useful, but without any warranty; see [LICENSE](LICENSE) for the full text.
+
+In short: use it, share it and change it freely, but a changed version you give to others
+has to come with its source under the same license.

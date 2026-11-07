@@ -203,7 +203,7 @@ fn version_info(version: &str) -> Vec<u8> {
         ("FileDescription", "Goby voice changer".to_string()),
         ("FileVersion", version.to_string()),
         ("InternalName", "goby".to_string()),
-        ("LegalCopyright", format!("© {year} {AUTHOR}")),
+        ("LegalCopyright", format!("© {year} {AUTHOR}, GPL-3.0-or-later")),
         ("OriginalFilename", "goby.exe".to_string()),
         ("ProductName", "Goby".to_string()),
         ("ProductVersion", version.to_string()),
