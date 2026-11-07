@@ -147,12 +147,17 @@ impl<H: Host> App<H> {
         title: &str,
         desc: &str,
     ) {
+        // One body for glyphs and program icons alike, rather than a copy for each.
+        self.icon_row_card(g, y, hit, icon.into(), title, desc)
+    }
+
+    fn icon_row_card(&mut self, g: &dyn Canvas, y: &mut f32, hit: Hit, icon: Icon, title: &str, desc: &str) {
         let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
         if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, self.hover == hit && !matches!(hit, Hit::Remove(_)));
             let spot = R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0);
-            match icon.into() {
+            match icon {
                 Icon::Glyph(code) => g.icon(code, Font::Icon16, spot, th.text()),
                 Icon::Exe(exe) => {
                     // The program's own icon when its file is known and has one; the
