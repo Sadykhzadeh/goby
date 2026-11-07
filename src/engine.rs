@@ -53,8 +53,8 @@ pub struct Shared {
     mic_frames: AtomicU32,
     effect_frames: AtomicU32,
     queued_frames: AtomicU32,
-    /// Ring fill the outputs aim for, set by the mic from its packet size (0 = default).
-    ring_target: AtomicU32,
+    /// Frames in each mic packet, which the outputs size their rings by (0 = not known yet).
+    mic_packet: AtomicU32,
     /// Whether the mic really runs in exclusive mode (it falls back to shared).
     pub mic_exclusive: AtomicBool,
     /// Times the cable ran dry and had to wait (each one is an audible gap).
@@ -79,7 +79,7 @@ impl Default for Shared {
             mic_frames: AtomicU32::new(0),
             effect_frames: AtomicU32::new(0),
             queued_frames: AtomicU32::new(0),
-            ring_target: AtomicU32::new(0),
+            mic_packet: AtomicU32::new(0),
             mic_exclusive: AtomicBool::new(false),
             underruns: AtomicU32::new(0),
         }
@@ -236,6 +236,8 @@ struct Stream {
     client: IAudioClient,
     event: HANDLE,
     frames: u32,
+    /// Frames the device takes or delivers per wake-up.
+    period: u32,
     channels: usize,
     sample: Sample,
     exclusive: bool,
@@ -251,7 +253,9 @@ impl Stream {
                 | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
             // 10 ms: Windows rounds up to what the device can actually do.
             client.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 100_000, 0, &float_format(channels), None)?;
-            Stream::finish(client, channels as usize, Sample::F32)
+            let mut period = 0i64;
+            client.GetDevicePeriod(Some(&mut period), None)?;
+            Stream::finish(client, (period * RATE as i64 / 10_000_000) as u32, channels as usize, Sample::F32)
         }
     }
 
@@ -290,7 +294,8 @@ impl Stream {
                 client = dev.Activate(CLSCTX_ALL, None)?;
                 client.Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE, flags, period, period, &fmt, None)?;
             }
-            let mut s = Stream::finish(client, channels as usize, sample)?;
+            let frames = client.GetBufferSize()?;
+            let mut s = Stream::finish(client, frames, channels as usize, sample)?;
             s.exclusive = true;
             Ok(Some(s))
         }
@@ -319,16 +324,16 @@ impl Stream {
                 return Ok(None);
             }
             result?;
-            Stream::finish(client.cast()?, mix.nChannels as usize, Sample::F32).map(Some)
+            Stream::finish(client.cast()?, min, mix.nChannels as usize, Sample::F32).map(Some)
         }
     }
 
-    fn finish(client: IAudioClient, channels: usize, sample: Sample) -> WinResult<Stream> {
+    fn finish(client: IAudioClient, period: u32, channels: usize, sample: Sample) -> WinResult<Stream> {
         unsafe {
             let event = CreateEventW(None, false, false, None)?;
             client.SetEventHandle(event)?;
             let frames = client.GetBufferSize()?;
-            Ok(Stream { client, event, frames, channels, sample, exclusive: false })
+            Ok(Stream { client, event, frames, period, channels, sample, exclusive: false })
         }
     }
 
@@ -449,7 +454,7 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
             if !s.wait() {
                 continue;
             }
-            reader.set_target(shared.ring_target.load(Relaxed));
+            reader.set_target(shared.mic_packet.load(Relaxed), s.period);
             let n = s.frames - s.client.GetCurrentPadding()?;
             if n == 0 {
                 continue;
@@ -477,9 +482,9 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
         };
         let is_exclusive = s.exclusive;
         shared.mic_exclusive.store(is_exclusive, Relaxed);
-        // The outputs need one mic packet in hand plus 2 ms of slack for scheduling jitter.
-        let packet = if is_exclusive { s.frames } else { (RATE as f64 * TARGET_MS / 1000.0) as u32 - RATE / 500 };
-        shared.ring_target.store(packet + RATE / 500, Relaxed);
+        // Shared mode hands over 10 ms packets whatever the buffer size is.
+        let packet = if is_exclusive { s.frames } else { RATE / 100 };
+        shared.mic_packet.store(packet, Relaxed);
         let mut input = vec![0.0f32; s.frames.max(MAX_BLOCK as u32) as usize * 2];
         let cap: IAudioCaptureClient = s.client.GetService()?;
         let mut voice = Voice::new(RATE);
@@ -565,6 +570,9 @@ pub struct Reader {
     s1: f32,
     target: f64,
     fill: f64,
+    /// Fill at which playback (re)starts: the target plus half a mic packet, so the ring
+    /// starts out at the top of its sawtooth rather than the bottom.
+    start: f64,
     priming: bool,
     underruns: u32,
 }
@@ -572,21 +580,31 @@ pub struct Reader {
 impl Reader {
     fn new(ring: Consumer) -> Self {
         let target = RATE as f64 * TARGET_MS / 1000.0;
-        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, priming: true, underruns: 0 }
+        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, start: target, priming: true, underruns: 0 }
     }
 
-    /// Follows the mic: a smaller packet needs less cushion. 0 keeps the default.
-    fn set_target(&mut self, frames: u32) {
-        if frames > 0 && frames as f64 != self.target {
-            self.target = frames as f64;
-            self.fill = self.target;
+    /// Sizes the cushion from the mic's packet and this output's period, both in frames;
+    /// a packet of 0 keeps the default. The ring has to bridge one mic packet plus 2 ms of
+    /// scheduling jitter. When the output takes much smaller bites than the mic delivers
+    /// (10 ms shared-mode packets into the cable's 2.67 ms periods), the fill sweeps evenly
+    /// over a packet, so half a packet plus one period is enough to never run dry.
+    fn set_target(&mut self, packet: u32, period: u32) {
+        if packet == 0 {
+            return;
         }
+        let slack = RATE / 500;
+        let frames = (packet + slack).min(packet / 2 + period + slack) as f64;
+        if frames != self.target {
+            self.target = frames;
+            self.fill = frames;
+        }
+        self.start = frames + (packet / 2) as f64;
     }
 
     fn next(&mut self) -> f32 {
         let avail = self.ring.len() as f64;
         if self.priming {
-            if avail < self.target {
+            if avail < self.start {
                 return 0.0;
             }
             self.priming = false;
@@ -655,7 +673,8 @@ mod tests {
         let (mut prod, cons) = ring(RATE as usize);
         let mut r = Reader::new(cons);
         let target = RATE * 5 / 1000;
-        r.set_target(target);
+        r.set_target(RATE * 3 / 1000, 128);
+        assert_eq!(r.target, target as f64);
         let mut fed = 0.0f64;
         for _ in 0..20_000 {
             fed += RATE as f64 / 1000.0;
@@ -670,6 +689,33 @@ mod tests {
         let fill = r.ring.len() as u32;
         assert!(fill.abs_diff(target) < target / 2, "fill {fill}, target {target}");
         assert_eq!(r.underruns, 0);
+    }
+
+    #[test]
+    fn shared_mode_packets_reach_the_cable_without_gaps() {
+        // 10 ms mic packets, each up to 1 ms late, into the cable's 2.67 ms periods: the
+        // cushion stays under one packet and the cable never runs dry, from the first packet on.
+        let (packet, period) = (RATE / 100, 128);
+        for drift in [-0.002, 0.0, 0.002] {
+            let (mut prod, cons) = ring(RATE as usize);
+            let mut r = Reader::new(cons);
+            r.set_target(packet, period);
+            assert!(r.target < packet as f64, "target {} frames", r.target);
+            let (mut seed, mut sent, mut due) = (1u32, 0u32, 0.0f64);
+            for t in 0..RATE * 60 {
+                if t as f64 >= due {
+                    (0..packet).for_each(|_| _ = prod.push(0.1));
+                    sent += 1;
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let late = (seed >> 16) as f64 / 65_536.0 * RATE as f64 / 1000.0;
+                    due = (sent * packet) as f64 / (1.0 + drift) + late;
+                }
+                if t % period == 0 {
+                    (0..period).for_each(|_| _ = r.next());
+                }
+            }
+            assert_eq!(r.underruns, 0, "drift {drift}");
+        }
     }
 
     #[test]

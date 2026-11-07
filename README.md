@@ -95,7 +95,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
 | DSP cost, Minion / heaviest voice | 0.18 % / 1.05 % of one core |
-| Mic to cable, Minion | 31 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
+| Mic to cable, Minion | 29 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 
 Where the 17 ms go (measured): 3 ms for the microphone's packet, 4.7 ms for the pitch
@@ -132,7 +132,9 @@ microphone ──WASAPI (shared, 10 ms)────▶ gain + gate ─▶ voice 
 - **Clock drift.** The microphone and the cable run on different clocks. Each output reads
   through a lock-free ring with a tiny resampler that nudges its rate (±0.5 % at most) to
   keep the ring at one microphone packet plus 2 ms, so latency stays flat for hours
-  instead of creeping or clicking.
+  instead of creeping or clicking. When the output takes much smaller bites than the
+  microphone delivers (10 ms shared-mode packets into the cable's 2.67 ms periods), half
+  a packet plus one output period plus 2 ms is enough, and that is what it aims for.
 - **Pitch** is a delay-line shifter with correlation-aligned jumps, essentially WSOLA
   inside a ring buffer. When the read tap runs out of room it jumps by one pitch period,
   found by cross-correlation, so the short crossfade adds instead of cancelling. Shifting
