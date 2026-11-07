@@ -7,9 +7,9 @@
 //! flat over an hour of play.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
@@ -355,7 +355,52 @@ fn audio_thread_setup() {
     crate::dsp::flush_denormals();
 }
 
-type Ready = mpsc::Sender<std::result::Result<(), String>>;
+/// Bluetooth headsets can take several seconds to open.
+const ANSWER_WITHIN: Duration = Duration::from_secs(8);
+
+/// Where the audio threads tell `Engine::start` how their setup went: how many have
+/// started, and the first error.
+#[derive(Default)]
+struct Ready {
+    state: Mutex<(usize, Option<String>)>,
+    changed: Condvar,
+}
+
+impl Ready {
+    fn send(&self, result: std::result::Result<(), String>) {
+        if let Ok(mut state) = self.state.lock() {
+            match result {
+                Ok(()) => state.0 += 1,
+                Err(e) => {
+                    state.1.get_or_insert(e);
+                }
+            }
+            self.changed.notify_one();
+        }
+    }
+
+    /// Waits for `threads` threads to start, giving each next answer up to `within`.
+    fn wait(&self, threads: usize, within: Duration) -> std::result::Result<(), String> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let (mut seen, mut deadline) = (0, Instant::now() + within);
+        loop {
+            if let Some(e) = state.1.take() {
+                return Err(e);
+            }
+            if state.0 >= threads {
+                return Ok(());
+            }
+            if state.0 != seen {
+                (seen, deadline) = (state.0, Instant::now() + within);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(tr("error.no_answer").into());
+            }
+            state = self.changed.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+}
 
 pub struct Engine {
     stop: Arc<AtomicBool>,
@@ -374,27 +419,20 @@ impl Engine {
         let stop = Arc::new(AtomicBool::new(false));
         let mut engine = Engine { stop: stop.clone(), threads: Vec::new() };
         let mut producers = Vec::new();
-        let (ready_tx, ready_rx) = mpsc::channel();
+        let ready = Arc::new(Ready::default());
 
         for (i, id) in outputs.iter().enumerate() {
             let (prod, cons) = ring(RATE as usize);
             producers.push(prod);
-            let (id, stop, shared, tx) = (id.clone(), stop.clone(), shared.clone(), ready_tx.clone());
+            let (id, stop, shared, tx) = (id.clone(), stop.clone(), shared.clone(), ready.clone());
             engine
                 .threads
                 .push(std::thread::spawn(move || render(&id, Reader::new(cons, RATE), i == 0, &stop, &shared, tx)));
         }
-        let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready_tx);
+        let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready.clone());
         engine.threads.push(std::thread::spawn(move || capture(&id, exclusive, producers, &stop2, &shared2, tx)));
 
-        for _ in 0..outputs.len() + 1 {
-            // Bluetooth headsets can take several seconds to open.
-            match ready_rx.recv_timeout(Duration::from_secs(8)) {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => return Err(e),
-                Err(_) => return Err(tr("error.no_answer").into()),
-            }
-        }
+        ready.wait(outputs.len() + 1, ANSWER_WITHIN)?;
         Ok(engine)
     }
 }
@@ -417,24 +455,24 @@ fn friendly(e: windows::core::Error) -> String {
 }
 
 /// Runs `body` on an audio thread, reporting setup failures to `start` and later ones via `failed`.
-fn run(shared: &Shared, ready: Ready, body: impl FnOnce(&mut dyn FnMut()) -> WinResult<()>) {
+fn run(shared: &Shared, ready: &Ready, body: impl FnOnce(&mut dyn FnMut()) -> WinResult<()>) {
     audio_thread_setup();
     let mut reported = false;
     let result = body(&mut || {
         reported = true;
-        let _ = ready.send(Ok(()));
+        ready.send(Ok(()));
     });
     if let Err(e) = result {
         if reported {
             shared.failed.store(true, Relaxed);
         } else {
-            let _ = ready.send(Err(friendly(e)));
+            ready.send(Err(friendly(e)));
         }
     }
 }
 
-fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared: &Shared, ready: Ready) {
-    run(shared, ready, |started| unsafe {
+fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared: &Shared, ready: Arc<Ready>) {
+    run(shared, &ready, |started| unsafe {
         let s = match Stream::open_low_latency(id) {
             Ok(Some(s)) => s,
             _ => Stream::open(id, 2)?,
@@ -471,8 +509,8 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
     });
 }
 
-fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared, ready: Ready) {
-    run(shared, ready, |started| unsafe {
+fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool, shared: &Shared, ready: Arc<Ready>) {
+    run(shared, &ready, |started| unsafe {
         let s = match exclusive.then(|| Stream::open_exclusive(id)) {
             Some(Ok(Some(s))) => s,
             _ => Stream::open(id, 1)?,
@@ -560,6 +598,66 @@ mod tests {
             std::hint::black_box(f32::MIN_POSITIVE) * std::hint::black_box(0.5)
         });
         assert_eq!(tiny.join().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn start_gives_up_when_a_thread_never_answers() {
+        let ready = Ready::default();
+        ready.send(Ok(()));
+        let t = Instant::now();
+        assert_eq!(ready.wait(2, Duration::from_millis(100)), Err(tr("error.no_answer").into()));
+        assert!(t.elapsed() >= Duration::from_millis(100));
+    }
+
+    #[test]
+    fn each_answer_gives_the_next_thread_the_full_wait() {
+        // Three answers 150 ms apart: over the 200 ms allowed in total, within it each time.
+        let ready = Arc::new(Ready::default());
+        let late = ready.clone();
+        let threads = std::thread::spawn(move || {
+            for _ in 0..3 {
+                std::thread::sleep(Duration::from_millis(150));
+                late.send(Ok(()));
+            }
+        });
+        assert_eq!(ready.wait(3, Duration::from_millis(200)), Ok(()));
+        threads.join().unwrap();
+    }
+
+    /// Runs a fake audio thread body the way `render` and `capture` do.
+    fn fake(body: impl FnOnce(&mut dyn FnMut()) -> WinResult<()> + Send + 'static) -> (Ready, Shared) {
+        std::thread::spawn(move || {
+            let (ready, shared) = (Ready::default(), Shared::default());
+            run(&shared, &ready, body);
+            (ready, shared)
+        })
+        .join()
+        .unwrap()
+    }
+
+    #[test]
+    fn a_setup_failure_reaches_start_in_words() {
+        let (ready, shared) = fake(|_| Err(AUDCLNT_E_DEVICE_IN_USE.into()));
+        assert_eq!(ready.wait(1, Duration::from_secs(1)), Err(tr("error.in_use").into()));
+        assert!(!shared.failed.load(Relaxed));
+
+        let e = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
+        let (ready, _) = fake(move |_| Err(e));
+        let words = trf(
+            "error.audio",
+            &[("message", &windows::core::Error::from(windows::Win32::Foundation::E_FAIL).message())],
+        );
+        assert_eq!(ready.wait(1, Duration::from_secs(1)), Err(words));
+    }
+
+    #[test]
+    fn a_failure_after_start_is_flagged_instead() {
+        let (ready, shared) = fake(|started| {
+            started();
+            Err(AUDCLNT_E_DEVICE_INVALIDATED.into())
+        });
+        assert_eq!(ready.wait(1, Duration::from_secs(1)), Ok(()));
+        assert!(shared.failed.load(Relaxed));
     }
 
     #[test]
