@@ -8,12 +8,12 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 
 | | |
 |---|---|
-| Executable | 522 KB, icons, installer, tray and updates included |
+| Executable | 354 KB (361,984 bytes), icons, installer, tray and updates included |
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
-| DSP cost, Minion / heaviest voice | 0.09 % / 0.33 % of one core |
-| The same with the noise gate closed | 0.11 % / 0.65 % of one core |
+| DSP cost, Minion / heaviest voice | 0.09 % / 0.35 % of one core |
+| The same with the noise gate closed | 0.12 % / 0.67 % of one core |
 | Mic to cable, Minion | 28 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 
@@ -33,6 +33,26 @@ cargo test --release gated_cost -- --ignored --nocapture        # the same betwe
 cargo test --release live_latency -- --ignored --nocapture      # needs a mic and VB-Cable
 cargo test --release engine_periods -- --ignored --nocapture    # what each device supports
 ```
+
+### Size, and why LTO is off
+
+The voices live in their own crate, `crates/dsp`, with every per-sample loop in
+`stream.rs`. The release profile builds that crate at `opt-level = 3` and everything else
+(the window, setup, updates) at `"z"`. LTO is off on purpose: with fat or thin LTO, LLVM
+optimises the whole program again at the app's level, which does not vectorise, and the
+pitched-up voices ran about 1.8 times slower even with goby-dsp asking for 3. Without it,
+each crate keeps the code its own level made. The DSP cost above is the same as with
+fat LTO at `opt-level = 3` throughout (the sum over all 61 voices came out 1.5 % lower).
+
+The rest of the size comes from leaving out what std would bring along unasked: no
+float printing or parsing (settings.rs has a small reader and writer that round-trip
+each other), threads through `CreateThread`, files and arguments through Win32,
+`windows::core::Error` as a bare HRESULT, no debug directory, and language keys turned
+into numbers while compiling. The icons are packed with real deflate.
+
+The VC runtime is linked in statically and the Universal CRT comes from Windows
+(`.cargo/config.toml` and `build.rs`), so the exe needs nothing a clean Windows 10 or 11
+lacks: no `VCRUNTIME140.dll`. That costs about 21 KB.
 
 ## How it works
 
