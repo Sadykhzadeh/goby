@@ -32,9 +32,9 @@ impl<H: Host> App<H> {
 
     pub(super) fn rail(&self) -> [(Page, R, u16, &'static str); 3] {
         [
-            (Page::Voices, self.lay.nav_voices, glyph::VOICES, tr("page.voices")),
-            (Page::Programs, self.lay.nav_programs, glyph::APPS, tr("page.programs")),
-            (Page::Settings, self.lay.nav_settings, glyph::SETTINGS, tr("page.settings")),
+            (Page::Voices, self.lay.nav_voices, glyph::VOICES, tr!("page.voices")),
+            (Page::Programs, self.lay.nav_programs, glyph::APPS, tr!("page.programs")),
+            (Page::Settings, self.lay.nav_settings, glyph::SETTINGS, tr!("page.settings")),
         ]
     }
 
@@ -75,38 +75,38 @@ impl<H: Host> App<H> {
     pub(super) fn draw_programs(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let title = self.lay.title;
-        g.text(tr("page.programs"), Font::Title, title, Align::Start, th.text());
+        g.text(tr!("page.programs"), Font::Title, title, Align::Start, th.text());
         let scroll = self.settings_scroll.value.min(self.settings_max);
         let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
         let mut y = self.lay.pane.t - scroll;
         g.clip(self.lay.pane);
 
-        let note = tr("programs.note");
+        let note = tr!("programs.note");
         g.text(note, Font::Body, R::new(x + 2.0, y, w, 22.0), Align::Start, th.text_secondary());
         y += 36.0;
 
         match &self.cable {
             // Setup in three steps; the last one ticks itself once the cable shows up.
             None => {
-                let title = tr("programs.setup");
+                let title = tr!("programs.setup");
                 g.text(title, Font::Strong, R::new(x + 2.0, y, w, 20.0), Align::Start, th.text());
                 y += 24.0;
-                let why = tr("programs.setup.desc");
+                let why = tr!("programs.setup.desc");
                 g.text(why, Font::Caption, R::new(x + 2.0, y, w, 18.0), Align::Start, th.text_secondary());
                 y += 28.0;
-                let (title, desc) = (tr("programs.step1"), tr("programs.step1.desc"));
+                let (title, desc) = (tr!("programs.step1"), tr!("programs.step1.desc"));
                 self.row_card(g, &mut y, Hit::CableSite, Icon::Step(1, self.cable_opened), title, desc);
-                let (title, desc) = (tr("programs.step2"), tr("programs.step2.desc"));
+                let (title, desc) = (tr!("programs.step2"), tr!("programs.step2.desc"));
                 self.row_card(g, &mut y, Hit::Downloads, Icon::Step(2, false), title, desc);
-                let (title, desc) = (tr("programs.step3"), tr("programs.step3.desc"));
+                let (title, desc) = (tr!("programs.step3"), tr!("programs.step3.desc"));
                 self.row_card(g, &mut y, Hit::None, Icon::Step(3, false), title, desc);
             }
             Some((_, record)) => {
                 let fresh =
                     self.cable_found.is_some_and(|t| self.host.now().saturating_sub(t) < Duration::from_secs(30));
                 let ready = match fresh {
-                    true => tr("programs.cable.found"),
-                    false => tr("programs.cable"),
+                    true => tr!("programs.cable.found"),
+                    false => tr!("programs.cable"),
                 };
                 let name = short(&record.name).to_string();
                 let icon = if fresh { glyph::CHECK } else { glyph::MIC };
@@ -119,7 +119,7 @@ impl<H: Host> App<H> {
             g.text(title, Font::Strong, R::new(x + 2.0, *y, w, 20.0), Align::Start, th.text());
             *y += 28.0;
         };
-        section(g, &mut y, tr("programs.chosen"));
+        section(g, &mut y, tr!("programs.chosen"));
         for i in 0..self.settings.routed.len() {
             let exe = self.settings.routed[i].clone();
             let talking = self.app_live.get(i).copied().unwrap_or(false);
@@ -127,26 +127,26 @@ impl<H: Host> App<H> {
             let desc = match (self.app_state.get(i).copied().unwrap_or(AppState::Waiting), talking, elsewhere) {
                 // Recording, but from a real mic: it chose one in its own settings, and only
                 // switching that to Default lets Windows hand it Goby.
-                (_, false, Some(mic)) => trf("programs.elsewhere", &[("mic", &mic)]),
-                (_, true, _) => tr("programs.live").into(),
-                (AppState::OnGoby, ..) => tr("programs.on").into(),
-                (AppState::Waiting, ..) => tr("programs.waiting").into(),
-                (AppState::Pending, ..) => tr("programs.pending").into(),
+                (_, false, Some(mic)) => trf!("programs.elsewhere", &[("mic", &mic)]),
+                (_, true, _) => tr!("programs.live").into(),
+                (AppState::OnGoby, ..) => tr!("programs.on").into(),
+                (AppState::Waiting, ..) => tr!("programs.waiting").into(),
+                (AppState::Pending, ..) => tr!("programs.pending").into(),
             };
             self.row_card(g, &mut y, Hit::Remove(i), Icon::Exe(&exe), &crate::host::display_name(&exe), &desc);
         }
-        let hint = if self.settings.routed.is_empty() { tr("programs.add.first") } else { tr("programs.add.desc") };
-        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, tr("programs.add"), hint);
+        let hint = if self.settings.routed.is_empty() { tr!("programs.add.first") } else { tr!("programs.add.desc") };
+        self.row_card(g, &mut y, Hit::AddApp, glyph::ADD, tr!("programs.add"), hint);
 
         if !self.mic_apps.is_empty() {
             y += 20.0;
-            section(g, &mut y, tr("programs.recent"));
+            section(g, &mut y, tr!("programs.recent"));
             for i in 0..self.mic_apps.len().min(6) {
                 let app = &self.mic_apps[i];
                 let (name, exe) = (app.name.clone(), app.exe.clone());
                 let desc = match app.active {
-                    true => tr("programs.recent.active"),
-                    false => tr("programs.recent.idle"),
+                    true => tr!("programs.recent.active"),
+                    false => tr!("programs.recent.idle"),
                 };
                 self.row_card(g, &mut y, Hit::Offer(i), Icon::Exe(&exe), &name, desc);
             }
@@ -166,7 +166,7 @@ impl<H: Host> App<H> {
         self.card(g, r, 8.0, false);
         let w = r.w() / 3.0;
         for (i, (k, icon, title)) in
-            [(Knob::Tone, glyph::TONE, tr("quick.pitch")), (Knob::Volume, glyph::VOLUME, tr("quick.volume"))]
+            [(Knob::Tone, glyph::TONE, tr!("quick.pitch")), (Knob::Volume, glyph::VOLUME, tr!("quick.volume"))]
                 .into_iter()
                 .enumerate()
         {
@@ -177,9 +177,9 @@ impl<H: Host> App<H> {
         let s = R::new(r.l + w * 2.0, r.t, w, r.h());
         g.icon(glyph::HEADPHONE, Font::Icon16, R::new(s.l + 16.0, s.t + 30.0, 20.0, 24.0), th.text());
         let text_w = s.w() - 48.0 - 72.0;
-        let hear = tr("quick.hear");
+        let hear = tr!("quick.hear");
         g.text(hear, Font::Body, R::new(s.l + 48.0, s.t + 20.0, text_w, 22.0), Align::Start, th.text());
-        let mon = tr("quick.hear.desc");
+        let mon = tr!("quick.hear.desc");
         g.text(mon, Font::Caption, R::new(s.l + 48.0, s.t + 42.0, text_w, 18.0), Align::Start, th.text_secondary());
         self.toggle(g, s.r - 60.0, s.t + 32.0, Switch::Monitor);
         self.hits.push((s.inset(4.0), Hit::Toggle(Switch::Monitor)));
@@ -195,7 +195,7 @@ impl<H: Host> App<H> {
         // Both sit left of the Effect switch, and the name and the line under it end before
         // them, however narrow the window.
         let kept = self.active_preset().is_some();
-        let (saved, save) = (tr("scope.saved"), tr("scope.save"));
+        let (saved, save) = (tr!("scope.saved"), tr!("scope.save"));
         let aside = if kept {
             let w = g.measure(saved, Font::Caption) + 22.0;
             Some(R::new(r.r - 176.0 - w, r.t + 14.0, w, 24.0))
@@ -221,17 +221,17 @@ impl<H: Host> App<H> {
         let (line, color) = if !self.healthy {
             (self.status.clone(), argb(if th.dark { 0xFFFF99A4 } else { 0xFFC42B1C }))
         } else if self.cable.is_none() {
-            let none = tr("scope.no_cable");
+            let none = tr!("scope.no_cable");
             (none.into(), th.accent())
         } else if self.settings.routed.is_empty() {
-            let none = tr("scope.nobody");
+            let none = tr!("scope.nobody");
             (none.into(), th.accent())
         } else if !self.settings.enabled {
-            let off = tr("scope.off");
+            let off = tr!("scope.off");
             (off.into(), th.text_secondary())
         } else {
             let ms = write_decimal(self.latency.round());
-            (trf("scope.latency", &[("category", def.category.name()), ("ms", &ms)]), th.text_secondary())
+            (trf!("scope.latency", &[("category", def.category.name()), ("ms", &ms)]), th.text_secondary())
         };
         let line_r = R::new(r.l + 20.0, r.t + 40.0, text_w(420.0), 18.0);
         g.text(&line, Font::Caption, line_r, Align::Start, color);
@@ -256,7 +256,7 @@ impl<H: Host> App<H> {
             None => {}
         }
 
-        let label = tr("scope.effect");
+        let label = tr!("scope.effect");
         g.text(label, Font::Body, R::new(r.r - 160.0, r.t + 14.0, 88.0, 24.0), Align::End, th.text());
         self.toggle(g, r.r - 60.0, r.t + 16.0, Switch::Effect);
         self.hits.push((R::new(r.r - 170.0, r.t + 8.0, 156.0, 36.0), Hit::Toggle(Switch::Effect)));
@@ -269,7 +269,7 @@ impl<H: Host> App<H> {
     pub(super) fn draw_tabs(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let mut items: Vec<(Shelf, &'static str)> =
-            vec![(Shelf::All, tr("shelf.all")), (Shelf::Favorites, tr("shelf.favorites"))];
+            vec![(Shelf::All, tr!("shelf.all")), (Shelf::Favorites, tr!("shelf.favorites"))];
         items.extend(Category::ALL.iter().map(|c| (Shelf::Group(*c), c.name())));
         if self.tab_widths.len() != items.len() {
             self.tab_widths = items.iter().map(|(_, s)| g.measure(s, Font::Strong)).collect();
@@ -388,9 +388,9 @@ impl<H: Host> App<H> {
         }
         if list.is_empty() && self.shelf == Shelf::Favorites {
             let (l, t, w) = (self.lay.gallery.l + 2.0, self.lay.gallery.t + 8.0, self.lay.gallery.w() - GUTTER);
-            let first = tr("favorites.empty");
+            let first = tr!("favorites.empty");
             g.text(first, Font::Strong, R::new(l, t, w, 22.0), Align::Start, th.text());
-            let second = tr("favorites.empty.desc");
+            let second = tr!("favorites.empty.desc");
             g.text(second, Font::Body, R::new(l, t + 26.0, w, 22.0), Align::Start, th.text_secondary());
         }
         g.unclip();
@@ -400,7 +400,7 @@ impl<H: Host> App<H> {
     pub(super) fn draw_settings(&mut self, g: &dyn Canvas) {
         let th = self.theme;
         let title = self.lay.title;
-        g.text(tr("page.settings"), Font::Title, title, Align::Start, th.text());
+        g.text(tr!("page.settings"), Font::Title, title, Align::Start, th.text());
 
         let scroll = self.settings_scroll.value.min(self.settings_max);
         let (x, w) = (self.lay.pane.l, self.lay.pane.w() - GUTTER);
@@ -413,51 +413,51 @@ impl<H: Host> App<H> {
         };
         self.update_card(g, &mut y);
 
-        section(g, &mut y, tr("settings.mic"));
+        section(g, &mut y, tr!("settings.mic"));
         let mic = self.inputs.get(self.input).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, tr("settings.mic.device"), &mic);
-        let gate = tr("settings.gate.desc");
-        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, tr("settings.gate"), gate);
+        self.row_card(g, &mut y, Hit::Pick(Pick::Mic), glyph::MIC, tr!("settings.mic.device"), &mic);
+        let gate = tr!("settings.gate.desc");
+        self.row_card(g, &mut y, Hit::Toggle(Switch::Gate), glyph::GATE, tr!("settings.gate"), gate);
         // Rarely touched once set: folded away like an expander in Windows Settings.
-        let more = tr("settings.advanced");
-        let more_desc = tr("settings.advanced.desc");
+        let more = tr!("settings.advanced");
+        let more_desc = tr!("settings.advanced.desc");
         self.row_card(g, &mut y, Hit::Advanced, glyph::MORE, more, more_desc);
         if self.advanced {
-            let fast = tr("settings.exclusive");
+            let fast = tr!("settings.exclusive");
             let mode = match (self.settings.exclusive, self.host.exclusive()) {
-                (true, true) => tr("settings.exclusive.on"),
-                (true, false) => tr("settings.exclusive.refused"),
-                _ => tr("settings.exclusive.off"),
+                (true, true) => tr!("settings.exclusive.on"),
+                (true, false) => tr!("settings.exclusive.refused"),
+                _ => tr!("settings.exclusive.off"),
             };
             self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode);
-            self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, tr("settings.gain"));
-            self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, tr("settings.gate_db"));
+            self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, tr!("settings.gain"));
+            self.slider_card(g, &mut y, Knob::Gate, glyph::GATE, tr!("settings.gate_db"));
         }
         y += 20.0;
 
-        section(g, &mut y, tr("settings.output"));
+        section(g, &mut y, tr!("settings.output"));
         let out = self.outputs.get(self.output).map_or("—", |e| short(&e.name)).to_string();
-        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, tr("settings.output.device"), &out);
-        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, tr("settings.mix"));
+        self.row_card(g, &mut y, Hit::Pick(Pick::Out), glyph::SPEAKERS, tr!("settings.output.device"), &out);
+        self.slider_card(g, &mut y, Knob::Mix, glyph::MIX, tr!("settings.mix"));
         y += 20.0;
 
-        section(g, &mut y, tr("settings.general"));
+        section(g, &mut y, tr!("settings.general"));
         let language = self.language_name(&self.settings.lang);
-        self.row_card(g, &mut y, Hit::Pick(Pick::Lang), glyph::GLOBE, tr("settings.language"), &language);
-        let tray = tr("settings.tray.title");
-        let tray_desc = tr("settings.tray.desc");
+        self.row_card(g, &mut y, Hit::Pick(Pick::Lang), glyph::GLOBE, tr!("settings.language"), &language);
+        let tray = tr!("settings.tray.title");
+        let tray_desc = tr!("settings.tray.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Tray), glyph::MINIMIZE, tray, tray_desc);
-        let start = tr("settings.autostart.title");
-        let start_desc = tr("settings.autostart.desc");
+        let start = tr!("settings.autostart.title");
+        let start_desc = tr!("settings.autostart.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Autostart), glyph::POWER, start, start_desc);
-        let keys = tr("settings.hotkeys.title");
+        let keys = tr!("settings.hotkeys.title");
         let keys_desc = match self.hotkeys_ok {
-            true => tr("settings.hotkeys.desc"),
-            false => tr("settings.hotkeys.taken"),
+            true => tr!("settings.hotkeys.desc"),
+            false => tr!("settings.hotkeys.taken"),
         };
         self.row_card(g, &mut y, Hit::Toggle(Switch::Hotkeys), glyph::KEYBOARD, keys, keys_desc);
-        let check = tr("settings.updates.title");
-        let check_desc = tr("settings.updates.desc");
+        let check = tr!("settings.updates.title");
+        let check_desc = tr!("settings.updates.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Updates), glyph::UPDATE, check, check_desc);
 
         y += 20.0;
@@ -479,12 +479,12 @@ impl<H: Host> App<H> {
     /// The card that offers a newer release, at the top of Settings.
     fn update_card(&mut self, g: &dyn Canvas, y: &mut f32) {
         let Some(version) = &self.update else { return };
-        let title = trf("update.out", &[("version", version)]);
+        let title = trf!("update.out", &[("version", version)]);
         let desc = match (self.updating, self.host.installed()) {
-            (Updating::Downloading, _) => tr("update.downloading"),
-            (Updating::Failed, _) => tr("update.failed"),
-            (_, true) => tr("update.install"),
-            (_, false) => tr("update.download"),
+            (Updating::Downloading, _) => tr!("update.downloading"),
+            (Updating::Failed, _) => tr!("update.failed"),
+            (_, true) => tr!("update.install"),
+            (_, false) => tr!("update.download"),
         };
         let hit = if self.updating == Updating::Downloading { Hit::None } else { Hit::Update };
         self.row_card(g, y, hit, glyph::UPDATE, &title, desc);

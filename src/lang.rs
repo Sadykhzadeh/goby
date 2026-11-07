@@ -6,8 +6,8 @@ use std::sync::OnceLock;
 
 /// A file from `lang/`, packed while compiling: its texts only, `\n` turned into a new line,
 /// as `text\0` in the order of en.lang's keys, empty where the file lacks a line, and the
-/// Russian alphabet a byte a letter (see `texts`). The keys themselves are kept once, as
-/// hashes in `KEYS`.
+/// Russian alphabet a byte a letter (see `texts`). The keys themselves are not kept: `tr!`
+/// turns each into its place in en.lang while compiling.
 macro_rules! file {
     ($code:literal) => {{
         const TEXT: &str = include_str!(concat!("../lang/", $code, ".lang"));
@@ -25,13 +25,6 @@ macro_rules! file {
 pub const LANGUAGES: &[(&str, &str, &[u8])] = &[("en", "English", file!("en")), ("ru", "Русский", file!("ru"))];
 
 const EN: &[u8] = include_str!("../lang/en.lang").as_bytes();
-
-/// en.lang's keys, hashed, in the order of the file.
-static KEYS: [u32; keys(EN, &mut [])] = {
-    let mut out = [0; keys(EN, &mut [])];
-    keys(EN, &mut out);
-    out
-};
 
 const fn trim(t: &[u8], mut from: usize, mut to: usize) -> (usize, usize) {
     while from < to && t[from].is_ascii_whitespace() {
@@ -66,17 +59,6 @@ const fn line(t: &[u8], mut at: usize) -> Option<[usize; 5]> {
     None
 }
 
-/// FNV-1a over `t[from..to]`, carrying on from `h`.
-const fn hash(mut h: u32, t: &[u8], mut from: usize, to: usize) -> u32 {
-    while from < to {
-        h = (h ^ t[from] as u32).wrapping_mul(0x0100_0193);
-        from += 1;
-    }
-    h
-}
-
-const FNV: u32 = 0x811c_9dc5;
-
 const fn put(out: &mut [u8], n: usize, b: u8) -> usize {
     if n < out.len() {
         out[n] = b;
@@ -84,22 +66,23 @@ const fn put(out: &mut [u8], n: usize, b: u8) -> usize {
     n + 1
 }
 
-/// Writes the hash of every key in `en` into `out` as far as it fits, and says how many
-/// there are. Two keys with one hash stop the build.
-const fn keys(en: &[u8], out: &mut [u32]) -> usize {
-    let (mut n, mut at) = (0, 0);
-    while let Some([k0, k1, _, _, next]) = line(en, at) {
-        if n < out.len() {
-            out[n] = hash(FNV, en, k0, k1);
-            let mut i = 0;
-            while i < n {
-                assert!(out[i] != out[n], "two keys in en.lang have the same hash");
-                i += 1;
-            }
+/// Where `key` is among en.lang's keys. Used while compiling, where a key en.lang lacks
+/// stops the build.
+pub const fn index(key: &str) -> usize {
+    let (key, mut i, mut at) = (key.as_bytes(), 0, 0);
+    while let Some([k0, k1, _, _, next]) = line(EN, at) {
+        let mut same = k1 - k0 == key.len();
+        let mut j = 0;
+        while same && j < key.len() {
+            same = EN[k0 + j] == key[j];
+            j += 1;
         }
-        (n, at) = (n + 1, next);
+        if same {
+            return i;
+        }
+        (i, at) = (i + 1, next);
     }
-    n
+    panic!("a key that is not in en.lang")
 }
 
 /// The line of `file` whose key is `en[k0..k1]`, looked for from `from` to `to`.
@@ -155,7 +138,7 @@ const fn texts(file: &[u8], en: &[u8], out: &mut [u8]) -> usize {
     n
 }
 
-/// One language's texts, in the order of `KEYS`; empty where it falls back to English.
+/// One language's texts, in the order of en.lang's keys; empty where it falls back to English.
 type Table = Vec<&'static str>;
 
 // Inlined, it is copied once per language.
@@ -225,35 +208,40 @@ pub fn find(code: &str) -> Option<usize> {
     LANGUAGES.iter().position(|(c, _, _)| *c == code)
 }
 
-/// The text for `key` in the current language, else in English, else the key itself.
-pub fn tr(key: &'static str) -> &'static str {
-    text(FNV, key)
+/// The text for a key of en.lang in the current language, else in English. The key becomes
+/// a number while compiling, so no key is kept in the executable, and one en.lang lacks
+/// stops the build.
+macro_rules! tr {
+    ($key:literal) => {
+        $crate::lang::text(const { $crate::lang::index($key) })
+    };
 }
+pub(crate) use tr;
 
-/// A voice's name, under `voice.` and its id; the id itself if no file has one.
-pub fn voice(id: &'static str) -> &'static str {
-    const VOICE: u32 = hash(FNV, b"voice.", 0, 6);
-    text(VOICE, id)
+/// `tr!`, with each `{name}` replaced by its value.
+macro_rules! trf {
+    ($key:literal, $values:expr) => {
+        $crate::lang::fill($crate::lang::tr!($key), $values)
+    };
 }
+pub(crate) use trf;
 
-/// The text under the key whose hash, begun as `h`, ends with `rest`; `rest` itself if
-/// en.lang has no such key. A look through a couple of hundred hashes takes well under a
-/// microsecond.
+/// Text `i`, in the order of en.lang, in the current language, else in English.
 // Inlined, it is copied into each of a hundred callers.
 #[inline(never)]
-fn text(h: u32, rest: &'static str) -> &'static str {
-    let h = hash(h, rest.as_bytes(), 0, rest.len());
-    KEYS.iter().position(|&k| k == h).map_or(rest, |i| look(tables(), now(), i))
+pub fn text(i: usize) -> &'static str {
+    look(tables(), now(), i)
 }
+
 /// Text `i` in language `at`, else in English.
 fn look(tables: &'static [Table], at: usize, i: usize) -> &'static str {
     Some(tables[at][i]).filter(|t| !t.is_empty()).unwrap_or(tables[0][i])
 }
 
-/// `tr`, with each `{name}` replaced by its value.
-pub fn trf(key: &'static str, values: &[(&str, &str)]) -> String {
+/// `text` with each `{name}` replaced by its value.
+pub fn fill(text: &'static str, values: &[(&str, &str)]) -> String {
     let mut out = String::new();
-    let mut rest = tr(key);
+    let mut rest = text;
     while let Some((before, after)) = rest.split_once('{') {
         let (name, after) = after.split_once('}').unwrap_or((after, ""));
         out.push_str(before);
@@ -303,9 +291,6 @@ mod tests {
         assert_eq!(packed("c = C\nd = D\nb = B\n", en), b"\0B\0C\0");
         let keys: Vec<&str> = lines(en).iter().map(|(k, _)| *k).collect();
         assert_eq!(keys, ["a", "b", "c"]);
-        let mut hashes = [0; 3];
-        assert_eq!(super::keys(en.as_bytes(), &mut hashes), 3);
-        assert_eq!(hashes[1], hash(FNV, b"b", 0, 1));
     }
 
     #[test]
@@ -316,9 +301,8 @@ mod tests {
         };
         let en_file = read("en");
         let english = lines(&en_file);
-        assert_eq!(english.len(), KEYS.len());
         for (i, (key, _)) in english.iter().enumerate() {
-            assert_eq!(KEYS[i], hash(FNV, key.as_bytes(), 0, key.len()), "{key}");
+            assert_eq!(index(key), i, "{key}");
         }
         for (at, (code, name, _)) in LANGUAGES.iter().enumerate() {
             let file = read(code);
@@ -351,7 +335,7 @@ mod tests {
         }
     }
 
-    /// Every `tr("…")` and `trf("…"` in the source, and the voices' keys.
+    /// Every `tr!("…")` and `trf!("…"` in the source, and the voices' keys.
     fn used() -> Vec<String> {
         fn walk(dir: &std::path::Path, out: &mut Vec<String>) {
             for entry in std::fs::read_dir(dir).unwrap().flatten() {
@@ -362,7 +346,7 @@ mod tests {
                     let text = std::fs::read_to_string(&path).unwrap();
                     // Tests may look up keys that are not there on purpose.
                     let text = text.split("mod tests {").next().unwrap();
-                    for call in ["tr(\"", "trf(\""] {
+                    for call in ["tr!(\"", "trf!(\""] {
                         for (at, _) in text.match_indices(call) {
                             let before = text[..at].chars().next_back().unwrap_or(' ');
                             if before.is_alphanumeric() || before == '_' {
@@ -400,14 +384,12 @@ mod tests {
     #[test]
     fn text_is_looked_up_with_english_behind_it() {
         choose("ru", "en-US");
-        assert_eq!(tr("page.voices"), "Голоса");
-        assert_eq!(voice("minion"), "Миньон");
-        assert_eq!(voice("no_such_voice"), "no_such_voice");
-        assert_eq!(tr("no.such.key"), "no.such.key");
-        assert_eq!(trf("tray.effect", &[("voice", "Демон")]), "Эффект: Демон");
-        assert!(tr("setup.run").contains('\n'), "\\n is a new line");
+        assert_eq!(tr!("page.voices"), "Голоса");
+        assert_eq!(crate::voices::ALL[crate::voices::index_of("minion").unwrap()].name(), "Миньон");
+        assert_eq!(trf!("tray.effect", &[("voice", "Демон")]), "Эффект: Демон");
+        assert!(tr!("setup.run").contains('\n'), "\\n is a new line");
         choose("en", "ru-RU");
-        assert_eq!(tr("page.voices"), "Voices");
+        assert_eq!(tr!("page.voices"), "Voices");
         choose("auto", "ru-RU");
         assert_eq!(now(), 1);
         choose("auto", "de-DE");

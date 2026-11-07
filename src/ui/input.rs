@@ -10,14 +10,14 @@ impl<H: Host> App<H> {
         let labels = self
             .mic_apps
             .iter()
-            .map(|a| if a.active { format!("{}\t{}", a.name, tr("programs.menu.active")) } else { a.name.clone() })
+            .map(|a| if a.active { format!("{}\t{}", a.name, tr!("programs.menu.active")) } else { a.name.clone() })
             .collect();
         Some(Popup {
             pick: None,
             labels,
             keys: self.mic_apps.iter().map(|a| a.exe.clone()).collect(),
             checked: None,
-            browse: Some((tr("programs.menu.other").into(), tr("programs.menu.title").into())),
+            browse: Some((tr!("programs.menu.other").into(), tr!("programs.menu.title").into())),
             at: (row.l + 52.0, row.b),
         })
     }
@@ -43,7 +43,7 @@ impl<H: Host> App<H> {
     pub(super) fn language_name(&self, choice: &str) -> String {
         let name = lang::LANGUAGES[lang::resolve(choice, &self.host.language())].1;
         match choice {
-            "auto" => trf("settings.language.auto", &[("language", name)]),
+            "auto" => trf!("settings.language.auto", &[("language", name)]),
             _ => name.to_string(),
         }
     }

@@ -28,13 +28,13 @@ impl Category {
 
     pub fn name(self) -> &'static str {
         match self {
-            Category::Basics => tr("category.basics"),
-            Category::People => tr("category.people"),
-            Category::Creatures => tr("category.creatures"),
-            Category::Robots => tr("category.robots"),
-            Category::Places => tr("category.places"),
-            Category::Devices => tr("category.devices"),
-            Category::Fun => tr("category.fun"),
+            Category::Basics => tr!("category.basics"),
+            Category::People => tr!("category.people"),
+            Category::Creatures => tr!("category.creatures"),
+            Category::Robots => tr!("category.robots"),
+            Category::Places => tr!("category.places"),
+            Category::Devices => tr!("category.devices"),
+            Category::Fun => tr!("category.fun"),
         }
     }
 }
@@ -43,6 +43,8 @@ pub struct VoiceDef {
     /// Stable key for settings files; never rename.
     pub id: &'static str,
     pub category: Category,
+    /// Where the voice's name is among en.lang's keys.
+    name_at: usize,
     /// The recipe as what it changes from `Recipe::DRY`, field number and value. A voice
     /// names four of the 34 fields on average, so this keeps 8 KB of zeros out of the
     /// executable.
@@ -51,7 +53,7 @@ pub struct VoiceDef {
 
 impl VoiceDef {
     pub fn name(&self) -> &'static str {
-        crate::lang::voice(self.id)
+        crate::lang::text(self.name_at)
     }
 
     // Inlined, the field numbering is copied into each caller: 3 KB more.
@@ -145,7 +147,7 @@ macro_rules! voice {
             changes(&R, &mut c);
             c
         };
-        VoiceDef { id: $id, category: Category::$cat, changes: &C }
+        VoiceDef { id: $id, category: Category::$cat, name_at: crate::lang::index(concat!("voice.", $id)), changes: &C }
     }};
 }
 
@@ -293,7 +295,10 @@ mod tests {
         };
         let mut list = [(0, 0.0); 34];
         assert_eq!(changes(&full, &mut list), 34);
-        assert_eq!(VoiceDef { id: "", category: Category::Fun, changes: Box::leak(Box::new(list)) }.recipe(), full);
+        assert_eq!(
+            VoiceDef { id: "", category: Category::Fun, name_at: 0, changes: Box::leak(Box::new(list)) }.recipe(),
+            full
+        );
         assert_eq!(changes(&D, &mut []), 0);
         let demon = &ALL[index_of("demon").unwrap()];
         assert_eq!(

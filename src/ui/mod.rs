@@ -559,7 +559,7 @@ impl<H: Host> App<H> {
         let (Some(mic), Some(out)) = (self.inputs.get(self.input), self.outputs.get(self.output)) else {
             self.healthy = false;
             self.status =
-                if self.inputs.is_empty() { tr("status.no_mic").into() } else { tr("status.no_output").into() };
+                if self.inputs.is_empty() { tr!("status.no_mic").into() } else { tr!("status.no_output").into() };
             return;
         };
         // A device opened in place of an unplugged one is not a choice: the setting keeps
@@ -622,9 +622,9 @@ impl<H: Host> App<H> {
         let signed =
             |v: f32| if v > 0.0 { format!("+{}", write_decimal(v)) } else { write_decimal(v).replace('-', "−") };
         match k {
-            Knob::Tone => trf("unit.semitones", &[("value", &signed(v))]),
+            Knob::Tone => trf!("unit.semitones", &[("value", &signed(v))]),
             Knob::Volume | Knob::Mix => format!("{} %", write_decimal((v * 100.0).round())),
-            Knob::Gain | Knob::Gate => trf("unit.db", &[("value", &signed(v))]),
+            Knob::Gain | Knob::Gate => trf!("unit.db", &[("value", &signed(v))]),
         }
     }
 
@@ -647,7 +647,7 @@ impl<H: Host> App<H> {
         if self.host.failed() && self.retry_at.is_none() {
             self.host.stop();
             self.healthy = false;
-            self.status = tr("status.lost").into();
+            self.status = tr!("status.lost").into();
             self.retry_at = Some(now + Duration::from_secs(2));
             self.dirty = true;
         }

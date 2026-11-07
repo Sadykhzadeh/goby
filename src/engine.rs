@@ -394,7 +394,7 @@ impl Ready {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(tr("error.no_answer").into());
+                return Err(tr!("error.no_answer").into());
             }
             state = self.changed.wait_timeout(state, left).unwrap_or_else(|e| e.into_inner()).0;
         }
@@ -447,9 +447,9 @@ impl Drop for Engine {
 
 fn friendly(e: windows::core::Error) -> String {
     match e.code() {
-        AUDCLNT_E_DEVICE_IN_USE => tr("error.in_use").into(),
-        AUDCLNT_E_DEVICE_INVALIDATED => tr("error.unplugged").into(),
-        _ => trf("error.audio", &[("message", &e.message())]),
+        AUDCLNT_E_DEVICE_IN_USE => tr!("error.in_use").into(),
+        AUDCLNT_E_DEVICE_INVALIDATED => tr!("error.unplugged").into(),
+        _ => trf!("error.audio", &[("message", &e.message())]),
     }
 }
 
@@ -609,7 +609,7 @@ mod tests {
         let ready = Ready::default();
         ready.send(Ok(()));
         let t = Instant::now();
-        assert_eq!(ready.wait(2, Duration::from_millis(100)), Err(tr("error.no_answer").into()));
+        assert_eq!(ready.wait(2, Duration::from_millis(100)), Err(tr!("error.no_answer").into()));
         assert!(t.elapsed() >= Duration::from_millis(100));
     }
 
@@ -642,15 +642,13 @@ mod tests {
     #[test]
     fn a_setup_failure_reaches_start_in_words() {
         let (ready, shared) = fake(|_| Err(AUDCLNT_E_DEVICE_IN_USE.into()));
-        assert_eq!(ready.wait(1, Duration::from_secs(1)), Err(tr("error.in_use").into()));
+        assert_eq!(ready.wait(1, Duration::from_secs(1)), Err(tr!("error.in_use").into()));
         assert!(!shared.failed.load(Relaxed));
 
         let e = windows::core::Error::from(windows::Win32::Foundation::E_FAIL);
         let (ready, _) = fake(move |_| Err(e));
-        let words = trf(
-            "error.audio",
-            &[("message", &windows::core::Error::from(windows::Win32::Foundation::E_FAIL).message())],
-        );
+        let message = windows::core::Error::from(windows::Win32::Foundation::E_FAIL).message();
+        let words = trf!("error.audio", &[("message", &message)]);
         assert_eq!(ready.wait(1, Duration::from_secs(1)), Err(words));
     }
 

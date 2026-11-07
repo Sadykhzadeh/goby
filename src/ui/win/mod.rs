@@ -104,7 +104,7 @@ unsafe extern "system" {
 /// The standard Open dialog, filtered to programs; returns the lower-case exe name.
 fn browse_exe(owner: HWND, title: &str) -> Option<String> {
     let mut file = [0u16; 1024];
-    let filter: Vec<u16> = format!("{}\0*.exe\0\0", tr("programs.menu.filter")).encode_utf16().collect();
+    let filter: Vec<u16> = format!("{}\0*.exe\0\0", tr!("programs.menu.filter")).encode_utf16().collect();
     let title = HSTRING::from(title);
     let mut ofn = OpenFileName {
         struct_size: size_of::<OpenFileName>() as u32,

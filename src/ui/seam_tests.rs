@@ -166,9 +166,9 @@ fn slider_readouts_read_as_they_did_with_float_formatting() {
                 let v = app.knob(k);
                 let signed = |v: f32| if v > 0.0 { format!("+{v}") } else { format!("{v}").replace('-', "−") };
                 let old = match k {
-                    Knob::Tone => trf("unit.semitones", &[("value", &signed(v))]),
+                    Knob::Tone => trf!("unit.semitones", &[("value", &signed(v))]),
                     Knob::Volume | Knob::Mix => format!("{} %", (v * 100.0).round()),
-                    Knob::Gain | Knob::Gate => trf("unit.db", &[("value", &signed(v))]),
+                    Knob::Gain | Knob::Gate => trf!("unit.db", &[("value", &signed(v))]),
                 };
                 assert_eq!(app.readout(k), old, "{k:?} at {v}");
             }

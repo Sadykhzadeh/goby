@@ -157,7 +157,7 @@ pub(super) fn preset_label(name: &str, p: &Preset) -> String {
         label.push_str(&format!(" · {}%", write_decimal((p.volume * 100.0).round())));
     }
     if p.dry_mix > 0.0 {
-        let own = trf("preset.own", &[("percent", &write_decimal((p.dry_mix * 100.0).round()))]);
+        let own = trf!("preset.own", &[("percent", &write_decimal((p.dry_mix * 100.0).round()))]);
         label.push_str(&format!(" · {own}"));
     }
     label

@@ -95,7 +95,7 @@ impl Win {
         let hidden = unsafe { !IsWindowVisible(self.host.hwnd).as_bool() };
         if hidden && self.host.tray_icon {
             let title = format!("Goby {}", update::show(m.version));
-            tray::notify(self.host.hwnd, &title, tr("update.notify"));
+            tray::notify(self.host.hwnd, &title, tr!("update.notify"));
         }
         self.update = Some(update::show(m.version));
         self.host.manifest = Some(m);

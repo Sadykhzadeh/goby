@@ -26,7 +26,7 @@ impl Win {
         let voice = voices::ALL.get(self.voice).map_or("", |v| v.name());
         match self.settings.enabled {
             true => format!("Goby: {voice}"),
-            false => tr("tray.off").into(),
+            false => tr!("tray.off").into(),
         }
     }
 
@@ -70,7 +70,7 @@ impl Win {
         if !self.settings.tray_told {
             self.settings.tray_told = true;
             self.save();
-            tray::notify(self.host.hwnd, tr("tray.told"), tr("tray.told.desc"));
+            tray::notify(self.host.hwnd, tr!("tray.told"), tr!("tray.told.desc"));
         }
         false
     }
@@ -82,7 +82,7 @@ impl Win {
             (tray::Item { label: Some(label.to_string()), checked, default }, act)
         };
         let line = || (tray::Item { label: None, checked: false, default: false }, TrayAct::None);
-        let mut menu = vec![item(tr("tray.open"), false, TrayAct::Open), line()];
+        let mut menu = vec![item(tr!("tray.open"), false, TrayAct::Open), line()];
         let favorites = self.favorites();
         let current = self.current();
         for &f in favorites.iter().take(12) {
@@ -93,10 +93,10 @@ impl Win {
             menu.push(line());
         }
         let voice = voices::ALL.get(self.voice).map_or("", |v| v.name());
-        let effect = trf("tray.effect", &[("voice", voice)]);
+        let effect = trf!("tray.effect", &[("voice", voice)]);
         menu.push(item(&effect, self.settings.enabled, TrayAct::Effect));
         menu.push(line());
-        menu.push(item(tr("tray.quit"), false, TrayAct::Quit));
+        menu.push(item(tr!("tray.quit"), false, TrayAct::Quit));
         menu
     }
 

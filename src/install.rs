@@ -292,15 +292,15 @@ fn use_chosen_language() {
 pub fn ask() -> Choice {
     use_chosen_language();
     let installed = install_dir().is_some_and(|d| files::exists(&format!("{d}\\goby.exe")));
-    let install_text = if installed { HSTRING::from(tr("setup.update")) } else { HSTRING::from(tr("setup.install")) };
-    let run_text = HSTRING::from(tr("setup.run"));
+    let install_text = if installed { HSTRING::from(tr!("setup.update")) } else { HSTRING::from(tr!("setup.install")) };
+    let run_text = HSTRING::from(tr!("setup.run"));
     let buttons = [
         TASKDIALOG_BUTTON { nButtonID: INSTALL, pszButtonText: PCWSTR(install_text.as_ptr()) },
         TASKDIALOG_BUTTON { nButtonID: RUN_ONCE, pszButtonText: PCWSTR(run_text.as_ptr()) },
     ];
     let title = HSTRING::from(format!("Goby {VERSION}"));
-    let heading = HSTRING::from(tr("setup.heading"));
-    let desktop = HSTRING::from(tr("setup.desktop"));
+    let heading = HSTRING::from(tr!("setup.heading"));
+    let desktop = HSTRING::from(tr!("setup.desktop"));
     let footer = HSTRING::from(format!("{AUTHOR} · <a href=\"{WEBSITE}\">azer.one</a>"));
     let config = TASKDIALOGCONFIG {
         cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
@@ -370,8 +370,8 @@ fn message(heading: &str, text: &str, question: bool) -> bool {
 
 /// Tells the user why installing did not work; Goby then runs without installing.
 pub fn failed(error: &std::io::Error) {
-    let heading = tr("setup.failed");
-    let text = trf("setup.failed.desc", &[("error", &error.to_string())]);
+    let heading = tr!("setup.failed");
+    let text = trf!("setup.failed.desc", &[("error", &error.to_string())]);
     message(heading, &text, false);
 }
 
@@ -404,7 +404,7 @@ pub fn uninstall(quiet: bool) {
     if !quiet {
         use_chosen_language();
     }
-    if !quiet && !message(tr("uninstall.ask"), tr("uninstall.ask.desc"), true) {
+    if !quiet && !message(tr!("uninstall.ask"), tr!("uninstall.ask.desc"), true) {
         return;
     }
     close_running();
@@ -439,9 +439,9 @@ pub fn uninstall(quiet: bool) {
     }
     if !quiet {
         let note = if left.is_empty() {
-            tr("uninstall.done").to_string()
+            tr!("uninstall.done").to_string()
         } else {
-            trf("uninstall.done.left", &[("programs", &left.join(", "))])
+            trf!("uninstall.done.left", &[("programs", &left.join(", "))])
         };
         message("Goby", &note, false);
     }
