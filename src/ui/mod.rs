@@ -616,6 +616,7 @@ impl<H: Host> App<H> {
         self.apply();
     }
 
+    #[inline(never)]
     fn readout(&self, k: Knob) -> String {
         let v = self.knob(k);
         let signed =
