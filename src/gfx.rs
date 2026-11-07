@@ -15,7 +15,7 @@ use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
 use windows::core::{BOOL, Interface, PCWSTR, Result, w};
-use windows_numerics::Vector2;
+use windows_numerics::{Matrix3x2, Vector2};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct R {
@@ -367,6 +367,30 @@ impl Gfx {
 
     pub fn unclip(&self) {
         unsafe { self.dc.PopAxisAlignedClip() }
+    }
+
+    /// Draws what follows `dy` lower and at `opacity`, until `unshift`: a page coming in.
+    pub fn shift(&self, dy: f32, opacity: f32) {
+        unsafe {
+            self.dc.SetTransform(&Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: dy });
+            let params = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: D2D_RECT_F { left: -1e6, top: -1e6, right: 1e6, bottom: 1e6 },
+                geometricMask: ManuallyDrop::new(None),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: Matrix3x2 { M11: 1.0, M22: 1.0, ..Default::default() },
+                opacity,
+                opacityBrush: ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            self.dc.PushLayer(&params, None);
+        }
+    }
+
+    pub fn unshift(&self) {
+        unsafe {
+            self.dc.PopLayer();
+            self.dc.SetTransform(&Matrix3x2 { M11: 1.0, M22: 1.0, ..Default::default() });
+        }
     }
 }
 

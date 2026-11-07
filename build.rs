@@ -190,7 +190,7 @@ fn node(key: &str, value: &[u8], text: bool, children: &[Vec<u8>]) -> Vec<u8> {
     b
 }
 
-fn version_info(version: &str) -> Vec<u8> {
+fn version_info(version: &str, commit: &str) -> Vec<u8> {
     let parts: Vec<u32> = version.split('.').map(|p| p.parse().unwrap_or(0)).chain([0, 0, 0]).take(3).collect();
     let (ms, ls) = (parts[0] << 16 | parts[1], parts[2] << 16);
     let fixed: Vec<u8> = [0xFEEF04BD, 0x0001_0000, ms, ls, ms, ls, 0x3F, 0, 0x0004_0004, 1, 0, 0, 0]
@@ -206,7 +206,8 @@ fn version_info(version: &str) -> Vec<u8> {
         ("LegalCopyright", format!("© {year} {AUTHOR}, GPL-3.0-or-later")),
         ("OriginalFilename", "goby.exe".to_string()),
         ("ProductName", "Goby".to_string()),
-        ("ProductVersion", version.to_string()),
+        // The commit rides along here, so Properties > Details names the exact build.
+        ("ProductVersion", if commit.is_empty() { version.to_string() } else { format!("{version} ({commit})") }),
         ("Comments", "https://azer.one".to_string()),
     ]
     .iter()
@@ -244,9 +245,31 @@ const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
 </assembly>
 "#;
 
+/// The commit this build comes from, with "-modified" when the tracked files differ from
+/// it; empty outside a git checkout (a source tarball, say).
+fn commit() -> String {
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let Some(head) = git(&["rev-parse", "--short=7", "HEAD"]) else { return String::new() };
+    let dirty = git(&["status", "--porcelain", "--untracked-files=no"]).is_some_and(|s| !s.is_empty());
+    if dirty { format!("{head}-modified") } else { head }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/icon.rs");
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/index");
+    println!("cargo:rerun-if-changed=.git/refs");
+    let commit = commit();
+    println!("cargo:rustc-env=GOBY_COMMIT={commit}");
     if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc") {
         return;
     }
@@ -269,7 +292,7 @@ fn main() {
         group.extend(id.to_le_bytes());
     }
     resource(&mut res, RT_GROUP_ICON, 1, &group);
-    resource(&mut res, RT_VERSION, 1, &version_info(env!("CARGO_PKG_VERSION")));
+    resource(&mut res, RT_VERSION, 1, &version_info(env!("CARGO_PKG_VERSION"), &commit));
     resource(&mut res, RT_MANIFEST, 1, MANIFEST.as_bytes());
 
     let path = PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("goby.res");

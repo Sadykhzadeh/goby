@@ -199,6 +199,11 @@ impl App {
         if self.page != page {
             self.page = page;
             self.settings_scroll = Anim::default();
+            // The page rises into place the way WinUI's do, unless animations are off
+            // in Windows' Accessibility settings.
+            if animations_on() {
+                self.page_in = Anim { value: 0.0, target: 1.0 };
+            }
             self.hits.clear();
             self.hover = Hit::None;
         }

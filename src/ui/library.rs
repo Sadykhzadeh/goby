@@ -131,6 +131,22 @@ impl App {
     }
 }
 
+/// What a saved voice changed, for the second line of its tile: "+3 · 125% · 20%".
+pub(super) fn preset_tweaks(p: &Preset) -> String {
+    let mut parts = Vec::new();
+    if p.semitones != 0.0 {
+        parts.push(format!("{:+}", p.semitones));
+    }
+    if (p.volume - 1.0).abs() > 0.005 {
+        parts.push(format!("{}%", (p.volume * 100.0).round()));
+    }
+    if p.dry_mix > 0.0 {
+        // "own" is left to the full name in the header: the tile has no room for it.
+        parts.push(format!("{}%", (p.dry_mix * 100.0).round()));
+    }
+    parts.join(" · ")
+}
+
 /// A saved voice's name: the voice and what was changed, e.g. "Demon +3 · 20% own".
 pub(super) fn preset_label(name: &str, p: &Preset, ru: bool) -> String {
     let mut label = name.to_string();
@@ -157,5 +173,7 @@ mod tests {
         assert_eq!(preset_label("Demon", &p(3.0, 0.0, 1.0), false), "Demon +3");
         assert_eq!(preset_label("Demon", &p(-2.5, 0.2, 1.0), false), "Demon -2.5 · 20% own");
         assert_eq!(preset_label("Демон", &p(0.0, 0.0, 1.25), true), "Демон · 125%");
+        assert_eq!(preset_tweaks(&p(3.0, 0.2, 1.25)), "+3 · 125% · 20%");
+        assert_eq!(preset_tweaks(&p(-2.5, 0.0, 1.0)), "-2.5");
     }
 }

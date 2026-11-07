@@ -334,6 +334,8 @@ struct App {
     tracks: Vec<(Knob, R)>,
     gallery_scroll: Anim,
     settings_scroll: Anim,
+    /// How far the current page has come in: 0 just switched, 1 settled.
+    page_in: Anim,
     gallery_max: f32,
     settings_max: f32,
     switches: [Anim; 8],
@@ -521,6 +523,7 @@ impl App {
             tracks: Vec::new(),
             gallery_scroll: Anim::default(),
             settings_scroll: Anim::default(),
+            page_in: Anim { value: 1.0, target: 1.0 },
             gallery_max: 0.0,
             settings_max: 0.0,
             switches: [Anim::default(); 8],
@@ -830,7 +833,7 @@ impl App {
             }
         }
         moving |= self.tab_x.step(0.3) | self.tab_w.step(0.3);
-        moving |= self.gallery_scroll.step(0.3) | self.settings_scroll.step(0.3);
+        moving |= self.gallery_scroll.step(0.3) | self.settings_scroll.step(0.3) | self.page_in.step(0.35);
         self.dirty |= moving;
 
         let measured = self.shared.latency_ms();
@@ -923,6 +926,15 @@ fn make_icon(size: i32, rgb: u32) -> Option<HICON> {
 }
 
 /// The message Explorer broadcasts when the taskbar comes back after a restart.
+/// Windows' "Animation effects" switch (Settings > Accessibility > Visual effects).
+fn animations_on() -> bool {
+    let mut on = BOOL(1);
+    let ok = unsafe {
+        SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, Some(&mut on as *mut BOOL as _), Default::default())
+    };
+    ok.is_err() || on.as_bool()
+}
+
 fn taskbar_created() -> u32 {
     static ID: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *ID.get_or_init(|| unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) })

@@ -28,16 +28,25 @@ impl App {
         self.hits.clear();
         self.tracks.clear();
         self.draw_rail(g)?;
-        match self.page {
-            Page::Voices => {
+        let entering = self.page_in.value < 1.0;
+        if entering {
+            let k = self.page_in.value;
+            g.shift((1.0 - k) * 28.0, k);
+        }
+        let drawn = match self.page {
+            Page::Voices => (|| {
                 self.draw_scope(g)?;
                 self.draw_quick(g)?;
                 self.draw_tabs(g)?;
-                self.draw_gallery(g)?;
-            }
-            Page::Programs => self.draw_programs(g)?,
-            Page::Settings => self.draw_settings(g)?,
+                self.draw_gallery(g)
+            })(),
+            Page::Programs => self.draw_programs(g),
+            Page::Settings => self.draw_settings(g),
+        };
+        if entering {
+            g.unshift();
         }
+        drawn?;
         self.draw_rail_tip(g)?;
         Ok(())
     }
@@ -376,8 +385,22 @@ impl App {
             let pts: Vec<(f32, f32)> =
                 wave.iter().enumerate().map(|(k, s)| (gl + gw * k as f32 / last, gy - s * 11.0)).collect();
             g.line(&pts, if selected { th.accent() } else { th.text_secondary() }, 1.4)?;
-            let name = R::new(r.l + 14.0, r.t + 44.0, r.w() - 28.0 - 24.0, 22.0);
-            g.text(&self.label(f), Font::Body, name, Align::Start, th.text())?;
+            // A saved voice puts what it changed on a line of its own, so the name and
+            // the tweaks both fit however narrow the tile is.
+            let tweaks = match f {
+                Fav::Preset(p) => self.settings.presets.get(p).map(library::preset_tweaks),
+                Fav::Voice(_) => None,
+            };
+            let width = r.w() - 28.0 - 24.0;
+            if let Some(tweaks) = tweaks.filter(|t| !t.is_empty()) {
+                let name = voices::ALL[self.voice_of(f)].name(self.ru);
+                g.text(name, Font::Body, R::new(r.l + 14.0, r.t + 38.0, width, 20.0), Align::Start, th.text())?;
+                let second = R::new(r.l + 14.0, r.t + 55.0, width, 16.0);
+                g.text(&tweaks, Font::Caption, second, Align::Start, th.text_secondary())?;
+            } else {
+                let name = R::new(r.l + 14.0, r.t + 44.0, width, 22.0);
+                g.text(&self.label(f), Font::Body, name, Align::Start, th.text())?;
+            }
             let visible = R { l: r.l, t: r.t.max(self.lay.gallery.t), r: r.r, b: r.b.min(self.lay.gallery.b) };
             self.hits.push((visible, hit));
             // A voice has a star: filled for a favourite, an outline offering to make it one.
@@ -483,7 +506,12 @@ impl App {
         self.row_card(g, &mut y, Hit::Toggle(Switch::Updates), glyph::UPDATE, check, check_desc)?;
 
         y += 20.0;
-        let about = format!("Goby {}", env!("CARGO_PKG_VERSION"));
+        // The commit says which code this copy claims to be built from; the signature on
+        // the release, not this line, is what says the copy is genuine.
+        let about = match env!("GOBY_COMMIT") {
+            "" => format!("Goby {}", env!("CARGO_PKG_VERSION")),
+            commit => format!("Goby {} · {commit}", env!("CARGO_PKG_VERSION")),
+        };
         self.row_card(g, &mut y, Hit::About, glyph::INFO, &about, "Azer Sadykhzadeh · azer.one")?;
 
         g.unclip();
