@@ -196,6 +196,20 @@ impl PitchShifter {
     }
 }
 
+/// Makes the calling thread's floating point treat denormal numbers as zero, both as
+/// inputs and as results. Every decaying tail ends in them (a reverb ringing out, the gate
+/// closing), and the CPU takes a slow path for each one: with the gate closed the
+/// heaviest voices cost twice as much as while you talk. Nothing audible lives down there.
+pub fn flush_denormals() {
+    #[cfg(target_arch = "x86_64")]
+    #[allow(deprecated)]
+    unsafe {
+        use std::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+        // Bit 15 flushes results to zero, bit 6 reads denormal inputs as zero.
+        _mm_setcsr(_mm_getcsr() | 0x8040);
+    }
+}
+
 /// Dot product in eight independent lanes, which the compiler turns into SIMD; a single
 /// running sum would have to be added up in order, one sample at a time.
 #[inline]

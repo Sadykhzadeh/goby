@@ -279,4 +279,33 @@ mod tests {
         }
         println!("heaviest: {} at {:.3} %", worst.1, worst.0);
     }
+
+    /// The same between phrases: a second of voice, then nine of quiet room noise that the
+    /// gate shuts out, on a thread set up like the audio one.
+    /// `cargo test --release gated_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark"]
+    fn gated_cost() {
+        crate::dsp::flush_denormals();
+        let mut noise = crate::fx::Noise::default();
+        let mut input = voiced(1.0);
+        input.extend((0..SR * 9).map(|_| noise.next() * 0.0003));
+        let mut worst = (0.0f64, "");
+        for def in ALL {
+            let (mut mic, mut voice) = (crate::mic::Mic::new(SR), Voice::new(SR));
+            voice.set(&def.recipe, 0.0, 1.0);
+            let mut out = input.clone();
+            let t = std::time::Instant::now();
+            for block in out.chunks_mut(480) {
+                mic.process(block, 0.0, Some(-40.0));
+                voice.process(block);
+            }
+            let share = t.elapsed().as_secs_f64() / 10.0 * 100.0;
+            println!("{:<16} {share:.3} % of one core", def.id);
+            if share > worst.0 {
+                worst = (share, def.id);
+            }
+        }
+        println!("heaviest: {} at {:.3} %", worst.1, worst.0);
+    }
 }

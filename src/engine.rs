@@ -358,6 +358,7 @@ fn audio_thread_setup() {
         // Lets the scheduler treat us like any other pro-audio app; harmless if it fails.
         let _ = AvSetMmThreadCharacteristicsW(w!("Pro Audio"), &mut 0);
     }
+    crate::dsp::flush_denormals();
 }
 
 type Ready = mpsc::Sender<std::result::Result<(), String>>;
@@ -652,6 +653,15 @@ mod tests {
         let f32_stereo: [f32; 4] = [0.25, 0.75, -1.0, 0.0];
         unsafe { to_mono(f32_stereo.as_ptr() as *const u8, 2, 2, Sample::F32, &mut out) };
         assert_eq!(out, [0.5, -0.5]);
+    }
+
+    #[test]
+    fn audio_threads_flush_denormals() {
+        let tiny = std::thread::spawn(|| {
+            audio_thread_setup();
+            std::hint::black_box(f32::MIN_POSITIVE) * std::hint::black_box(0.5)
+        });
+        assert_eq!(tiny.join().unwrap(), 0.0);
     }
 
     #[test]

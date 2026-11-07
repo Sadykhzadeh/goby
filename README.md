@@ -95,6 +95,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
 | DSP cost, Minion / heaviest voice | 0.09 % / 0.33 % of one core |
+| The same with the noise gate closed | 0.11 % / 0.65 % of one core |
 | Mic to cable, Minion | 29 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 
@@ -110,6 +111,7 @@ Reproduce with:
 
 ```
 cargo test --release realtime_factor -- --ignored --nocapture   # DSP cost per voice
+cargo test --release gated_cost -- --ignored --nocapture        # the same between phrases
 cargo test --release live_latency -- --ignored --nocapture      # needs a mic and VB-Cable
 cargo test --release engine_periods -- --ignored --nocapture    # what each device supports
 ```
