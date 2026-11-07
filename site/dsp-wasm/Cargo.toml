@@ -1,0 +1,21 @@
+[package]
+name = "goby-dsp-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Goby's voices for the website: src/dsp.rs, src/fx.rs, src/mic.rs and src/voices.rs built for wasm32."
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# Built on its own, not as part of the app.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

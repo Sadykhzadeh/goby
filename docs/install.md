@@ -18,7 +18,7 @@ goby-0.4.0-windows-x64.exe --portable               # run without installing or 
 
 ## Updates
 
-Once a day, a little after it starts, Goby asks GitHub and got.az for the manifest of
+Once a day, a little after it starts, Goby asks GitHub and a mirror on the author's own server for the manifest of
 their latest release: a few lines naming the version, the size and SHA-256 of the
 executable, and where to download it. Every release is published to both, and the
 newest version either one offers wins, so Goby keeps updating while one of them is down.

@@ -14,7 +14,7 @@
 <p align="center">
   <a href="https://github.com/Sadykhzadeh/goby/releases/latest"><b>Download</b></a> ·
   <a href="https://goby.azer.one/">Website</a> ·
-  <a href="https://got.az/azer/goby">Source on got.az</a>
+  <a href="https://github.com/Sadykhzadeh/goby/releases">All releases</a>
 </p>
 
 <p align="center"><img src="docs/images/goby.webp" width="760" alt="Goby's main window: the Minion voice selected above a gallery of 61 voices, each drawn as its own waveform."></p>
@@ -77,4 +77,6 @@ Inspired by [Clownfish Voice Changer](https://clownfish-translator.com/voicechan
 
 ## License
 
-Made by [Azer Sadykhzadeh](https://azer.one). Goby is free software under the [GNU GPL, version 3 or later](LICENSE): use it, share it and change it freely, but a changed version you give to others has to come with its source under the same license.
+Copyright © 2026 Azer Sadykhzadeh. Goby is free software under the [GNU GPL, version 3 or later](LICENSE): use it, share it and change it freely, but a changed version you give to others has to come with its source under the same license.
+
+<p align="center"><sub>done with ♥ by <a href="https://azer.one">azer.one</a></sub></p>
