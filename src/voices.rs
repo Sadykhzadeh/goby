@@ -315,3 +315,24 @@ mod tests {
         println!("heaviest: {} at {:.3} %", worst.1, worst.0);
     }
 }
+
+#[cfg(test)]
+mod website {
+    use super::*;
+
+    /// Writes every voice's tile waveform for the website: `node site/build.mjs` reads it.
+    #[test]
+    #[ignore = "writes site/voices.json"]
+    fn site_voices() {
+        let all = glyphs(60);
+        let rows: Vec<String> = ALL
+            .iter()
+            .zip(&all)
+            .map(|(v, g)| {
+                let points: Vec<String> = g.iter().map(|x| format!("{}", (x * 100.0).round() / 100.0)).collect();
+                format!("[\"{}\",\"{}\",[{}]]", v.en, v.category.name(false), points.join(","))
+            })
+            .collect();
+        std::fs::write("site/voices.json", format!("[{}]\n", rows.join(","))).unwrap();
+    }
+}
