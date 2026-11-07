@@ -22,10 +22,46 @@ mod voices;
 // The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
 use goby_dsp::{dsp, mic, ring, stream};
 
-/// Starts a thread. Every thread goes through here as a boxed closure, so std's start-up
-/// code for it is compiled once instead of once per closure.
-fn spawn(work: Box<dyn FnOnce() + Send>) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(work)
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::Threading::{
+    CreateThread, INFINITE, STACK_SIZE_PARAM_IS_A_RESERVATION, WaitForSingleObject,
+};
+
+type Work = Box<dyn FnOnce() + Send>;
+
+/// A thread started by `spawn`; dropping it lets the thread run on unwatched.
+struct Thread(HANDLE);
+
+impl Thread {
+    fn join(self) {
+        unsafe { WaitForSingleObject(self.0, INFINITE) };
+    }
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// Starts a thread straight through Win32: std's thread::spawn brings start-up, naming
+/// and result plumbing that nothing here uses. The stack is 2 MiB, as std's would be.
+fn spawn(work: Work) -> Thread {
+    unsafe extern "system" fn start(work: *mut std::ffi::c_void) -> u32 {
+        unsafe { Box::from_raw(work as *mut Work)() };
+        0
+    }
+    let work = Box::into_raw(Box::new(work));
+    let flags = STACK_SIZE_PARAM_IS_A_RESERVATION;
+    match unsafe { CreateThread(None, 2 << 20, Some(start), Some(work as _), flags, None) } {
+        Ok(handle) => Thread(handle),
+        Err(e) => {
+            drop(unsafe { Box::from_raw(work) });
+            panic!("failed to spawn thread: {e}")
+        }
+    }
 }
 
 fn main() -> windows::core::Result<()> {

@@ -8,7 +8,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
@@ -404,7 +403,7 @@ impl Ready {
 
 pub struct Engine {
     stop: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    threads: Vec<crate::Thread>,
 }
 
 impl Engine {
@@ -441,7 +440,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.stop.store(true, Relaxed);
         for t in self.threads.drain(..) {
-            let _ = t.join();
+            t.join();
         }
     }
 }
@@ -658,6 +657,22 @@ mod tests {
         });
         assert_eq!(ready.wait(1, Duration::from_secs(1)), Ok(()));
         assert!(shared.failed.load(Relaxed));
+    }
+
+    #[test]
+    fn dropping_the_engine_stops_and_joins_its_threads() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let (seen, finished) = (stop.clone(), done.clone());
+        let thread = crate::spawn(Box::new(move || {
+            while !seen.load(Relaxed) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            finished.store(true, Relaxed);
+        }));
+        drop(Engine { stop, threads: vec![thread] });
+        assert!(done.load(Relaxed));
     }
 
     #[test]
