@@ -84,7 +84,15 @@ fn args() -> Vec<String> {
     }
 }
 
-fn main() -> windows::core::Result<()> {
+// Errors end the process with exit code 1, as returning them from `main` would, without the
+// `Debug` formatting `main` would print to a console a windows-subsystem program never has.
+fn main() {
+    if run().is_err() {
+        std::process::exit(1);
+    }
+}
+
+fn run() -> windows::core::Result<()> {
     let args = args();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
