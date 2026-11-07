@@ -96,7 +96,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
 | DSP cost, Minion / heaviest voice | 0.09 % / 0.33 % of one core |
 | The same with the noise gate closed | 0.11 % / 0.65 % of one core |
-| Mic to cable, Minion | 29 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
+| Mic to cable, Minion | 28 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 
 Where the 17 ms go (measured): 3 ms for the microphone's packet, 4.7 ms for the pitch

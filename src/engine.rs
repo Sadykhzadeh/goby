@@ -446,9 +446,13 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
             _ => Stream::open(id, 2)?,
         };
         let out: IAudioRenderClient = s.client.GetService()?;
+        // Two periods queued: the one being mixed and the next. Anything short of a third
+        // full period buys no extra time before a late wake-up glitches, only latency, and
+        // VB-Cable's buffer holds 280 frames at a 128-frame period.
+        let queue = s.frames.min(2 * s.period);
         // Start from silence so the first period is not garbage.
-        out.GetBuffer(s.frames)?;
-        out.ReleaseBuffer(s.frames, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)?;
+        out.GetBuffer(queue)?;
+        out.ReleaseBuffer(queue, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)?;
         s.client.Start()?;
         started();
         while !stop.load(Relaxed) {
@@ -456,7 +460,7 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
                 continue;
             }
             reader.set_target(shared.mic_packet.load(Relaxed), s.period);
-            let n = s.frames - s.client.GetCurrentPadding()?;
+            let n = queue.saturating_sub(s.client.GetCurrentPadding()?);
             if n == 0 {
                 continue;
             }
@@ -466,8 +470,8 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
             }
             out.ReleaseBuffer(n, 0)?;
             if measure {
-                // Right after a write the device queue is full: ring + whole buffer.
-                shared.queued_frames.store(reader.ring.len() as u32 + s.frames, Relaxed);
+                // Right after a write the device queue is full: ring + queue.
+                shared.queued_frames.store(reader.ring.len() as u32 + queue, Relaxed);
                 shared.underruns.store(reader.underruns, Relaxed);
             }
         }
