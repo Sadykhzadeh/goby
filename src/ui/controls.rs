@@ -67,6 +67,8 @@ impl<H: Host> App<H> {
     }
 
     /// Thin overlay scrollbar, wider while hovered or dragged, like WinUI's.
+    /// Out of line: each page draws one.
+    #[inline(never)]
     pub(super) fn scrollbar(&mut self, g: &dyn Canvas, view: R, scroll: f32, max: f32, pane: Pane) {
         if max <= 0.0 {
             return;
