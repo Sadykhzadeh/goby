@@ -26,16 +26,27 @@ pub fn exe_of(key: &str) -> Option<String> {
 }
 
 /// Newest entry per executable, most recently used first, without system helpers.
-pub fn dedupe(mut found: Vec<MicApp>) -> Vec<MicApp> {
-    found.retain(|a| !IGNORED.contains(&a.exe.as_str()));
-    found.sort_by(|a, b| b.active.cmp(&a.active).then(b.last_used.cmp(&a.last_used)));
-    let mut seen = Vec::<String>::new();
-    found.retain(|a| {
-        let new = !seen.contains(&a.exe);
-        seen.push(a.exe.clone());
-        new
-    });
-    found
+///
+/// Built by insertion rather than with `sort_by`: the list is a few dozen entries, and
+/// std's stable sort for `MicApp` came to 6.5 KB of code. Ties keep the registry's order,
+/// as a stable sort would.
+pub fn dedupe(found: Vec<MicApp>) -> Vec<MicApp> {
+    let key = |a: &MicApp| (a.active, a.last_used);
+    let mut out: Vec<MicApp> = Vec::with_capacity(found.len());
+    for a in found {
+        if IGNORED.contains(&a.exe.as_str()) {
+            continue;
+        }
+        if let Some(i) = out.iter().position(|b| b.exe == a.exe) {
+            if key(&a) <= key(&out[i]) {
+                continue;
+            }
+            out.remove(i);
+        }
+        let at = out.iter().position(|b| key(b) < key(&a)).unwrap_or(out.len());
+        out.insert(at, a);
+    }
+    out
 }
 
 /// Programs that have used the microphone, most recent first.
@@ -262,6 +273,38 @@ mod tests {
         ]);
         let order: Vec<_> = list.iter().map(|a| (a.exe.as_str(), a.last_used)).collect();
         assert_eq!(order, [("telegram.exe", 5), ("discord.exe", 30), ("cs2.exe", 20)]);
+    }
+
+    #[test]
+    fn dedupe_matches_a_stable_sort_then_first_of_each() {
+        fn reference(mut found: Vec<MicApp>) -> Vec<MicApp> {
+            found.retain(|a| !IGNORED.contains(&a.exe.as_str()));
+            found.sort_by(|a, b| b.active.cmp(&a.active).then(b.last_used.cmp(&a.last_used)));
+            let mut seen = Vec::<String>::new();
+            found.retain(|a| {
+                let new = !seen.contains(&a.exe);
+                seen.push(a.exe.clone());
+                new
+            });
+            found
+        }
+        let exes = ["a.exe", "b.exe", "c.exe", "d.exe", "svchost.exe"];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for _ in 0..2000 {
+            let len = next(12) as usize;
+            // Few exes and few times, so duplicates and ties are common; the path tells
+            // apart entries that are otherwise equal.
+            let list: Vec<MicApp> = (0..len)
+                .map(|i| MicApp { path: i.to_string(), ..app(exes[next(5) as usize], next(4), next(3) == 0) })
+                .collect();
+            assert_eq!(dedupe(list.clone()), reference(list));
+        }
     }
 
     #[test]
