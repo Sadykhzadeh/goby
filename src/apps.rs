@@ -1,12 +1,9 @@
 //! Which programs use the microphone. Windows keeps this list itself for the privacy page
 //! (Settings > Privacy > Microphone > recent activity); we read the same registry keys.
 
-use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, MAX_PATH};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS};
 use windows::Win32::Graphics::Gdi::{
     BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits, ReleaseDC,
-};
-use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
 use windows::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_QWORD, RegCloseKey, RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
@@ -137,19 +134,66 @@ pub fn recent() -> Vec<MicApp> {
     dedupe(found)
 }
 
+/// The head of one `SYSTEM_PROCESS_INFORMATION` entry, as winternl.h declares it.
+#[repr(C)]
+struct ProcessEntry {
+    next: u32,
+    threads: u32,
+    reserved: [u8; 48],
+    name_bytes: u16,
+    name_capacity: u16,
+    name: *const u16,
+    base_priority: i32,
+    pid: usize,
+}
+
+#[link(name = "ntdll", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn NtQuerySystemInformation(class: u32, info: *mut std::ffi::c_void, len: u32, returned: *mut u32) -> i32;
+}
+
 /// Every running process as (lower-case exe name, pid), from one snapshot.
+///
+/// This asks the kernel directly, as Toolhelp does underneath: Toolhelp copies the same
+/// answer into a section and back out one entry at a time, which made it take 8 ms
+/// instead of 3 on a machine running 350 processes.
 pub fn processes() -> Vec<(String, u32)> {
+    const SYSTEM_PROCESS_INFORMATION: u32 = 5;
+    const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
     let mut all = Vec::new();
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return all };
-        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut ok = Process32FirstW(snap, &mut entry).is_ok();
-        while ok {
-            let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(MAX_PATH as usize);
-            all.push((String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase(), entry.th32ProcessID));
-            ok = Process32NextW(snap, &mut entry).is_ok();
+    // u64s keep the entries aligned. Left uninitialised: the kernel fills what it reports.
+    let mut buf: Vec<u64> = Vec::with_capacity(128 * 1024);
+    loop {
+        let mut needed = 0u32;
+        let bytes = (buf.capacity() * 8).min(u32::MAX as usize) as u32;
+        let status =
+            unsafe { NtQuerySystemInformation(SYSTEM_PROCESS_INFORMATION, buf.as_mut_ptr() as _, bytes, &mut needed) };
+        match status {
+            0 => break,
+            // Processes start between the two calls, so ask for some room to spare.
+            STATUS_INFO_LENGTH_MISMATCH if needed as usize > bytes as usize => {
+                buf = Vec::with_capacity(needed as usize / 8 + 8192);
+            }
+            STATUS_INFO_LENGTH_MISMATCH => buf = Vec::with_capacity(buf.capacity() * 2),
+            _ => return all,
         }
-        let _ = CloseHandle(snap);
+    }
+    let base = buf.as_ptr() as *const u8;
+    let mut at = 0usize;
+    loop {
+        let entry = unsafe { &*(base.add(at) as *const ProcessEntry) };
+        let name = match entry.name.is_null() {
+            true => String::new(),
+            false => {
+                let wide = unsafe { std::slice::from_raw_parts(entry.name, entry.name_bytes as usize / 2) };
+                String::from_utf16_lossy(wide).to_ascii_lowercase()
+            }
+        };
+        all.push((name, entry.pid as u32));
+        if entry.next == 0 {
+            break;
+        }
+        at += entry.next as usize;
     }
     all
 }
@@ -233,6 +277,10 @@ pub fn icon_pixels(path: &str, size: i32) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use windows::Win32::Foundation::MAX_PATH;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+    };
 
     fn app(exe: &str, last_used: u64, active: bool) -> MicApp {
         MicApp { exe: exe.into(), name: display_name(exe), path: String::new(), last_used, active }
@@ -274,7 +322,38 @@ mod tests {
     #[test]
     fn this_process_shows_up_in_a_snapshot() {
         let me = std::process::id();
-        assert!(processes().iter().any(|(_, pid)| *pid == me));
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_string_lossy().to_ascii_lowercase();
+        let all = processes();
+        assert!(all.iter().any(|(n, pid)| *pid == me && *n == name), "{name} ({me}) not in the snapshot");
+        assert!(all.len() > 10 && all.iter().any(|(n, _)| n == "csrss.exe"), "only {} processes", all.len());
+    }
+
+    /// The direct query must see what Toolhelp sees: same names, same pids.
+    #[test]
+    fn the_snapshot_matches_toolhelp() {
+        let toolhelp = || unsafe {
+            let mut all = Vec::new();
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0).unwrap();
+            let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+            let mut ok = Process32FirstW(snap, &mut entry).is_ok();
+            while ok {
+                let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(MAX_PATH as usize);
+                let name = String::from_utf16_lossy(&entry.szExeFile[..len]).to_ascii_lowercase();
+                all.push((name, entry.th32ProcessID));
+                ok = Process32NextW(snap, &mut entry).is_ok();
+            }
+            let _ = CloseHandle(snap);
+            all
+        };
+        let (before, ours, after) = (toolhelp(), processes(), toolhelp());
+        // Processes come and go between the snapshots; anything alive through all three
+        // must be in ours under the same name. Pid 0 is unnamed here, "[System Process]" there.
+        let steady: Vec<_> = before.iter().filter(|p| p.1 != 0 && after.contains(p)).collect();
+        assert!(steady.len() > 10);
+        for p in steady {
+            assert!(ours.contains(p), "{p:?} missing");
+        }
     }
 
     /// `cargo test --release sync_cost -- --ignored --nocapture`
