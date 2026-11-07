@@ -31,6 +31,9 @@ pub struct PitchShifter {
     last_lag: usize,
     /// Samples spent waiting for a good enough match before a downward jump.
     wait: u32,
+    /// Scratch for `best_lag`: the searched stretch of `buf` unwrapped, and its running energy.
+    line: Vec<f32>,
+    energy: Vec<f64>,
 }
 
 impl PitchShifter {
@@ -57,6 +60,8 @@ impl PitchShifter {
             corr_len,
             last_lag: max_lag,
             wait: 0,
+            line: vec![0.0; corr_len + max_lag],
+            energy: vec![0.0; corr_len + max_lag + 1],
         }
     }
 
@@ -81,19 +86,31 @@ impl PitchShifter {
 
     /// Lag (at most `longest`) that best lines up the audio behind `from` with the audio
     /// behind `from + sign*lag`, and its normalised correlation in -1..=1.
-    fn best_lag(&self, from: f32, sign: isize, longest: usize) -> (usize, f32) {
+    fn best_lag(&mut self, from: f32, sign: isize, longest: usize) -> (usize, f32) {
         let longest = longest.clamp(self.min_lag, self.max_lag);
+        let n = self.corr_len;
         let base = self.write as isize - from as isize;
+        // Unwrap every window the search can touch into one straight run, so the dot
+        // products below read contiguous memory and vectorise. Window ends at `x + n`
+        // (the audio behind `from`) and at `y(lag) + n`.
+        let start = if sign > 0 { base - (longest + n) as isize + 1 } else { base - n as isize + 1 };
+        let span = n + longest;
+        let mut sum = 0.0f64;
+        self.energy[0] = 0.0;
+        for k in 0..span {
+            let v = self.buf[(start + k as isize) as usize & self.mask];
+            self.line[k] = v;
+            sum += (v * v) as f64;
+            self.energy[k + 1] = sum;
+        }
+        let x = if sign > 0 { longest } else { 0 };
+        let y = |lag: usize| if sign > 0 { longest - lag } else { lag };
+        let (line, energy) = (&self.line[..span], &self.energy[..=span]);
+        let xx = (energy[x + n] - energy[x]) as f32 + 1e-9;
         let score = |lag: usize| {
-            let other = base - sign * lag as isize;
-            let (mut xy, mut xx, mut yy) = (0.0f32, 1e-9f32, 1e-9f32);
-            for j in 0..self.corr_len as isize {
-                let (a, b) = (self.at(base - j), self.at(other - j));
-                xy += a * b;
-                xx += a * a;
-                yy += b * b;
-            }
-            xy / (xx * yy).sqrt()
+            let y = y(lag);
+            let yy = (energy[y + n] - energy[y]) as f32 + 1e-9;
+            dot(&line[x..x + n], &line[y..y + n]) / (xx * yy).sqrt()
         };
         // Coarse pass every 2 samples, then refine around the winner.
         let mut best = (self.min_lag, f32::MIN);
@@ -175,6 +192,22 @@ impl PitchShifter {
         self.write = (self.write + 1) & self.mask;
         y
     }
+}
+
+/// Dot product in eight independent lanes, which the compiler turns into SIMD; a single
+/// running sum would have to be added up in order, one sample at a time.
+#[inline]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (a8, a_rest) = a.as_chunks::<8>();
+    let (b8, b_rest) = b.as_chunks::<8>();
+    for (x, y) in a8.iter().zip(b8) {
+        for k in 0..8 {
+            acc[k] += x[k] * y[k];
+        }
+    }
+    let tail: f32 = a_rest.iter().zip(b_rest).map(|(x, y)| x * y).sum();
+    acc.iter().sum::<f32>() + tail
 }
 
 /// Everything a voice is made of. Zero switches a stage off, so a recipe only names what it uses.
@@ -596,6 +629,50 @@ mod tests {
     fn shifts_down() {
         let f = shifted(300.0, -6.0);
         assert!((f - 300.0 * 2f32.powf(-0.5)).abs() <= 4.0, "got {f}");
+    }
+
+    #[test]
+    fn best_lag_matches_the_plain_search() {
+        // The straightforward version: score every lag sample by sample through the ring.
+        fn plain(p: &PitchShifter, from: f32, sign: isize, longest: usize) -> (usize, f32) {
+            let longest = longest.clamp(p.min_lag, p.max_lag);
+            let base = p.write as isize - from as isize;
+            let score = |lag: usize| {
+                let other = base - sign * lag as isize;
+                let (mut xy, mut xx, mut yy) = (0.0f32, 1e-9f32, 1e-9f32);
+                for j in 0..p.corr_len as isize {
+                    let (a, b) = (p.at(base - j), p.at(other - j));
+                    xy += a * b;
+                    xx += a * a;
+                    yy += b * b;
+                }
+                xy / (xx * yy).sqrt()
+            };
+            let mut best = (p.min_lag, f32::MIN);
+            for lag in (p.min_lag..=longest).step_by(2) {
+                let s = score(lag);
+                if s > best.1 {
+                    best = (lag, s);
+                }
+            }
+            for lag in [best.0.saturating_sub(1), best.0 + 1] {
+                if (p.min_lag..=longest).contains(&lag) && score(lag) > best.1 {
+                    best = (lag, score(lag));
+                }
+            }
+            best
+        }
+        let mut p = PitchShifter::new(SR);
+        let (low, high) = (speech(0.5), sine(611.0, 0.5));
+        // Run past the end of the ring so the windows wrap around it.
+        for (a, b) in low.iter().zip(&high) {
+            p.listen(a + 0.2 * b);
+        }
+        for (from, sign, longest) in [(10.0, 1, 1000), (700.0, -1, 650), (300.0, -1, 400), (0.0, 1, 500)] {
+            let (lag, score) = p.best_lag(from, sign, longest);
+            let (want, best) = plain(&p, from, sign, longest);
+            assert!(lag == want && (score - best).abs() < 1e-4, "{lag} {score} vs {want} {best}");
+        }
     }
 
     #[test]
