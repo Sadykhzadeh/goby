@@ -41,6 +41,15 @@ impl Producer {
         r.head.store(head + 1, Release);
         true
     }
+
+    /// Pushes `block` up to the first sample that does not fit; the rest is dropped.
+    pub fn push_all(&mut self, block: &[f32]) {
+        for s in block {
+            if !self.push(*s) {
+                break;
+            }
+        }
+    }
 }
 
 // Nobody asks whether it is empty: the reader wants the fill as a number.

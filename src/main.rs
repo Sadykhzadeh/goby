@@ -20,7 +20,7 @@ mod update;
 mod voices;
 
 // The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
-use goby_dsp::{dsp, mic, ring};
+use goby_dsp::{dsp, mic, ring, stream};
 
 fn main() -> windows::core::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

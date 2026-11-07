@@ -6,3 +6,4 @@ pub mod dsp;
 pub mod fx;
 pub mod mic;
 pub mod ring;
+pub mod stream;

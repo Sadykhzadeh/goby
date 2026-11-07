@@ -25,12 +25,11 @@ use crate::dsp::Voice;
 use crate::host::{Endpoint, SCOPE_LEN};
 use crate::lang::{tr, trf};
 use crate::mic::Mic;
-use crate::ring::{Consumer, Producer, ring};
+use crate::ring::{Producer, ring};
+use crate::stream::{Reader, Sample, blend, tap, to_mono};
 use crate::voices;
 
 pub const RATE: u32 = 48_000;
-/// Ring fill the outputs steer towards. Larger is safer, smaller is snappier.
-const TARGET_MS: f64 = 12.0;
 const MAX_BLOCK: usize = 4096;
 
 /// Lock-free knobs, meters and scope taps shared between the UI and the audio threads.
@@ -215,22 +214,6 @@ fn pcm_format(channels: u16, sample: Sample) -> WAVEFORMATEX {
     }
 }
 
-/// Turns one captured packet into mono float, whatever the stream delivers.
-unsafe fn to_mono(data: *const u8, frames: usize, channels: usize, sample: Sample, out: &mut [f32]) {
-    let n = frames * channels;
-    let read = |i: usize| unsafe {
-        match sample {
-            Sample::F32 => *(data as *const f32).add(i),
-            Sample::I32 => *(data as *const i32).add(i) as f32 / 2_147_483_648.0,
-            Sample::I16 => *(data as *const i16).add(i) as f32 / 32_768.0,
-        }
-    };
-    debug_assert!(out.len() >= frames && n >= frames);
-    for (f, o) in out[..frames].iter_mut().enumerate() {
-        *o = (0..channels).map(|c| read(f * channels + c)).sum::<f32>() / channels as f32;
-    }
-}
-
 fn float_format(channels: u16) -> WAVEFORMATEX {
     WAVEFORMATEX {
         wFormatTag: 3, // WAVE_FORMAT_IEEE_FLOAT
@@ -241,14 +224,6 @@ fn float_format(channels: u16) -> WAVEFORMATEX {
         wBitsPerSample: 32,
         cbSize: 0,
     }
-}
-
-/// Sample format of a stream's buffer; shared mode is always float, exclusive mode is not.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Sample {
-    F32,
-    I32,
-    I16,
 }
 
 struct Stream {
@@ -405,7 +380,9 @@ impl Engine {
             let (prod, cons) = ring(RATE as usize);
             producers.push(prod);
             let (id, stop, shared, tx) = (id.clone(), stop.clone(), shared.clone(), ready_tx.clone());
-            engine.threads.push(std::thread::spawn(move || render(&id, Reader::new(cons), i == 0, &stop, &shared, tx)));
+            engine
+                .threads
+                .push(std::thread::spawn(move || render(&id, Reader::new(cons, RATE), i == 0, &stop, &shared, tx)));
         }
         let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready_tx);
         engine.threads.push(std::thread::spawn(move || capture(&id, exclusive, producers, &stop2, &shared2, tx)));
@@ -482,14 +459,12 @@ fn render(id: &str, mut reader: Reader, measure: bool, stop: &AtomicBool, shared
                 continue;
             }
             let buf = std::slice::from_raw_parts_mut(out.GetBuffer(n)? as *mut f32, n as usize * s.channels);
-            for frame in buf.chunks_exact_mut(s.channels) {
-                frame.fill(reader.next());
-            }
+            reader.render(buf, s.channels);
             out.ReleaseBuffer(n, 0)?;
             if measure {
                 // Right after a write the device queue is full: ring + queue.
-                shared.queued_frames.store(reader.ring.len() as u32 + queue, Relaxed);
-                shared.underruns.store(reader.underruns, Relaxed);
+                shared.queued_frames.store(reader.queued() as u32 + queue, Relaxed);
+                shared.underruns.store(reader.underruns(), Relaxed);
             }
         }
         Ok(())
@@ -552,27 +527,17 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
                         dry[..len].copy_from_slice(chunk);
                     }
                     let start = shared.scope_pos.load(Relaxed);
-                    for (i, s) in chunk.iter().enumerate() {
-                        shared.scope_in[(start + i) % SCOPE_LEN].store(s.to_bits(), Relaxed);
-                    }
+                    tap(&shared.scope_in, start, chunk);
                     voice.process(chunk);
                     if mix > 0.0 {
-                        for (s, d) in chunk.iter_mut().zip(&dry[..len]) {
-                            *s = *s * (1.0 - mix) + d * mix;
-                        }
+                        blend(chunk, &dry[..len], mix);
                     }
-                    for (i, s) in chunk.iter().enumerate() {
-                        shared.scope_out[(start + i) % SCOPE_LEN].store(s.to_bits(), Relaxed);
-                    }
+                    tap(&shared.scope_out, start, chunk);
                     shared.scope_pos.store((start + len) % SCOPE_LEN, Relaxed);
 
                     for out in &mut outs {
                         // A full ring means that output stalled; dropping is the right call.
-                        for s in chunk.iter() {
-                            if !out.push(*s) {
-                                break;
-                            }
-                        }
+                        out.push_all(chunk);
                     }
                 }
                 cap.ReleaseBuffer(n)?;
@@ -584,97 +549,9 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
     });
 }
 
-/// Pulls processed audio from the ring at the output's own clock.
-pub struct Reader {
-    ring: Consumer,
-    frac: f64,
-    s0: f32,
-    s1: f32,
-    target: f64,
-    fill: f64,
-    /// Fill at which playback (re)starts: the target plus half a mic packet, so the ring
-    /// starts out at the top of its sawtooth rather than the bottom.
-    start: f64,
-    priming: bool,
-    underruns: u32,
-}
-
-impl Reader {
-    fn new(ring: Consumer) -> Self {
-        let target = RATE as f64 * TARGET_MS / 1000.0;
-        Self { ring, frac: 0.0, s0: 0.0, s1: 0.0, target, fill: target, start: target, priming: true, underruns: 0 }
-    }
-
-    /// Sizes the cushion from the mic's packet and this output's period, both in frames;
-    /// a packet of 0 keeps the default. The ring has to bridge one mic packet plus 2 ms of
-    /// scheduling jitter. When the output takes much smaller bites than the mic delivers
-    /// (10 ms shared-mode packets into the cable's 2.67 ms periods), the fill sweeps evenly
-    /// over a packet, so half a packet plus one period is enough to never run dry.
-    fn set_target(&mut self, packet: u32, period: u32) {
-        if packet == 0 {
-            return;
-        }
-        let slack = RATE / 500;
-        let frames = (packet + slack).min(packet / 2 + period + slack) as f64;
-        if frames != self.target {
-            self.target = frames;
-            self.fill = frames;
-        }
-        self.start = frames + (packet / 2) as f64;
-    }
-
-    fn next(&mut self) -> f32 {
-        let avail = self.ring.len() as f64;
-        if self.priming {
-            if avail < self.start {
-                return 0.0;
-            }
-            self.priming = false;
-        }
-        // After a long stall, throw away the backlog instead of playing it late.
-        if avail > self.target * 4.0 {
-            self.ring.skip((avail - self.target) as usize);
-        }
-        self.fill += (avail - self.fill) * 0.0005;
-        // Proportional nudge, capped at ±0.5 %: inaudible, but enough for any real clock drift.
-        let nudge = ((self.fill - self.target) / self.target * 0.02).clamp(-0.005, 0.005);
-        self.frac += 1.0 + nudge;
-        while self.frac >= 1.0 {
-            self.frac -= 1.0;
-            self.s0 = self.s1;
-            match self.ring.pop() {
-                Some(s) => self.s1 = s,
-                None => {
-                    self.priming = true;
-                    self.underruns += 1;
-                    return 0.0;
-                }
-            }
-        }
-        self.s0 + (self.s1 - self.s0) * self.frac as f32
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exclusive_formats_turn_into_mono_float() {
-        let mut out = [0.0f32; 2];
-        let i16_stereo: [i16; 4] = [16384, -16384, i16::MAX, i16::MAX];
-        unsafe { to_mono(i16_stereo.as_ptr() as *const u8, 2, 2, Sample::I16, &mut out) };
-        assert_eq!(out[0], 0.0);
-        assert!((out[1] - 1.0).abs() < 1e-4);
-
-        let i32_mono: [i32; 2] = [i32::MIN, 1 << 30];
-        unsafe { to_mono(i32_mono.as_ptr() as *const u8, 2, 1, Sample::I32, &mut out) };
-        assert_eq!(out, [-1.0, 0.5]);
-
-        let f32_stereo: [f32; 4] = [0.25, 0.75, -1.0, 0.0];
-        unsafe { to_mono(f32_stereo.as_ptr() as *const u8, 2, 2, Sample::F32, &mut out) };
-        assert_eq!(out, [0.5, -0.5]);
-    }
 
     #[test]
     fn audio_threads_flush_denormals() {
@@ -695,80 +572,6 @@ mod tests {
             let (align, rate) = (f.nBlockAlign, f.nAvgBytesPerSec);
             assert_eq!(align, bits / 8 * ch);
             assert_eq!(rate, RATE * align as u32);
-        }
-    }
-
-    #[test]
-    fn a_smaller_mic_packet_shrinks_the_cushion() {
-        // Exclusive mode: 3 ms packets, so the reader aims for 5 ms instead of 12.
-        let (mut prod, cons) = ring(RATE as usize);
-        let mut r = Reader::new(cons);
-        let target = RATE * 5 / 1000;
-        r.set_target(RATE * 3 / 1000, 128);
-        assert_eq!(r.target, target as f64);
-        let mut fed = 0.0f64;
-        for _ in 0..20_000 {
-            fed += RATE as f64 / 1000.0;
-            while fed >= 1.0 {
-                prod.push(0.1);
-                fed -= 1.0;
-            }
-            for _ in 0..RATE / 1000 {
-                r.next();
-            }
-        }
-        let fill = r.ring.len() as u32;
-        assert!(fill.abs_diff(target) < target / 2, "fill {fill}, target {target}");
-        assert_eq!(r.underruns, 0);
-    }
-
-    #[test]
-    fn shared_mode_packets_reach_the_cable_without_gaps() {
-        // 10 ms mic packets, each up to 1 ms late, into the cable's 2.67 ms periods: the
-        // cushion stays under one packet and the cable never runs dry, from the first packet on.
-        let (packet, period) = (RATE / 100, 128);
-        for drift in [-0.002, 0.0, 0.002] {
-            let (mut prod, cons) = ring(RATE as usize);
-            let mut r = Reader::new(cons);
-            r.set_target(packet, period);
-            assert!(r.target < packet as f64, "target {} frames", r.target);
-            let (mut seed, mut sent, mut due) = (1u32, 0u32, 0.0f64);
-            for t in 0..RATE * 60 {
-                if t as f64 >= due {
-                    (0..packet).for_each(|_| _ = prod.push(0.1));
-                    sent += 1;
-                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                    let late = (seed >> 16) as f64 / 65_536.0 * RATE as f64 / 1000.0;
-                    due = (sent * packet) as f64 / (1.0 + drift) + late;
-                }
-                if t % period == 0 {
-                    (0..period).for_each(|_| _ = r.next());
-                }
-            }
-            assert_eq!(r.underruns, 0, "drift {drift}");
-        }
-    }
-
-    #[test]
-    fn fill_stays_near_target_under_clock_drift() {
-        let target = (RATE as f64 * TARGET_MS / 1000.0) as usize;
-        for drift in [-0.002, 0.0, 0.002] {
-            // Feed RATE * (1 + drift) samples per second, read RATE per second, for 60 s.
-            let (mut prod, cons) = ring(RATE as usize);
-            let mut r = Reader::new(cons);
-            let mut fed = 0.0f64;
-            for _ in 0..60_000 {
-                fed += RATE as f64 * (1.0 + drift) / 1000.0;
-                while fed >= 1.0 {
-                    prod.push(0.1);
-                    fed -= 1.0;
-                }
-                for _ in 0..RATE / 1000 {
-                    r.next();
-                }
-            }
-            let fill = r.ring.len();
-            assert!(fill.abs_diff(target) < target / 2, "drift {drift}: fill {fill}, target {target}");
         }
     }
 
