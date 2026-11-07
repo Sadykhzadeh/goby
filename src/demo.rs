@@ -99,7 +99,7 @@ fn tone_through(p: Params) -> ([f32; SCOPE_LEN], [f32; SCOPE_LEN]) {
     let mut out = tone.clone();
     let mut voice = Voice::new(SR);
     let (def, tone_st) = if p.enabled { (&voices::ALL[p.voice], p.tone) } else { (&voices::ALL[0], 0.0) };
-    voice.set(&def.recipe, tone_st, p.volume);
+    voice.set(&def.recipe(), tone_st, p.volume);
     voice.process(&mut out);
     let mix = if p.enabled { p.dry_mix } else { 0.0 };
     let tail = tone.len() - SCOPE_LEN;

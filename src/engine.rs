@@ -20,7 +20,7 @@ use windows::Win32::System::Com::{
 use windows::Win32::System::Threading::{AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject};
 use windows::core::{HSTRING, Interface, PWSTR, Result as WinResult, w};
 
-use crate::dsp::Voice;
+use crate::dsp::{Recipe, Voice};
 use crate::host::{Endpoint, SCOPE_LEN};
 use crate::lang::{tr, trf};
 use crate::mic::Mic;
@@ -522,6 +522,8 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
         let mut input = vec![0.0f32; s.frames.max(MAX_BLOCK as u32) as usize * 2];
         let cap: IAudioCaptureClient = s.client.GetService()?;
         let mut voice = Voice::new(RATE);
+        // The full recipe of the voice in use, rebuilt from its changes only when it switches.
+        let mut recipe = (usize::MAX, Recipe::DRY);
         let mut mic = Mic::new(RATE);
         let mut block = vec![0.0f32; MAX_BLOCK];
         let mut dry = vec![0.0f32; MAX_BLOCK];
@@ -550,7 +552,10 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
                 let gate = Some(f32::from_bits(shared.gate_db.load(Relaxed))).filter(|g| !g.is_nan());
                 let mix = if enabled { f32::from_bits(shared.dry_mix.load(Relaxed)) } else { 0.0 };
                 let gain = f32::from_bits(shared.gain.load(Relaxed));
-                voice.set(&def.recipe, semis, gain);
+                if recipe.0 != chosen {
+                    recipe = (chosen, def.recipe());
+                }
+                voice.set(&recipe.1, semis, gain);
 
                 let mut done = 0;
                 while done < frames {

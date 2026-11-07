@@ -43,21 +43,110 @@ pub struct VoiceDef {
     /// Stable key for settings files; never rename.
     pub id: &'static str,
     pub category: Category,
-    pub recipe: Recipe,
+    /// The recipe as what it changes from `Recipe::DRY`, field number and value. A voice
+    /// names four of the 34 fields on average, so this keeps 8 KB of zeros out of the
+    /// executable.
+    changes: &'static [(u8, f32)],
 }
 
 impl VoiceDef {
     pub fn name(&self) -> &'static str {
         crate::lang::voice(self.id)
     }
+
+    // Inlined, the field numbering is copied into each caller: 3 KB more.
+    #[inline(never)]
+    pub fn recipe(&self) -> Recipe {
+        let mut r = D;
+        for &(field, value) in self.changes {
+            set(&mut r, field, value);
+        }
+        r
+    }
 }
 
 const D: Recipe = Recipe::DRY;
 
-macro_rules! voice {
-    ($id:literal, $cat:ident, { $($field:ident: $value:expr),* $(,)? }) => {
-        VoiceDef { id: $id, category: Category::$cat, recipe: Recipe { $($field: $value,)* ..D } }
+/// Numbers every field of `Recipe`, and makes `changes`, which lists the fields of a recipe
+/// that differ from `D` while compiling, and `set`, which puts one back.
+macro_rules! fields {
+    ($($n:literal: $field:ident $([$i:literal])? as $kind:ident),* $(,)?) => {
+        const fn changes(r: &Recipe, out: &mut [(u8, f32)]) -> usize {
+            let mut n = 0;
+            $(
+                let value = fields!(@get $kind, r.$field $([$i])?);
+                if value != fields!(@get $kind, D.$field $([$i])?) {
+                    if n < out.len() {
+                        out[n] = ($n, value);
+                    }
+                    n += 1;
+                }
+            )*
+            n
+        }
+
+        fn set(r: &mut Recipe, field: u8, value: f32) {
+            match field {
+                $($n => r.$field $([$i])? = fields!(@put $kind, value),)*
+                _ => {}
+            }
+        }
     };
+    (@get f32, $e:expr) => { $e };
+    (@get u32, $e:expr) => { $e as f32 };
+    (@get bool, $e:expr) => { if $e { 1.0 } else { 0.0 } };
+    (@put f32, $v:expr) => { $v };
+    (@put u32, $v:expr) => { $v as u32 };
+    (@put bool, $v:expr) => { $v != 0.0 };
+}
+
+fields! {
+    0: pitch as f32,
+    1: harmony[0] as f32,
+    2: harmony[1] as f32,
+    3: harmony_mix as f32,
+    4: vibrato_hz as f32,
+    5: vibrato_cents as f32,
+    6: wobble_hz as f32,
+    7: wobble_cents as f32,
+    8: ring_hz as f32,
+    9: ring_mix as f32,
+    10: whisper as f32,
+    11: vocoder_hz as f32,
+    12: vocoder_chord as bool,
+    13: comb_ms as f32,
+    14: comb_feedback as f32,
+    15: chorus as f32,
+    16: flanger_hz as f32,
+    17: flanger_mix as f32,
+    18: tremolo_hz as f32,
+    19: tremolo_depth as f32,
+    20: highpass_hz as f32,
+    21: lowpass_hz as f32,
+    22: drive as f32,
+    23: hard_clip as bool,
+    24: crush_hz as f32,
+    25: crush_bits as u32,
+    26: hiss as f32,
+    27: echo_ms as f32,
+    28: echo_feedback as f32,
+    29: echo_mix as f32,
+    30: reverb_size as f32,
+    31: reverb_damp as f32,
+    32: reverb_mix as f32,
+    33: gain as f32,
+}
+
+macro_rules! voice {
+    ($id:literal, $cat:ident, { $($field:ident: $value:expr),* $(,)? }) => {{
+        const R: Recipe = Recipe { $($field: $value,)* ..D };
+        const C: [(u8, f32); changes(&R, &mut [])] = {
+            let mut c = [(0, 0.0); changes(&R, &mut [])];
+            changes(&R, &mut c);
+            c
+        };
+        VoiceDef { id: $id, category: Category::$cat, changes: &C }
+    }};
 }
 
 pub static ALL: &[VoiceDef] = &[
@@ -150,7 +239,7 @@ pub fn glyphs(points: usize) -> Vec<Vec<f32>> {
     ALL.iter()
         .map(|def| {
             let mut voice = Voice::new(SR);
-            voice.set(&def.recipe, 0.0, 1.0);
+            voice.set(&def.recipe(), 0.0, 1.0);
             buf.copy_from_slice(&tone);
             voice.process(&mut buf);
             let tail = &buf[buf.len() - SR as usize / 50..];
@@ -163,6 +252,64 @@ pub fn glyphs(points: usize) -> Vec<Vec<f32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_recipe_field_survives_being_stored_as_changes() {
+        // Every field named and none left at its dry value: a new field must be numbered.
+        let full = Recipe {
+            pitch: 1.0,
+            harmony: [2.0, 3.0],
+            harmony_mix: 4.0,
+            vibrato_hz: 5.0,
+            vibrato_cents: 6.0,
+            wobble_hz: 7.0,
+            wobble_cents: 8.0,
+            ring_hz: 9.0,
+            ring_mix: 10.0,
+            whisper: 11.0,
+            vocoder_hz: 12.0,
+            vocoder_chord: true,
+            comb_ms: 13.0,
+            comb_feedback: 14.0,
+            chorus: 15.0,
+            flanger_hz: 16.0,
+            flanger_mix: 17.0,
+            tremolo_hz: 18.0,
+            tremolo_depth: 19.0,
+            highpass_hz: 20.0,
+            lowpass_hz: 21.0,
+            drive: 22.0,
+            hard_clip: true,
+            crush_hz: 23.0,
+            crush_bits: 24,
+            hiss: 25.0,
+            echo_ms: 26.0,
+            echo_feedback: 27.0,
+            echo_mix: 28.0,
+            reverb_size: 29.0,
+            reverb_damp: 30.0,
+            reverb_mix: 31.0,
+            gain: 32.0,
+        };
+        let mut list = [(0, 0.0); 34];
+        assert_eq!(changes(&full, &mut list), 34);
+        assert_eq!(VoiceDef { id: "", category: Category::Fun, changes: Box::leak(Box::new(list)) }.recipe(), full);
+        assert_eq!(changes(&D, &mut []), 0);
+        let demon = &ALL[index_of("demon").unwrap()];
+        assert_eq!(
+            demon.recipe(),
+            Recipe {
+                pitch: -8.0,
+                harmony: [-12.0, 0.0],
+                harmony_mix: 0.45,
+                drive: 2.5,
+                reverb_size: 0.8,
+                reverb_damp: 0.4,
+                reverb_mix: 0.25,
+                ..D
+            }
+        );
+    }
 
     #[test]
     fn ids_are_plain() {
@@ -185,7 +332,7 @@ mod tests {
 
     fn run(def: &VoiceDef, input: &[f32]) -> Vec<f32> {
         let mut v = Voice::new(SR);
-        v.set(&def.recipe, 0.0, 1.0);
+        v.set(&def.recipe(), 0.0, 1.0);
         let mut out = input.to_vec();
         for block in out.chunks_mut(480) {
             v.process(block);
@@ -270,7 +417,7 @@ mod tests {
     #[test]
     fn switching_voices_does_not_click() {
         let ids = ["off", "minion", "giant", "radio", "bass", "helium", "robot", "demon", "man"];
-        let recipes: Vec<crate::dsp::Recipe> = ids.iter().map(|id| ALL[index_of(id).unwrap()].recipe).collect();
+        let recipes: Vec<crate::dsp::Recipe> = ids.iter().map(|id| ALL[index_of(id).unwrap()].recipe()).collect();
         let input = speech(3.0);
         let run = |pick: &dyn Fn(usize) -> usize| {
             let mut v = Voice::new(SR);
@@ -329,7 +476,7 @@ mod tests {
         let mut worst = (0.0f64, "");
         for def in ALL {
             let (mut mic, mut voice) = (crate::mic::Mic::new(SR), Voice::new(SR));
-            voice.set(&def.recipe, 0.0, 1.0);
+            voice.set(&def.recipe(), 0.0, 1.0);
             let mut out = input.clone();
             let t = std::time::Instant::now();
             for block in out.chunks_mut(480) {

@@ -121,7 +121,7 @@ pub extern "C" fn process(n: usize) {
     let def = &voices::ALL[if e.enabled { e.chosen } else { 0 }];
     let tone = if e.enabled { e.tone } else { 0.0 };
     let mix = if e.enabled { e.mix } else { 0.0 };
-    e.voice.set(&def.recipe, tone, e.volume);
+    e.voice.set(&def.recipe(), tone, e.volume);
     let chunk = &mut e.block[..n];
     e.mic.process(chunk, e.gain_db, e.gate_db);
     if mix > 0.0 {
