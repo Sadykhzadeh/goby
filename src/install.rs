@@ -79,11 +79,11 @@ fn make_shortcut(link: &str, target: &str) -> Result<()> {
 }
 
 fn set_string(key: HKEY, name: &str, value: &str) {
-    let mut wide: Vec<u16> = value.encode_utf16().collect();
-    wide.push(0);
-    let data: Vec<u8> = wide.iter().flat_map(|c| c.to_le_bytes()).collect();
+    // An HSTRING is already UTF-16 with its terminating NUL, which is what REG_SZ wants.
+    let value = HSTRING::from(value);
     unsafe {
-        let _ = RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(&data));
+        let data = std::slice::from_raw_parts(value.as_ptr().cast::<u8>(), (value.len() + 1) * 2);
+        let _ = RegSetValueExW(key, &HSTRING::from(name), None, REG_SZ, Some(data));
     }
 }
 
