@@ -2,8 +2,7 @@
 //! to the installer. The checking itself, and everything that makes a download
 //! trustworthy, is in `crate::update`; the card that offers it is shared with the website.
 
-use std::fs::File;
-use std::path::PathBuf;
+use crate::files::File;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -29,7 +28,7 @@ const EVERY: u64 = 20 * 60 * 60;
 #[derive(Default)]
 pub struct Inbox {
     checked: Option<Option<Manifest>>,
-    downloaded: Option<Option<(PathBuf, File)>>,
+    downloaded: Option<Option<(String, File)>>,
 }
 
 fn now() -> u64 {
@@ -112,7 +111,7 @@ impl Win {
             self.dirty = true;
             return;
         };
-        let exe = HSTRING::from(path.as_os_str());
+        let exe = HSTRING::from(path.as_str());
         install::launch(&exe, "--install --run", None, SW_SHOWNORMAL);
         drop(lock);
     }

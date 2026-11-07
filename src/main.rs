@@ -5,6 +5,7 @@ mod apps;
 mod demo;
 mod draw;
 mod engine;
+mod files;
 mod gfx;
 mod host;
 mod hotkeys;

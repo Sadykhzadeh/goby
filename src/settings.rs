@@ -1,6 +1,8 @@
 //! Remembers the last devices and voice in %APPDATA%\Goby\settings.ini (plain key=value).
 
-use std::path::PathBuf;
+// The website builds this file too; it keeps its settings in the page, not in files.
+#[cfg(windows)]
+use crate::files;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -125,14 +127,16 @@ fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
     v.parse::<f32>().ok().filter(|x| x.is_finite()).unwrap_or(default).clamp(lo, hi)
 }
 
-fn path() -> Option<PathBuf> {
-    Settings::dir().map(|d| d.join("settings.ini"))
+#[cfg(windows)]
+fn path() -> Option<String> {
+    Settings::dir().map(|d| format!("{d}\\settings.ini"))
 }
 
 impl Settings {
     /// `%APPDATA%\Goby`, where the settings live.
-    pub fn dir() -> Option<PathBuf> {
-        std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("Goby"))
+    #[cfg(windows)]
+    pub fn dir() -> Option<String> {
+        std::env::var("APPDATA").ok().map(|d| format!("{}\\Goby", d.trim_end_matches('\\')))
     }
 
     pub fn parse(text: &str) -> Settings {
@@ -209,19 +213,21 @@ impl Settings {
         )
     }
 
+    #[cfg(windows)]
     pub fn load() -> Settings {
-        path().and_then(|p| std::fs::read_to_string(p).ok()).map(|t| Settings::parse(&t)).unwrap_or_default()
+        let text = path().and_then(|p| files::read(&p)).and_then(|b| String::from_utf8(b).ok());
+        text.map(|t| Settings::parse(&t)).unwrap_or_default()
     }
 
+    #[cfg(windows)]
     pub fn save(&self) {
-        if let Some(p) = path() {
-            if let Some(dir) = p.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
+        if let Some(dir) = Settings::dir() {
+            let _ = files::create_dirs(&dir);
             // Write then rename, so a crash mid-write never leaves a half file behind.
-            let tmp = p.with_extension("ini.tmp");
-            if std::fs::write(&tmp, self.render()).is_ok() {
-                let _ = std::fs::rename(&tmp, &p);
+            let p = format!("{dir}\\settings.ini");
+            let tmp = format!("{p}.tmp");
+            if files::write(&tmp, self.render().as_bytes()) {
+                let _ = files::rename(&tmp, &p);
             }
         }
     }

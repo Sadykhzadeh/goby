@@ -4,10 +4,6 @@
 //! takes one over, can hand out a different program. Both hosts are asked and the newest
 //! verified version wins, so one of them going down or falling behind changes nothing.
 
-use std::fs::File;
-use std::io::{Read, Write};
-use std::path::PathBuf;
-
 use windows::Win32::Foundation::STATUS_SUCCESS;
 use windows::Win32::Networking::WinHttp::*;
 use windows::Win32::Security::Cryptography::{
@@ -17,6 +13,8 @@ use windows::Win32::Security::Cryptography::{
     BCryptOpenAlgorithmProvider, BCryptVerifySignature,
 };
 use windows::core::{HSTRING, PCWSTR, w};
+
+use crate::files::{self, File};
 
 /// The public half of the release key, X then Y. The private half is kept encrypted with
 /// the author's other secrets and signs every release's manifest.
@@ -234,35 +232,23 @@ pub fn check() -> Option<Manifest> {
 /// Downloads the release, checks its size and SHA-256 against the signed manifest, and
 /// returns it opened read-only with writes shut out, so it cannot change between the
 /// check and its start. The handle is closed once the new copy has started.
-pub fn download(m: &Manifest) -> Option<(PathBuf, File)> {
-    let dir = crate::settings::Settings::dir()?.join("update");
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("goby-{}.exe", show(m.version)));
+pub fn download(m: &Manifest) -> Option<(String, File)> {
+    let dir = format!("{}\\update", crate::settings::Settings::dir()?);
+    files::create_dirs(&dir).ok()?;
+    let path = format!("{dir}\\goby-{}.exe", show(m.version));
     let body = m.urls.iter().find_map(|url| get(url, m.size).filter(|b| b.len() as u64 == m.size))?;
-    if sha256(&body) != m.sha256 {
+    if sha256(&body) != m.sha256 || !files::write(&path, &body) {
         return None;
     }
-    {
-        let mut file = File::create(&path).ok()?;
-        file.write_all(&body).ok()?;
-    }
-    let mut file = locked(&path)?;
-    let mut again = Vec::new();
-    file.read_to_end(&mut again).ok()?;
+    let file = File::locked(&path)?;
+    let again = file.read_all()?;
     (sha256(&again) == m.sha256).then_some((path, file))
-}
-
-/// Opens `path` for reading while letting others read it too, but not write or delete it.
-fn locked(path: &std::path::Path) -> Option<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    const FILE_SHARE_READ: u32 = 1;
-    std::fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(path).ok()
 }
 
 /// Leftover downloads of earlier updates.
 pub fn tidy() {
     if let Some(dir) = crate::settings::Settings::dir() {
-        let _ = std::fs::remove_dir_all(dir.join("update"));
+        files::remove_dir_all(&format!("{dir}\\update"));
     }
 }
 
@@ -320,7 +306,7 @@ mod tests {
         for source in SOURCES {
             let m = fetch(source).unwrap_or_else(|| panic!("no signed manifest at {source}"));
             let (path, _lock) = download(&m).expect("download that matches the manifest");
-            println!("{source}: {} ({} bytes) -> {}", show(m.version), m.size, path.display());
+            println!("{source}: {} ({} bytes) -> {path}", show(m.version), m.size);
         }
     }
 
