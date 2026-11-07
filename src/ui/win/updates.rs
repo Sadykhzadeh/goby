@@ -37,14 +37,14 @@ fn now() -> u64 {
 }
 
 /// Runs `work` on a thread of its own and wakes the window with `msg` when it is done.
-fn in_background(hwnd: HWND, msg: u32, work: impl FnOnce() + Send + 'static) {
+fn in_background(hwnd: HWND, msg: u32, work: Box<dyn FnOnce() + Send>) {
     let raw = hwnd.0 as isize;
-    std::thread::spawn(move || {
+    crate::spawn(Box::new(move || {
         work();
         unsafe {
             let _ = PostMessageW(Some(HWND(raw as _)), msg, WPARAM(0), LPARAM(0));
         }
-    });
+    }));
 }
 
 /// Starts the daily check, a little after start-up so it never competes with the audio.
@@ -53,13 +53,17 @@ pub(super) fn check(host: &mut Desktop, settings: &Settings, delay: Duration) {
         return;
     }
     let inbox = host.inbox.clone();
-    in_background(host.hwnd, WM_UPDATE_CHECKED, move || {
-        std::thread::sleep(delay);
-        let found = update::check();
-        if let Ok(mut inbox) = inbox.lock() {
-            inbox.checked = Some(found);
-        }
-    });
+    in_background(
+        host.hwnd,
+        WM_UPDATE_CHECKED,
+        Box::new(move || {
+            std::thread::sleep(delay);
+            let found = update::check();
+            if let Ok(mut inbox) = inbox.lock() {
+                inbox.checked = Some(found);
+            }
+        }),
+    );
 }
 
 /// The installed copy downloads and installs the update; a portable one, which Goby does
@@ -71,12 +75,16 @@ pub(super) fn install(host: &mut Desktop) {
         return;
     }
     let inbox = host.inbox.clone();
-    in_background(host.hwnd, WM_UPDATE_READY, move || {
-        let file = update::download(&m);
-        if let Ok(mut inbox) = inbox.lock() {
-            inbox.downloaded = Some(file);
-        }
-    });
+    in_background(
+        host.hwnd,
+        WM_UPDATE_READY,
+        Box::new(move || {
+            let file = update::download(&m);
+            if let Ok(mut inbox) = inbox.lock() {
+                inbox.downloaded = Some(file);
+            }
+        }),
+    );
 }
 
 impl Win {
