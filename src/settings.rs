@@ -116,6 +116,12 @@ fn list(v: &str) -> Vec<String> {
     v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect()
 }
 
+/// A knob's value, or `default` when it is not a finite number. "NaN" parses as a float
+/// and comes through `clamp` unchanged, and one NaN gain turns every sample after it to NaN.
+fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
+    v.parse::<f32>().ok().filter(|x| x.is_finite()).unwrap_or(default).clamp(lo, hi)
+}
+
 fn path() -> Option<PathBuf> {
     Settings::dir().map(|d| d.join("settings.ini"))
 }
@@ -127,6 +133,8 @@ impl Settings {
     }
 
     pub fn parse(text: &str) -> Settings {
+        // Notepad can put a byte-order mark in front of the first key when it saves.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut s = Settings::default();
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
             let v = v.trim();
@@ -134,13 +142,13 @@ impl Settings {
                 "input" => s.input = v.to_string(),
                 "output" => s.output = v.to_string(),
                 "voice" => s.voice = v.to_string(),
-                "semitones" => s.semitones = v.parse::<f32>().unwrap_or(s.semitones).clamp(-12.0, 12.0),
-                "volume" => s.volume = v.parse::<f32>().unwrap_or(s.volume).clamp(0.0, 2.0),
+                "semitones" => s.semitones = number(v, s.semitones, -12.0, 12.0),
+                "volume" => s.volume = number(v, s.volume, 0.0, 2.0),
                 "monitor" => s.monitor = v == "1",
                 "enabled" => s.enabled = v != "0",
-                "mic_gain_db" => s.mic_gain_db = v.parse::<f32>().unwrap_or(s.mic_gain_db).clamp(-12.0, 24.0),
+                "mic_gain_db" => s.mic_gain_db = number(v, s.mic_gain_db, -12.0, 24.0),
                 "gate" => s.gate = v == "1",
-                "gate_db" => s.gate_db = v.parse::<f32>().unwrap_or(s.gate_db).clamp(-80.0, -10.0),
+                "gate_db" => s.gate_db = number(v, s.gate_db, -80.0, -10.0),
                 "exclusive_mic" => s.exclusive = v == "1",
                 "routed" => s.routed = list(v),
                 "unroute" => s.unroute = list(v),
@@ -152,7 +160,7 @@ impl Settings {
                 "presets" => s.presets = presets(v),
                 "updates" => s.updates = v != "0",
                 "update_checked" => s.update_checked = v.parse().unwrap_or(0),
-                "dry_mix" => s.dry_mix = v.parse::<f32>().unwrap_or(s.dry_mix).clamp(0.0, 1.0),
+                "dry_mix" => s.dry_mix = number(v, s.dry_mix, 0.0, 1.0),
                 _ => {}
             }
         }
@@ -277,6 +285,27 @@ mod tests {
         );
         assert!(s.presets[0].matches("demon", 3.001, 0.2, 1.0));
         assert!(!s.presets[0].matches("demon", 3.0, 0.3, 1.0));
+    }
+
+    #[test]
+    fn numbers_that_are_not_finite_fall_back_to_defaults() {
+        let s =
+            Settings::parse("voice=demon\nsemitones=NaN\nvolume=nan\nmic_gain_db=-NaN\ndry_mix=inf\ngate_db=-inf\n");
+        let d = Settings::default();
+        assert_eq!(
+            (s.semitones, s.volume, s.mic_gain_db, s.dry_mix, s.gate_db),
+            (d.semitones, d.volume, d.mic_gain_db, d.dry_mix, d.gate_db)
+        );
+        assert_eq!(Settings::parse("volume=1e9\n").volume, 2.0, "finite but wild values are still clamped");
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_cost_the_first_line() {
+        let s = Settings::parse("\u{feff}input={0.0.1.00000000}.{abc}\nvoice=demon\nsemitones=3\n");
+        assert_eq!(s.input, "{0.0.1.00000000}.{abc}");
+        assert_eq!((s.voice.as_str(), s.semitones), ("demon", 3.0));
+        let s = Settings::parse("\u{feff}voice=demon\nsemitones=3\n");
+        assert_eq!(s.semitones, 3.0, "a marked voice= line still says the file is a new one");
     }
 
     #[test]
