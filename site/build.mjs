@@ -314,7 +314,7 @@ ${app}
   </section>
 
   <section class="facts">
-    <p>About <b>28 ms</b> from your mouth to the game. Under <b>0.4 %</b> of one core for the heaviest voice. Updates only from <b>signed</b> releases. Nothing sent anywhere else.</p>
+    <p>About <b>28 ms</b> from your mouth to the game. Under <b>0.4 %</b> of one core for the heaviest voice.</p>
   </section>
 
   <section class="playing">
@@ -362,7 +362,7 @@ ${app}
     <span>Goby ${version} · GPL-3.0</span>
     <a href="${repo}">GitHub</a>
     <a href="${repo}/releases">All releases</a>
-    <small class="credit">done with <span aria-hidden="true" class="heart">♥</span> by <a href="https://azer.one">azer.one</a></small>
+    <a class="credit" href="https://azer.one">done with <span aria-hidden="true" class="heart">♥</span> by azer.one</a>
   </div>
   <span class="word" aria-hidden="true">goby</span>
 </footer>
