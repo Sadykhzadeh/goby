@@ -99,18 +99,48 @@ impl App {
         y += 36.0;
 
         match &self.cable {
+            // Setup in three steps; the last one ticks itself once the cable shows up.
             None => {
-                let none = self.t(
-                    "Установите бесплатный VB-Cable и перезапустите Goby",
-                    "Install the free VB-Cable, then restart Goby",
+                let title = self.t("Подключите Goby к играм", "Connect Goby to games");
+                g.text(title, Font::Strong, R::new(x + 2.0, y, w, 20.0), Align::Start, th.text())?;
+                y += 24.0;
+                let why = self.t(
+                    "Голос попадает в программы через бесплатный виртуальный кабель. Это делается один раз.",
+                    "The voice reaches programs through a free virtual cable. This is done once.",
                 );
-                let title = self.t("Нет виртуального кабеля", "No virtual cable");
-                self.row_card(g, &mut y, Hit::CableSite, glyph::GAME, title, none)?;
+                g.text(why, Font::Caption, R::new(x + 2.0, y, w, 18.0), Align::Start, th.text_secondary())?;
+                y += 28.0;
+                let (title, desc) = (
+                    self.t("Скачайте VB-Cable", "Download VB-Cable"),
+                    self.t("Бесплатно, с сайта его автора, vb-audio.com", "Free, from its author's site, vb-audio.com"),
+                );
+                self.step_card(g, &mut y, 1, self.cable_opened, Hit::CableSite, title, desc)?;
+                let (title, desc) = (
+                    self.t("Установите его", "Install it"),
+                    self.t(
+                        "Распакуйте, запустите VBCABLE_Setup_x64.exe от администратора, Install Driver",
+                        "Unzip it, run VBCABLE_Setup_x64.exe as administrator, press Install Driver",
+                    ),
+                );
+                self.step_card(g, &mut y, 2, false, Hit::Downloads, title, desc)?;
+                let (title, desc) = (
+                    self.t("Goby подключится сам", "Goby connects by itself"),
+                    self.t(
+                        "Ждём кабель… Если его долго нет, перезагрузите Windows",
+                        "Waiting for the cable… If it takes long, restart Windows",
+                    ),
+                );
+                self.step_card(g, &mut y, 3, false, Hit::None, title, desc)?;
             }
             Some((_, record)) => {
-                let ready = self.t("Через него Goby попадает в программы", "Goby reaches the programs through it");
+                let fresh = self.cable_found.is_some_and(|t| t.elapsed() < Duration::from_secs(30));
+                let ready = match fresh {
+                    true => self.t("Готово: кабель найден и подключён", "Done: the cable is found and connected"),
+                    false => self.t("Через него Goby попадает в программы", "Goby reaches the programs through it"),
+                };
                 let name = short(&record.name).to_string();
-                self.row_card(g, &mut y, Hit::None, glyph::MIC, &name, ready)?;
+                let icon = if fresh { glyph::CHECK } else { glyph::MIC };
+                self.row_card(g, &mut y, Hit::None, icon, &name, ready)?;
             }
         }
         y += 20.0;

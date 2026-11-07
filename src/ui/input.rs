@@ -170,7 +170,9 @@ impl App {
                     self.route(app.exe.clone());
                 }
             }
+            Hit::Downloads => install::launch(w!("explorer.exe"), "shell:Downloads", None, SW_SHOWNORMAL),
             Hit::CableSite => unsafe {
+                self.cable_opened = true;
                 ShellExecuteW(
                     Some(self.hwnd),
                     w!("open"),

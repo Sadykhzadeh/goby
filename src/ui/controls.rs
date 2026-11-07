@@ -98,6 +98,47 @@ impl App {
         Ok(())
     }
 
+    /// One step of a setup: its number in a circle, a check mark once done, and the
+    /// action it opens on the right when there is one.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn step_card(
+        &mut self,
+        g: &Gfx,
+        y: &mut f32,
+        n: usize,
+        done: bool,
+        hit: Hit,
+        title: &str,
+        desc: &str,
+    ) -> Result<()> {
+        let th = self.theme;
+        let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
+        if r.intersects(&self.lay.pane) {
+            self.card(g, r, 4.0, hit != Hit::None && self.hover == hit);
+            let (cx, cy) = (r.l + 26.0, r.t + 34.0);
+            let mark = R::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
+            if done {
+                g.circle(cx, cy, 12.0, th.accent());
+                g.icon(glyph::CHECK, Font::Icon12, mark, th.on_accent())?;
+            } else {
+                g.circle(cx, cy, 12.0, th.strong_stroke());
+                g.circle(cx, cy, 11.0, th.card());
+                g.text(&n.to_string(), Font::Strong, mark, Align::Center, th.text())?;
+            }
+            let text_w = r.w() - 52.0 - 64.0;
+            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text())?;
+            let desc_r = R::new(r.l + 52.0, r.t + 35.0, text_w, 18.0);
+            g.text(desc, Font::Caption, desc_r, Align::Start, th.text_secondary())?;
+            if hit != Hit::None {
+                g.icon(glyph::OPEN, Font::Icon12, R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0), th.text_secondary())?;
+                let visible = R { t: r.t.max(self.lay.pane.t), b: r.b.min(self.lay.pane.b), ..r };
+                self.hits.push((visible, hit));
+            }
+        }
+        *y += 68.0 + CARD_GAP;
+        Ok(())
+    }
+
     /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
     pub(super) fn row_card(
         &mut self,

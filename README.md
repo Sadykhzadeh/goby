@@ -4,7 +4,7 @@ A small, fast voice changer for Windows. It takes your real microphone, turns yo
 minion, a demon, a robot, a walkie-talkie or one of 61 voices, and hands the result to any
 game or chat app through a virtual audio cable.
 
-One ~470 KB executable that installs itself for your user, no administrator rights
+One ~476 KB executable that installs itself for your user, no administrator rights
 needed, or runs without installing. No background service, no driver of its own, no
 account, nothing sent anywhere. The window is plain Win32 in the Windows 11 style: Mica,
 the system accent colour, light or dark to match Windows, English or Russian to match
@@ -34,10 +34,14 @@ when the app starts and the result is drawn.
 
 ## Using it in CS2 (or Discord, OBS, anything)
 
-1. Install [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free).
-2. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
-   **Just run it**). On the first start Windows asks once for permission to rename the
-   cable, so it shows up as **Goby Mic** everywhere instead of "CABLE Output".
+1. Run the downloaded `goby-0.2.0-windows-x64.exe` and choose **Install Goby** (or
+   **Just run it**).
+2. Goby needs [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) (free) to reach other
+   programs. Without it Goby opens on three steps: download it, install it, and wait
+   while Goby looks for it every two seconds. Once the cable shows up Goby sends the voice
+   into it, no restart needed, and Windows asks once for permission to rename it, so it
+   shows up as **Goby Mic** everywhere instead of "CABLE Output". VB-Cable is VB-Audio's
+   own driver and is installed from their site; Goby does not ship it.
 3. Open **Programs** on the left. Under **Recently used the microphone** (the same list
    Windows keeps for its privacy page), press **+** next to CS2, Discord or OBS; **Add a
    program** also has **Other program…**, which opens the usual file picker. The page
@@ -84,7 +88,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 
 | | |
 |---|---|
-| Executable | 470 KB, icons, installer and tray included |
+| Executable | 476 KB, icons, installer and tray included |
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |

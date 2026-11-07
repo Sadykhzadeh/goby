@@ -156,6 +156,8 @@ enum Hit {
     Offer(usize),
     /// The VB-Cable download page.
     CableSite,
+    /// The Downloads folder, where the cable's archive lands.
+    Downloads,
 }
 
 impl Knob {
@@ -314,6 +316,10 @@ struct App {
     /// they were pinned to: a different cable starts the cache over.
     pinned: Vec<u32>,
     pinned_to: String,
+    /// The VB-Cable page was opened from the setup steps this session.
+    cable_opened: bool,
+    /// When a cable installed while Goby was open was found, to say so for a while.
+    cable_found: Option<Instant>,
     /// Re-read device names a moment after the elevated rename was started.
     recheck_at: Option<Instant>,
 
@@ -498,6 +504,8 @@ impl App {
             pinned: Vec::new(),
             pinned_to: String::new(),
             recheck_at: None,
+            cable_opened: false,
+            cable_found: None,
             mouse: (-1.0, -1.0),
             hover: Hit::None,
             drag: None,
@@ -532,6 +540,10 @@ impl App {
             app.shelf = Shelf::Favorites;
         }
         app.refresh_devices();
+        // Without the cable nothing hears Goby yet: open on the steps that set it up.
+        if app.cable.is_none() {
+            app.page = Page::Programs;
+        }
         app.name_cable_once();
         app.sync_apps();
         app.apply();
@@ -556,6 +568,20 @@ impl App {
         self.output = pick(&self.outputs, &keep_out)
             .or_else(|| self.cable.as_ref().and_then(|(play, _)| pick(&self.outputs, &play.id)))
             .unwrap_or(0);
+    }
+
+    /// A cable installed while Goby runs is picked up within two seconds: the voice goes
+    /// to it and it gets its Goby name, with no restart.
+    fn look_for_cable(&mut self) {
+        let Some((play, _)) = engine::cable() else { return };
+        self.refresh_devices();
+        if let Some(i) = self.outputs.iter().position(|e| e.id == play.id) {
+            self.output = i;
+        }
+        self.restart();
+        self.name_cable_once();
+        self.cable_found = Some(Instant::now());
+        self.dirty = true;
     }
 
     /// First run with an unnamed cable: rename it to Goby once, behind one UAC prompt,
@@ -587,6 +613,9 @@ impl App {
     /// them back). Windows keeps the choice per program, so it outlives this process.
     fn sync_apps(&mut self) {
         self.apps_at = Instant::now();
+        if self.cable.is_none() {
+            self.look_for_cable();
+        }
         let recent = apps::recent();
         let live: Vec<bool> =
             self.settings.routed.iter().map(|exe| recent.iter().any(|a| a.exe == *exe && a.active)).collect();
