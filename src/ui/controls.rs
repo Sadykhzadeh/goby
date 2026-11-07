@@ -86,17 +86,25 @@ impl<H: Host> App<H> {
 
     /// SettingsCard with an icon, a title and a value, and a slider underneath.
     pub(super) fn slider_card(&mut self, g: &dyn Canvas, y: &mut f32, k: Knob, icon: u16, title: &str) {
-        let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 84.0);
         if r.intersects(&self.lay.pane) {
             self.card(g, r, 4.0, false);
-            g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text());
-            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 12.0, r.w() - 140.0, 24.0), Align::Start, th.text());
-            let value = R::new(r.r - 96.0, r.t + 12.0, 80.0, 24.0);
-            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary());
-            self.slider(g, k, R::new(r.l + 26.0, r.t + 48.0, r.w() - 52.0, 24.0));
+            self.knob_block(g, r, k, icon, title, 52.0);
         }
         *y += 84.0 + CARD_GAP;
+    }
+
+    /// A knob's icon, title and value over its slider, filling `r`; the title starts
+    /// `title_x` in. Shared by the quick card and the slider cards in Settings.
+    #[inline(never)]
+    pub(super) fn knob_block(&mut self, g: &dyn Canvas, r: R, k: Knob, icon: u16, title: &str, title_x: f32) {
+        let th = self.theme;
+        g.icon(icon, Font::Icon16, R::new(r.l + 16.0, r.t + 12.0, 20.0, 24.0), th.text());
+        let title_r = R::new(r.l + title_x, r.t + 12.0, r.w() - 140.0, 24.0);
+        g.text(title, Font::Body, title_r, Align::Start, th.text());
+        let value = R::new(r.r - 96.0, r.t + 12.0, 80.0, 24.0);
+        g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary());
+        self.slider(g, k, R::new(r.l + 26.0, r.t + 48.0, r.w() - 52.0, 24.0));
     }
 
     /// One step of a setup: its number in a circle, a check mark once done, and the

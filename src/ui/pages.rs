@@ -171,11 +171,7 @@ impl<H: Host> App<H> {
                 .enumerate()
         {
             let s = R::new(r.l + w * i as f32, r.t, w, r.h());
-            g.icon(icon, Font::Icon16, R::new(s.l + 16.0, s.t + 12.0, 20.0, 24.0), th.text());
-            g.text(title, Font::Body, R::new(s.l + 48.0, s.t + 12.0, s.w() - 140.0, 24.0), Align::Start, th.text());
-            let value = R::new(s.r - 96.0, s.t + 12.0, 80.0, 24.0);
-            g.text(&self.readout(k), Font::Caption, value, Align::End, th.text_secondary());
-            self.slider(g, k, R::new(s.l + 26.0, s.t + 48.0, s.w() - 52.0, 24.0));
+            self.knob_block(g, s, k, icon, title, 48.0);
             g.fill(R::new(s.r - 0.5, s.t + 16.0, 1.0, s.h() - 32.0), 0.0, th.card_stroke());
         }
         let s = R::new(r.l + w * 2.0, r.t, w, r.h());
