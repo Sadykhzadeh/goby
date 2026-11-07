@@ -22,6 +22,12 @@ mod voices;
 // The voices themselves live in crates/dsp, built at full speed whatever this crate is built for.
 use goby_dsp::{dsp, mic, ring, stream};
 
+/// Starts a thread. Every thread goes through here as a boxed closure, so std's start-up
+/// code for it is compiled once instead of once per closure.
+fn spawn(work: Box<dyn FnOnce() + Send>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(work)
+}
+
 fn main() -> windows::core::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();

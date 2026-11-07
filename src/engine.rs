@@ -427,10 +427,10 @@ impl Engine {
             let (id, stop, shared, tx) = (id.clone(), stop.clone(), shared.clone(), ready.clone());
             engine
                 .threads
-                .push(std::thread::spawn(move || render(&id, Reader::new(cons, RATE), i == 0, &stop, &shared, tx)));
+                .push(crate::spawn(Box::new(move || render(&id, Reader::new(cons, RATE), i == 0, &stop, &shared, tx))));
         }
         let (id, stop2, shared2, tx) = (input.to_string(), stop.clone(), shared.clone(), ready.clone());
-        engine.threads.push(std::thread::spawn(move || capture(&id, exclusive, producers, &stop2, &shared2, tx)));
+        engine.threads.push(crate::spawn(Box::new(move || capture(&id, exclusive, producers, &stop2, &shared2, tx))));
 
         ready.wait(outputs.len() + 1, ANSWER_WITHIN)?;
         Ok(engine)
