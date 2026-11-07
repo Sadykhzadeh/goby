@@ -64,6 +64,15 @@ impl PitchShifter {
         self.ratio = ratio.clamp(0.25, 4.0);
     }
 
+    /// Records without playing, for a shifter the current voice does not use. Otherwise it
+    /// would still hold speech from whenever it last ran, and play a few milliseconds of
+    /// that when a voice brings it back.
+    #[inline]
+    fn listen(&mut self, x: f32) {
+        self.buf[self.write] = x;
+        self.write = (self.write + 1) & self.mask;
+    }
+
     #[inline]
     fn at(&self, i: isize) -> f32 {
         // Negative indices wrap correctly because the length is a power of two.
@@ -254,11 +263,18 @@ impl Recipe {
     };
 }
 
+/// Length of each half of the dip between two voices: 5 ms at 48 kHz.
+const FADE: u32 = 240;
+
 /// Runs one recipe. Every stage is allocated up front, so switching voices in the audio
 /// thread never allocates; stages a recipe does not use cost nothing.
 pub struct Voice {
     sample_rate: f32,
     recipe: Recipe,
+    /// The recipe asked for; it takes over once the current one has faded out.
+    next: Recipe,
+    /// Output level in samples of fade, 0..=FADE.
+    level: u32,
     tone: f32,
     volume: f32,
     shifters: [PitchShifter; 3],
@@ -285,6 +301,8 @@ impl Voice {
         Self {
             sample_rate: sr,
             recipe: Recipe::DRY,
+            next: Recipe::DRY,
+            level: FADE,
             tone: 0.0,
             volume: 1.0,
             shifters: std::array::from_fn(|_| PitchShifter::new(sample_rate)),
@@ -308,24 +326,28 @@ impl Voice {
 
     /// `tone` moves any voice up or down in semitones; `volume` is the output level.
     pub fn set(&mut self, recipe: &Recipe, tone: f32, volume: f32) {
-        if *recipe != self.recipe {
-            self.recipe = *recipe;
-            let sr = self.sample_rate;
-            if recipe.highpass_hz > 0.0 {
-                self.highpass = Biquad::new(Shape::High, sr, recipe.highpass_hz, 0.707);
-            }
-            if recipe.lowpass_hz > 0.0 {
-                self.lowpass = Biquad::new(Shape::Low, sr, recipe.lowpass_hz, 0.707);
-            }
-            // Tails of the previous voice would ring on into the new one.
-            self.comb.clear();
-            self.chorus.clear();
-            self.flanger.clear();
-            self.echo.clear();
-            self.reverb.clear();
-        }
+        self.next = *recipe;
         self.tone = tone;
         self.volume = volume;
+    }
+
+    /// Swaps in the next recipe; called at the bottom of a fade, where nothing is heard.
+    fn switch(&mut self) {
+        let new = self.next;
+        self.recipe = new;
+        let sr = self.sample_rate;
+        if new.highpass_hz > 0.0 {
+            self.highpass = Biquad::new(Shape::High, sr, new.highpass_hz, 0.707);
+        }
+        if new.lowpass_hz > 0.0 {
+            self.lowpass = Biquad::new(Shape::Low, sr, new.lowpass_hz, 0.707);
+        }
+        // Tails of the previous voice would ring on into the new one.
+        self.comb.clear();
+        self.chorus.clear();
+        self.flanger.clear();
+        self.echo.clear();
+        self.reverb.clear();
     }
 
     fn shifting(&self) -> bool {
@@ -338,11 +360,38 @@ impl Voice {
         if self.shifting() { self.shifters[0].delay } else { 0.0 }
     }
 
+    /// Changing voice dips the output for FADE samples and comes back up over as many, so
+    /// the jump between two voices, or into a cleared echo, is never heard as a click.
     pub fn process(&mut self, block: &mut [f32]) {
+        let mut start = 0;
+        while start < block.len() {
+            let changing = self.next != self.recipe;
+            if changing && self.level == 0 {
+                self.switch();
+                continue;
+            }
+            // Up to the bottom of the dip, so the switch lands on a sample boundary.
+            let end = if changing { block.len().min(start + self.level as usize) } else { block.len() };
+            let part = &mut block[start..end];
+            self.run(part);
+            if changing || self.level < FADE {
+                for s in part {
+                    self.level = if changing { self.level - 1 } else { (self.level + 1).min(FADE) };
+                    *s *= self.level as f32 / FADE as f32;
+                }
+            }
+            start = end;
+        }
+    }
+
+    fn run(&mut self, block: &mut [f32]) {
         let r = self.recipe;
         let sr = self.sample_rate;
         if r == Recipe::DRY && self.tone == 0.0 {
-            block.iter_mut().for_each(|s| *s *= self.volume);
+            for s in block.iter_mut() {
+                self.shifters.iter_mut().for_each(|p| p.listen(*s));
+                *s *= self.volume;
+            }
             return;
         }
         let shifting = self.shifting();
@@ -363,14 +412,18 @@ impl Voice {
                     self.shifters[0].set_ratio(ratio(r.pitch + self.tone + cents / 100.0));
                 }
                 x = self.shifters[0].process(dry);
+            } else {
+                self.shifters[0].listen(dry);
+            }
+            let mut h = 0.0;
+            for k in 0..2 {
+                if r.harmony[k] != 0.0 {
+                    h += self.shifters[k + 1].process(dry);
+                } else {
+                    self.shifters[k + 1].listen(dry);
+                }
             }
             if harmonies > 0 {
-                let mut h = 0.0;
-                for k in 0..2 {
-                    if r.harmony[k] != 0.0 {
-                        h += self.shifters[k + 1].process(dry);
-                    }
-                }
                 x = x * (1.0 - r.harmony_mix) + h / harmonies as f32 * r.harmony_mix;
             }
             if r.ring_mix > 0.0 {
@@ -438,6 +491,48 @@ mod tests {
         // The soft limiter squashes the sine a little, so look at the dominant frequency only.
         let f = dominant_freq(&x[SR as usize / 4..]);
         assert!((f - 440.0).abs() <= 4.0, "got {f}");
+    }
+
+    /// A buzzy vowel with a gliding pitch and syllables, closer to speech than a sine.
+    fn speech(secs: f32) -> Vec<f32> {
+        let mut phase = 0.0f32;
+        (0..(SR as f32 * secs) as usize)
+            .map(|i| {
+                let t = i as f32 / SR as f32;
+                phase += (120.0 + 30.0 * (t * 1.3).sin()) / SR as f32;
+                let syllables = (0.5 + 0.5 * (t * 2.0 * PI * 3.0).sin()).powi(2);
+                (1..12).map(|h| (phase * h as f32 * 2.0 * PI).sin() / h as f32).sum::<f32>() * 0.15 * syllables
+            })
+            .collect()
+    }
+
+    /// Largest step between two neighbouring samples: a click is a big one.
+    fn biggest_step(x: &[f32]) -> f32 {
+        x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn switching_voices_does_not_click() {
+        let ids = ["off", "minion", "giant", "radio", "bass", "helium", "robot", "demon", "man"];
+        let recipes: Vec<Recipe> =
+            ids.iter().map(|id| crate::voices::ALL[crate::voices::index_of(id).unwrap()].recipe).collect();
+        let input = speech(3.0);
+        let run = |pick: &dyn Fn(usize) -> usize| {
+            let mut v = Voice::new(SR);
+            let mut out = Vec::new();
+            for (b, chunk) in input.chunks(144).enumerate() {
+                v.set(&recipes[pick(b)], 0.0, 1.0);
+                let mut c = chunk.to_vec();
+                v.process(&mut c);
+                out.extend(c);
+            }
+            out
+        };
+        let steady = (0..ids.len()).map(|i| biggest_step(&run(&|_| i))).fold(0.0, f32::max);
+        // A new voice every 37 ms, hopping around the list. Without the dip this came out
+        // three times the steady figure; a little over it is just a modulator in another phase.
+        let hopping = biggest_step(&run(&|b| (b / 12 * 5) % ids.len()));
+        assert!(hopping <= steady * 1.25, "switching steps {hopping}, a voice alone at most {steady}");
     }
 
     #[test]

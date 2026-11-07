@@ -60,6 +60,8 @@ you set once lives in **Settings**: the microphone and a noise gate that mutes k
 clicks and room noise between phrases, the output, how much of your original voice to
 mix back in, and the tray, startup and hotkey switches. Gain, the gate threshold and *Low
 latency*, which takes the microphone in exclusive mode, fold away under **Advanced**.
+Low latency is off by default: while it is on, no other program can record from that
+microphone, not even your voice typing.
 Arrow keys walk the gallery, Esc leaves Settings and Programs, and a double-click resets
 a slider.
 
@@ -93,15 +95,16 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |
 | DSP cost, Minion / heaviest voice | 0.18 % / 1.05 % of one core |
-| Mic to cable, Minion | 11 to 27 ms, 17 ms on average (31 ms in shared mode) |
+| Mic to cable, Minion | 31 ms on average; 17 ms with *Low latency* (11 to 27 ms) |
 | Underruns in 30 s | 0 |
 
 Where the 17 ms go (measured): 3 ms for the microphone's packet, 4.7 ms for the pitch
 shifter to splice periods of your voice, and 9.3 ms of cushion between the microphone's
 clock and the cable's plus the cable's own 2.67 ms periods. In shared mode the same USB
-microphone only delivers 10 ms packets, which is why *Low latency* takes it in exclusive
-mode and falls back to shared if Windows or the device refuses. Voices without a pitch
-shift skip the 4.7 ms.
+microphone only delivers 10 ms packets, which is what *Low latency* buys back by taking
+it in exclusive mode (falling back to shared if Windows or the device refuses). The price
+is that every other program loses that microphone meanwhile, so it is off by default.
+Voices without a pitch shift skip the 4.7 ms.
 
 Reproduce with:
 
@@ -114,7 +117,7 @@ cargo test --release engine_periods -- --ignored --nocapture    # what each devi
 ## How it works
 
 ```
-microphone ──WASAPI (exclusive, 3 ms)──▶ gain + gate ─▶ voice recipe ─▶ soft limit
+microphone ──WASAPI (shared, 10 ms)────▶ gain + gate ─▶ voice recipe ─▶ soft limit
                                                          │
                                lock-free ring per output ◀┘
                                             │
@@ -122,9 +125,9 @@ microphone ──WASAPI (exclusive, 3 ms)──▶ gain + gate ─▶ voice reci
                                             └─▶ your headphones (optional)
 ```
 
-- **Audio** is plain WASAPI. The microphone runs in exclusive mode at the device's
-  shortest period (float, int32 or int16, converted by Goby), or in shared mode where
-  Windows converts. Where a device supports it (VB-Cable does), the output uses
+- **Audio** is plain WASAPI. The microphone runs in shared mode, where Windows converts,
+  or with *Low latency* in exclusive mode at the device's shortest period (float, int32 or
+  int16, converted by Goby). Where a device supports it (VB-Cable does), the output uses
   `IAudioClient3` low-latency periods. Audio threads register with MMCSS as "Pro Audio".
 - **Clock drift.** The microphone and the cable run on different clocks. Each output reads
   through a lock-free ring with a tiny resampler that nudges its rate (±0.5 % at most) to

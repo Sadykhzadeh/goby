@@ -448,9 +448,9 @@ impl App {
         if self.advanced {
             let fast = self.t("Низкая задержка", "Low latency");
             let mode = match (self.settings.exclusive, self.shared.mic_exclusive.load(Relaxed)) {
-                (true, true) => self.t("Микрофон занят только Goby", "Only Goby uses the mic"),
+                (true, true) => self.t("Другие программы не слышат микрофон", "Other programs lose the mic"),
                 (true, false) => self.t("Микрофон не разрешил", "The mic did not allow it"),
-                _ => self.t("Обычный режим, +10 мс", "Shared mode, +10 ms"),
+                _ => self.t("−10 мс, но микрофон будет только у Goby", "−10 ms, but only Goby gets the mic"),
             };
             self.row_card(g, &mut y, Hit::Toggle(Switch::Exclusive), glyph::SPEED, fast, mode)?;
             self.slider_card(g, &mut y, Knob::Gain, glyph::VOLUME, self.t("Усиление", "Gain"))?;

@@ -18,7 +18,9 @@ pub struct Settings {
     pub gate_db: f32,
     /// Share of the original voice mixed back in, 0..1.
     pub dry_mix: f32,
-    /// Take the mic in exclusive mode for shorter packets (falls back if refused).
+    /// Take the mic in exclusive mode for shorter packets (falls back if refused). Off by
+    /// default: while on, no other program can record from that mic. Saved as
+    /// `exclusive_mic`; the old `exclusive` key was on by default and is ignored.
     pub exclusive: bool,
     /// Programs (lower-case exe names) whose microphone is pinned to Goby.
     pub routed: Vec<String>,
@@ -94,7 +96,7 @@ impl Default for Settings {
             gate: false,
             gate_db: -50.0,
             dry_mix: 0.0,
-            exclusive: true,
+            exclusive: false,
             routed: Vec::new(),
             unroute: Vec::new(),
             cable_named_tried: false,
@@ -139,7 +141,7 @@ impl Settings {
                 "mic_gain_db" => s.mic_gain_db = v.parse::<f32>().unwrap_or(s.mic_gain_db).clamp(-12.0, 24.0),
                 "gate" => s.gate = v == "1",
                 "gate_db" => s.gate_db = v.parse::<f32>().unwrap_or(s.gate_db).clamp(-80.0, -10.0),
-                "exclusive" => s.exclusive = v != "0",
+                "exclusive_mic" => s.exclusive = v == "1",
                 "routed" => s.routed = list(v),
                 "unroute" => s.unroute = list(v),
                 "cable_named_tried" => s.cable_named_tried = v == "1",
@@ -164,7 +166,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\n",
             self.input,
             self.output,
             self.voice,
@@ -230,7 +232,7 @@ mod tests {
             gate: true,
             gate_db: -45.0,
             dry_mix: 0.25,
-            exclusive: false,
+            exclusive: true,
             routed: vec!["cs2.exe".into(), "discord.exe".into()],
             unroute: vec!["obs64.exe".into()],
             cable_named_tried: true,
@@ -246,6 +248,14 @@ mod tests {
             update_checked: 1_794_000_000,
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    #[test]
+    fn old_files_give_the_mic_back() {
+        // Up to 0.3.0 exclusive mode was on by default, which kept every other program
+        // off the microphone; a file saved then must not carry that on.
+        assert!(!Settings::parse("exclusive=1\n").exclusive);
+        assert!(!Settings::default().exclusive);
     }
 
     #[test]
