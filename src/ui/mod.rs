@@ -535,7 +535,7 @@ impl App {
             tab_w: Anim::default(),
             tab_widths: Vec::new(),
             latency: 0.0,
-            glyphs: voices::ALL.iter().map(|v| voices::glyph(v, 48)).collect(),
+            glyphs: voices::glyphs(48),
             raw: Box::new([0.0; SCOPE_LEN]),
             voiced: Box::new([0.0; SCOPE_LEN]),
             dirty: true,

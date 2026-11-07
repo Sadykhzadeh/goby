@@ -143,22 +143,29 @@ pub fn index_of(id: &str) -> Option<usize> {
     ALL.iter().position(|v| v.id == id)
 }
 
-/// The voice's own waveform for its icon: a buzzy test tone run through the recipe,
-/// `points` samples from the last 20 ms, normalised to -1..1.
-pub fn glyph(def: &VoiceDef, points: usize) -> Vec<f32> {
+/// Every voice's own waveform for its icon, in `ALL` order: a buzzy test tone run through
+/// the recipe, `points` samples from the last 20 ms, normalised to -1..1.
+pub fn glyphs(points: usize) -> Vec<Vec<f32>> {
     const SR: u32 = 48_000;
-    let mut voice = Voice::new(SR);
-    voice.set(&def.recipe, 0.0, 1.0);
-    let mut buf: Vec<f32> = (0..SR as usize / 8)
+    // The same tone for every voice, so it is made once: a third of the work at startup.
+    let tone: Vec<f32> = (0..SR as usize / 8)
         .map(|i| {
             let t = i as f32 / SR as f32;
             (1..6).map(|h| (t * 140.0 * h as f32 * std::f32::consts::TAU).sin() / h as f32).sum::<f32>() * 0.3
         })
         .collect();
-    voice.process(&mut buf);
-    let tail = &buf[buf.len() - SR as usize / 50..];
-    let peak = tail.iter().fold(1e-6f32, |m, s| m.max(s.abs()));
-    (0..points).map(|i| tail[i * tail.len() / points] / peak).collect()
+    let mut buf = tone.clone();
+    ALL.iter()
+        .map(|def| {
+            let mut voice = Voice::new(SR);
+            voice.set(&def.recipe, 0.0, 1.0);
+            buf.copy_from_slice(&tone);
+            voice.process(&mut buf);
+            let tail = &buf[buf.len() - SR as usize / 50..];
+            let peak = tail.iter().fold(1e-6f32, |m, s| m.max(s.abs()));
+            (0..points).map(|i| tail[i * tail.len() / points] / peak).collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -255,8 +262,7 @@ mod tests {
 
     #[test]
     fn glyphs_are_normalised() {
-        for def in ALL {
-            let g = glyph(def, 64);
+        for (def, g) in ALL.iter().zip(glyphs(64)) {
             assert_eq!(g.len(), 64);
             assert!(g.iter().all(|s| s.abs() <= 1.0 + 1e-6), "{}", def.id);
         }
