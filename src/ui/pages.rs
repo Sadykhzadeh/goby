@@ -95,11 +95,11 @@ impl<H: Host> App<H> {
                 g.text(why, Font::Caption, R::new(x + 2.0, y, w, 18.0), Align::Start, th.text_secondary());
                 y += 28.0;
                 let (title, desc) = (tr("programs.step1"), tr("programs.step1.desc"));
-                self.step_card(g, &mut y, 1, self.cable_opened, Hit::CableSite, title, desc);
+                self.row_card(g, &mut y, Hit::CableSite, Icon::Step(1, self.cable_opened), title, desc);
                 let (title, desc) = (tr("programs.step2"), tr("programs.step2.desc"));
-                self.step_card(g, &mut y, 2, false, Hit::Downloads, title, desc);
+                self.row_card(g, &mut y, Hit::Downloads, Icon::Step(2, false), title, desc);
                 let (title, desc) = (tr("programs.step3"), tr("programs.step3.desc"));
-                self.step_card(g, &mut y, 3, false, Hit::None, title, desc);
+                self.row_card(g, &mut y, Hit::None, Icon::Step(3, false), title, desc);
             }
             Some((_, record)) => {
                 let fresh =

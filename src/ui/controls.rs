@@ -107,46 +107,6 @@ impl<H: Host> App<H> {
         self.slider(g, k, R::new(r.l + 26.0, r.t + 48.0, r.w() - 52.0, 24.0));
     }
 
-    /// One step of a setup: its number in a circle, a check mark once done, and the
-    /// action it opens on the right when there is one.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn step_card(
-        &mut self,
-        g: &dyn Canvas,
-        y: &mut f32,
-        n: usize,
-        done: bool,
-        hit: Hit,
-        title: &str,
-        desc: &str,
-    ) {
-        let th = self.theme;
-        let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
-        if r.intersects(&self.lay.pane) {
-            self.card(g, r, 4.0, hit != Hit::None && self.hover == hit);
-            let (cx, cy) = (r.l + 26.0, r.t + 34.0);
-            let mark = R::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
-            if done {
-                g.circle(cx, cy, 12.0, th.accent());
-                g.icon(glyph::CHECK, Font::Icon12, mark, th.on_accent());
-            } else {
-                g.circle(cx, cy, 12.0, th.strong_stroke());
-                g.circle(cx, cy, 11.0, th.card());
-                g.text(&n.to_string(), Font::Strong, mark, Align::Center, th.text());
-            }
-            let text_w = r.w() - 52.0 - 64.0;
-            g.text(title, Font::Body, R::new(r.l + 52.0, r.t + 13.0, text_w, 22.0), Align::Start, th.text());
-            let desc_r = R::new(r.l + 52.0, r.t + 35.0, text_w, 18.0);
-            g.text(desc, Font::Caption, desc_r, Align::Start, th.text_secondary());
-            if hit != Hit::None {
-                g.icon(glyph::OPEN, Font::Icon12, R::new(r.r - 36.0, r.t + 24.0, 20.0, 20.0), th.text_secondary());
-                let visible = R { t: r.t.max(self.lay.pane.t), b: r.b.min(self.lay.pane.b), ..r };
-                self.hits.push((visible, hit));
-            }
-        }
-        *y += 68.0 + CARD_GAP;
-    }
-
     /// SettingsCard row: icon, title, description, and a toggle or chevron on the right.
     pub(super) fn row_card<'a>(
         &mut self,
@@ -165,10 +125,24 @@ impl<H: Host> App<H> {
         let th = self.theme;
         let r = R::new(self.lay.pane.l, *y, self.lay.pane.w() - GUTTER, 68.0);
         if r.intersects(&self.lay.pane) {
-            self.card(g, r, 4.0, self.hover == hit && !matches!(hit, Hit::Remove(_)));
+            // A setup step with nothing to open neither lights up nor takes clicks.
+            let inert = matches!(icon, Icon::Step(..)) && hit == Hit::None;
+            self.card(g, r, 4.0, !inert && self.hover == hit && !matches!(hit, Hit::Remove(_)));
             let spot = R::new(r.l + 16.0, r.t + 22.0, 20.0, 24.0);
             match icon {
                 Icon::Glyph(code) => g.icon(code, Font::Icon16, spot, th.text()),
+                Icon::Step(n, done) => {
+                    let (cx, cy) = (r.l + 26.0, r.t + 34.0);
+                    let mark = R::new(cx - 12.0, cy - 12.0, 24.0, 24.0);
+                    if done {
+                        g.circle(cx, cy, 12.0, th.accent());
+                        g.icon(glyph::CHECK, Font::Icon12, mark, th.on_accent());
+                    } else {
+                        g.circle(cx, cy, 12.0, th.strong_stroke());
+                        g.circle(cx, cy, 11.0, th.card());
+                        g.text(&n.to_string(), Font::Strong, mark, Align::Center, th.text());
+                    }
+                }
                 Icon::Exe(exe) => {
                     // The program's own icon when its file is known and has one; the
                     // kind of program (game, chat, browser) as a glyph otherwise.
@@ -214,16 +188,20 @@ impl<H: Host> App<H> {
             }
             let target = if matches!(hit, Hit::Remove(_)) { R::new(r.r - 48.0, r.t + 18.0, 32.0, 32.0) } else { r };
             let visible = R { t: target.t.max(self.lay.pane.t), b: target.b.min(self.lay.pane.b), ..target };
-            self.hits.push((visible, hit));
+            if !inert {
+                self.hits.push((visible, hit));
+            }
         }
         *y += 68.0 + CARD_GAP;
     }
 }
 
-/// What a settings row shows on its left: a Segoe Fluent glyph, or a program's own icon.
+/// What a settings row shows on its left: a Segoe Fluent glyph, a program's own icon, or
+/// the number of a setup step in a circle (a check mark once it is done).
 pub(super) enum Icon<'a> {
     Glyph(u16),
     Exe(&'a str),
+    Step(usize, bool),
 }
 
 impl From<u16> for Icon<'_> {
