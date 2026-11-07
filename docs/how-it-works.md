@@ -62,6 +62,11 @@ microphone ──WASAPI (shared, 10 ms)────▶ gain + gate ─▶ voice 
 - **The window** is Win32 drawn with Direct2D and DirectWrite into a DirectComposition
   swap chain, so the Mica backdrop shows through. Device pickers are real Win32 menus.
   Nothing redraws while the window is covered, minimised or showing a silent scope.
+- **The same window on the website.** Everything the window shows and does (`src/ui`)
+  draws through a small `Canvas` interface and asks the system for devices, programs and
+  settings through a `Host`. The app answers with Direct2D and Win32; the website builds
+  the same files for WebAssembly (`site/dsp-wasm`) and answers with a canvas and sample
+  devices, so goby.azer.one shows the real window rather than a copy of it.
 - **Routing.** The program list comes from the consent store Windows keeps for its
   microphone privacy page. Pinning a program uses the per-app audio policy behind the
   Volume mixer (`IAudioPolicyConfigFactory`), and the cable is renamed through
