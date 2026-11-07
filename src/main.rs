@@ -100,7 +100,7 @@ fn main() -> windows::core::Result<()> {
                 std::process::exit(1);
             };
             if rest.contains(&"--run") {
-                let exe = windows::core::HSTRING::from(exe.as_os_str());
+                let exe = windows::core::HSTRING::from(exe);
                 install::launch(&exe, "", None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
             }
             Ok(())
@@ -119,7 +119,7 @@ fn main() -> windows::core::Result<()> {
             install::Choice::Install { desktop } => {
                 match install::install(desktop) {
                     Ok(exe) => {
-                        let exe = windows::core::HSTRING::from(exe.as_os_str());
+                        let exe = windows::core::HSTRING::from(exe);
                         install::launch(&exe, "", None, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL);
                     }
                     Err(e) => {

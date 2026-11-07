@@ -5,11 +5,13 @@ use std::io;
 
 use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
 use windows::Win32::Storage::FileSystem::{
-    CREATE_ALWAYS, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_CREATION_DISPOSITION, FILE_SHARE_DELETE, FILE_SHARE_MODE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FindClose, FindFirstFileW, FindNextFileW, GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
-    MOVEFILE_REPLACE_EXISTING, MoveFileExW, OPEN_EXISTING, ReadFile, RemoveDirectoryW, WIN32_FIND_DATAW, WriteFile,
+    CREATE_ALWAYS, CopyFileW, CreateDirectoryW, CreateFileW, DeleteFileW, FILE_ATTRIBUTE_DIRECTORY,
+    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_CREATION_DISPOSITION, FILE_SHARE_DELETE, FILE_SHARE_MODE,
+    FILE_SHARE_READ, FILE_SHARE_WRITE, FindClose, FindFirstFileW, FindNextFileW, GetFileAttributesExW,
+    GetFileAttributesW, GetFileExInfoStandard, GetTempPathW, INVALID_FILE_ATTRIBUTES, MOVEFILE_REPLACE_EXISTING,
+    MoveFileExW, OPEN_EXISTING, ReadFile, RemoveDirectoryW, WIN32_FILE_ATTRIBUTE_DATA, WIN32_FIND_DATAW, WriteFile,
 };
+use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
 use windows::core::HSTRING;
 
 /// The error a failed call left, as std::fs would report it.
@@ -21,9 +23,38 @@ fn attributes(path: &str) -> u32 {
     unsafe { GetFileAttributesW(&HSTRING::from(path)) }
 }
 
+pub fn exists(path: &str) -> bool {
+    attributes(path) != INVALID_FILE_ATTRIBUTES
+}
+
 fn is_dir(path: &str) -> bool {
     let a = attributes(path);
     a != INVALID_FILE_ATTRIBUTES && a & FILE_ATTRIBUTE_DIRECTORY.0 != 0
+}
+
+pub fn size(path: &str) -> Option<u64> {
+    let mut data = WIN32_FILE_ATTRIBUTE_DATA::default();
+    unsafe { GetFileAttributesExW(&HSTRING::from(path), GetFileExInfoStandard, &mut data as *mut _ as _) }.ok()?;
+    Some((data.nFileSizeHigh as u64) << 32 | data.nFileSizeLow as u64)
+}
+
+/// The folder for temporary files.
+pub fn temp_dir() -> Option<String> {
+    let mut buf = [0u16; 261];
+    let n = unsafe { GetTempPathW(Some(&mut buf)) } as usize;
+    (n > 0 && n < buf.len()).then(|| String::from_utf16(&buf[..n]).ok())?
+}
+
+/// The folder a path is in.
+pub fn parent(path: &str) -> Option<&str> {
+    path.rsplit_once('\\').map(|(dir, _)| dir)
+}
+
+/// This executable's full path.
+pub fn current_exe() -> Option<String> {
+    let mut buf = vec![0u16; 32 * 1024];
+    let n = unsafe { GetModuleFileNameW(None, &mut buf) } as usize;
+    (n > 0 && n < buf.len()).then(|| String::from_utf16(&buf[..n]).ok())?
 }
 
 /// Creates the folder and any parents it lacks.
@@ -47,6 +78,10 @@ pub fn remove_file(path: &str) -> bool {
 /// Moves `from` to `to`, replacing whatever is there.
 pub fn rename(from: &str, to: &str) -> io::Result<()> {
     unsafe { MoveFileExW(&HSTRING::from(from), &HSTRING::from(to), MOVEFILE_REPLACE_EXISTING) }.map_err(os_error)
+}
+
+pub fn copy(from: &str, to: &str) -> io::Result<()> {
+    unsafe { CopyFileW(&HSTRING::from(from), &HSTRING::from(to), false) }.map_err(os_error)
 }
 
 /// Deletes a folder and everything in it. A link inside is removed, never followed.
@@ -138,4 +173,75 @@ pub fn write(path: &str, data: &[u8]) -> bool {
         rest = &rest[n as usize..];
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> String {
+        let dir = format!("{}goby-files-{name}-{}", temp_dir().unwrap(), std::process::id());
+        remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn writes_renames_copies_and_removes_a_tree() {
+        let root = scratch("tree");
+        let dir = format!("{root}\\a\\b");
+        create_dirs(&dir).unwrap();
+        create_dirs(&dir).unwrap();
+        let (one, two) = (format!("{dir}\\one.txt"), format!("{root}\\a\\two.txt"));
+        assert!(write(&one, b"first") && write(&two, b"second"));
+        assert_eq!(size(&one), Some(5));
+        rename(&one, &two).unwrap();
+        assert!(!exists(&one));
+        assert_eq!(read(&two).as_deref(), Some(&b"first"[..]));
+        copy(&two, &one).unwrap();
+        assert_eq!(read(&one).as_deref(), Some(&b"first"[..]));
+        assert!(create_dirs(&format!("{one}\\below")).is_err(), "a file is in the way");
+        remove_dir_all(&root);
+        assert!(!exists(&root));
+    }
+
+    #[test]
+    fn a_link_inside_is_removed_without_following_it() {
+        let (root, outside) = (scratch("link"), scratch("outside"));
+        create_dirs(&root).unwrap();
+        create_dirs(&outside).unwrap();
+        assert!(write(&format!("{outside}\\keep.txt"), b"keep"));
+        let made = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J", &format!("{root}\\link"), &outside])
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+        assert!(exists(&format!("{root}\\link\\keep.txt")));
+        remove_dir_all(&root);
+        assert!(!exists(&root));
+        assert!(exists(&format!("{outside}\\keep.txt")));
+        remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn a_locked_file_can_be_read_but_not_changed() {
+        let root = scratch("locked");
+        create_dirs(&root).unwrap();
+        let path = format!("{root}\\goby.exe");
+        assert!(write(&path, b"verified"));
+        let file = File::locked(&path).unwrap();
+        assert!(!write(&path, b"swapped"));
+        assert!(!remove_file(&path));
+        assert!(rename(&path, &format!("{root}\\other.exe")).is_err());
+        assert!(rename(&format!("{root}\\nothing"), &path).is_err());
+        assert_eq!(read(&path).as_deref(), Some(&b"verified"[..]));
+        assert_eq!(file.read_all().as_deref(), Some(&b"verified"[..]));
+        drop(file);
+        remove_dir_all(&root);
+    }
+
+    #[test]
+    fn paths_split_at_the_last_backslash() {
+        assert_eq!(parent(r"C:\Users\me\goby.exe"), Some(r"C:\Users\me"));
+        assert!(current_exe().unwrap().ends_with(".exe"));
+    }
 }

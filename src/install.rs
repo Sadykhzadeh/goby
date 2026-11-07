@@ -3,7 +3,6 @@
 //! add a Start menu shortcut and an entry under Settings > Apps, whose Uninstall runs
 //! `goby.exe --uninstall`.
 
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, HWND, LPARAM, WPARAM};
@@ -20,6 +19,7 @@ use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, SHOW_WINDOW_CMD, SW_HIDE, WM_CLOSE};
 use windows::core::{BOOL, GUID, HSTRING, Interface, PCWSTR, Result, w};
 
+use crate::files::{self, parent};
 use crate::lang::{self, tr, trf};
 use crate::{apps, engine, policy, settings::Settings};
 
@@ -31,48 +31,49 @@ const AUTHOR: &str = "Azer Sadykhzadeh";
 const WEBSITE: &str = "https://azer.one";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn known_folder(id: &GUID) -> Option<PathBuf> {
+fn known_folder(id: &GUID) -> Option<String> {
     unsafe {
         let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
-        let path = p.to_string().ok().map(PathBuf::from);
+        let path = p.to_string().ok();
         CoTaskMemFree(Some(p.0 as _));
         path
     }
 }
 
 /// `%LOCALAPPDATA%\Programs\Goby`, where per-user programs belong.
-pub fn install_dir() -> Option<PathBuf> {
-    known_folder(&FOLDERID_UserProgramFiles).map(|d| d.join("Goby"))
+pub fn install_dir() -> Option<String> {
+    known_folder(&FOLDERID_UserProgramFiles).map(|d| format!("{d}\\Goby"))
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy().trim_end_matches('\\').eq_ignore_ascii_case(b.to_string_lossy().trim_end_matches('\\'))
+fn same_dir(a: &str, b: &str) -> bool {
+    a.trim_end_matches('\\').eq_ignore_ascii_case(b.trim_end_matches('\\'))
 }
 
 /// True when this process is the installed copy (or a development build), so it just runs.
 pub fn is_installed_copy() -> bool {
-    let (Ok(exe), Some(dir)) = (std::env::current_exe(), install_dir()) else { return true };
-    exe.parent().is_some_and(|p| same_dir(p, &dir))
+    let (Some(exe), Some(dir)) = (files::current_exe(), install_dir()) else { return true };
+    parent(&exe).is_some_and(|p| same_dir(p, &dir))
 }
 
-fn shortcut_paths() -> Vec<PathBuf> {
+fn shortcut_paths() -> Vec<String> {
     let mut v = Vec::new();
     if let Some(p) = known_folder(&FOLDERID_Programs) {
-        v.push(p.join("Goby.lnk"));
+        v.push(format!("{p}\\Goby.lnk"));
     }
     if let Some(d) = known_folder(&FOLDERID_Desktop) {
-        v.push(d.join("Goby.lnk"));
+        v.push(format!("{d}\\Goby.lnk"));
     }
     v
 }
 
-fn make_shortcut(link: &Path, target: &Path) -> Result<()> {
+fn make_shortcut(link: &str, target: &str) -> Result<()> {
     unsafe {
         let shell: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-        shell.SetPath(&HSTRING::from(target.as_os_str()))?;
+        let target = HSTRING::from(target);
+        shell.SetPath(&target)?;
         shell.SetDescription(w!("Goby voice changer"))?;
-        shell.SetIconLocation(&HSTRING::from(target.as_os_str()), 0)?;
-        shell.cast::<IPersistFile>()?.Save(&HSTRING::from(link.as_os_str()), true)
+        shell.SetIconLocation(&target, 0)?;
+        shell.cast::<IPersistFile>()?.Save(&HSTRING::from(link), true)
     }
 }
 
@@ -90,9 +91,8 @@ fn set_dword(key: HKEY, name: &str, value: u32) {
 }
 
 /// The values Settings > Apps shows for Goby; pure, so it can be tested.
-pub fn uninstall_entry(exe: &Path, size_kb: u32) -> Vec<(&'static str, Option<String>, u32)> {
-    let exe = exe.display().to_string();
-    let dir = Path::new(&exe).parent().map(|p| p.display().to_string()).unwrap_or_default();
+pub fn uninstall_entry(exe: &str, size_kb: u32) -> Vec<(&'static str, Option<String>, u32)> {
+    let dir = parent(exe).unwrap_or_default().to_string();
     vec![
         ("DisplayName", Some("Goby".into()), 0),
         ("DisplayVersion", Some(VERSION.into()), 0),
@@ -109,8 +109,8 @@ pub fn uninstall_entry(exe: &Path, size_kb: u32) -> Vec<(&'static str, Option<St
     ]
 }
 
-fn write_uninstall_entry(exe: &Path) {
-    let size_kb = std::fs::metadata(exe).map(|m| m.len().div_ceil(1024) as u32).unwrap_or(0);
+fn write_uninstall_entry(exe: &str) {
+    let size_kb = files::size(exe).map_or(0, |len| len.div_ceil(1024) as u32);
     unsafe {
         let mut key = HKEY::default();
         let created = RegCreateKeyExW(
@@ -139,9 +139,9 @@ fn write_uninstall_entry(exe: &Path) {
 
 /// What Windows runs at sign-in: Goby in the tray, without the setup question a copy
 /// outside the install folder would ask.
-pub fn autostart_command(exe: &Path, installed: bool) -> String {
+pub fn autostart_command(exe: &str, installed: bool) -> String {
     let portable = if installed { "" } else { " --portable" };
-    format!("\"{}\"{portable} --tray", exe.display())
+    format!("\"{exe}\"{portable} --tray")
 }
 
 /// Task Manager marks an entry it switched off with an odd first byte.
@@ -185,7 +185,7 @@ pub fn set_start_with_windows(on: bool) {
             let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, w!("Goby"));
             return;
         }
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Some(exe) = files::current_exe() else { return };
         let mut key = HKEY::default();
         let created = RegCreateKeyExW(
             HKEY_CURRENT_USER,
@@ -224,29 +224,29 @@ fn close_running() {
 
 /// Copies this executable into the install folder and registers it. An older copy that is
 /// still running is renamed out of the way: Windows allows renaming a running executable.
-pub fn install(desktop_shortcut: bool) -> std::io::Result<PathBuf> {
+pub fn install(desktop_shortcut: bool) -> std::io::Result<String> {
     // Shortcuts are COM objects; this may run before the window has set COM up.
     unsafe {
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
     }
     let dir = install_dir().ok_or_else(|| std::io::Error::other("no program folder"))?;
-    std::fs::create_dir_all(&dir)?;
-    let target = dir.join("goby.exe");
-    let old = dir.join("goby.old");
-    let source = std::env::current_exe()?;
+    files::create_dirs(&dir)?;
+    let target = format!("{dir}\\goby.exe");
+    let old = format!("{dir}\\goby.old");
+    let source = files::current_exe().ok_or_else(std::io::Error::last_os_error)?;
     // Run as the installed copy itself (`--install` from the Start menu copy): nothing to
     // copy, just refresh the shortcuts and the entry.
-    if !source.parent().is_some_and(|p| same_dir(p, &dir)) {
+    if !parent(&source).is_some_and(|p| same_dir(p, &dir)) {
         close_running();
-        let _ = std::fs::remove_file(&old);
-        let moved = target.exists() && std::fs::remove_file(&target).is_err();
+        files::remove_file(&old);
+        let moved = files::exists(&target) && !files::remove_file(&target);
         if moved {
-            std::fs::rename(&target, &old)?;
+            files::rename(&target, &old)?;
         }
-        if let Err(e) = std::fs::copy(&source, &target) {
+        if let Err(e) = files::copy(&source, &target) {
             // Put the previous version back rather than leave a broken install.
             if moved {
-                let _ = std::fs::rename(&old, &target);
+                let _ = files::rename(&old, &target);
             }
             return Err(e);
         }
@@ -287,7 +287,7 @@ fn use_chosen_language() {
 /// The first-run question, as a native task dialog with command links.
 pub fn ask() -> Choice {
     use_chosen_language();
-    let installed = install_dir().is_some_and(|d| d.join("goby.exe").exists());
+    let installed = install_dir().is_some_and(|d| files::exists(&format!("{d}\\goby.exe")));
     let install_text = if installed { HSTRING::from(tr("setup.update")) } else { HSTRING::from(tr("setup.install")) };
     let run_text = HSTRING::from(tr("setup.run"));
     let buttons = [
@@ -373,8 +373,8 @@ pub fn failed(error: &std::io::Error) {
 
 /// Runs this executable elevated with `args` and waits for it (one UAC prompt).
 fn run_elevated(args: &str) {
-    let Ok(exe) = std::env::current_exe() else { return };
-    let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
+    let Some(exe) = files::current_exe() else { return };
+    let (exe, args) = (HSTRING::from(exe), HSTRING::from(args));
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,
@@ -424,14 +424,14 @@ pub fn uninstall(quiet: bool) {
     }
 
     for link in shortcut_paths() {
-        let _ = std::fs::remove_file(link);
+        files::remove_file(&link);
     }
     unsafe {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, UNINSTALL_KEY);
     }
     set_start_with_windows(false);
     if let Some(dir) = Settings::dir() {
-        let _ = std::fs::remove_dir_all(dir);
+        files::remove_dir_all(&dir);
     }
     if !quiet {
         let note = if left.is_empty() {
@@ -448,20 +448,19 @@ pub fn uninstall(quiet: bool) {
 /// minute until this process has exited and the folder can go.
 fn remove_folder_after_exit() {
     let Some(dir) = install_dir() else { return };
-    let dir = dir.display();
     let script = format!(
         "for /l %i in (1,1,30) do (ping -n 2 127.0.0.1 >nul & rmdir /s /q \"{dir}\" 2>nul & if not exist \"{dir}\" exit /b)"
     );
     // Started outside the folder it deletes, and hidden.
-    launch(w!("cmd.exe"), &format!("/d /c {script}"), Some(&std::env::temp_dir()), SW_HIDE);
+    launch(w!("cmd.exe"), &format!("/d /c {script}"), files::temp_dir().as_deref(), SW_HIDE);
 }
 
 /// Starts a program and leaves it running. Through the shell rather than std::process,
 /// whose process plumbing would add about 30 KB to the executable for two launches.
 /// The arguments reach the program verbatim.
-pub fn launch(file: impl windows::core::Param<PCWSTR>, args: &str, dir: Option<&Path>, show: SHOW_WINDOW_CMD) {
+pub fn launch(file: impl windows::core::Param<PCWSTR>, args: &str, dir: Option<&str>, show: SHOW_WINDOW_CMD) {
     let args = HSTRING::from(args);
-    let dir = dir.map(|d| HSTRING::from(d.as_os_str()));
+    let dir = dir.map(HSTRING::from);
     let dir = dir.as_ref().map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr()));
     unsafe {
         ShellExecuteW(None, w!("open"), file, &args, dir, show);
@@ -471,7 +470,7 @@ pub fn launch(file: impl windows::core::Param<PCWSTR>, args: &str, dir: Option<&
 /// Removes the previous version an update moved aside, once it is no longer running.
 pub fn tidy() {
     if let Some(dir) = install_dir() {
-        let _ = std::fs::remove_file(dir.join("goby.old"));
+        files::remove_file(&format!("{dir}\\goby.old"));
     }
 }
 
@@ -481,12 +480,9 @@ mod tests {
 
     #[test]
     fn sign_in_starts_goby_in_the_tray_without_the_setup_question() {
-        let exe = Path::new(r"C:\Users\a\AppData\Local\Programs\Goby\goby.exe");
+        let exe = r"C:\Users\a\AppData\Local\Programs\Goby\goby.exe";
         assert_eq!(autostart_command(exe, true), r#""C:\Users\a\AppData\Local\Programs\Goby\goby.exe" --tray"#);
-        assert_eq!(
-            autostart_command(Path::new(r"D:\tools\goby.exe"), false),
-            r#""D:\tools\goby.exe" --portable --tray"#
-        );
+        assert_eq!(autostart_command(r"D:\tools\goby.exe", false), r#""D:\tools\goby.exe" --portable --tray"#);
     }
 
     #[test]
@@ -499,7 +495,7 @@ mod tests {
 
     #[test]
     fn the_apps_entry_names_the_author_and_uninstalls_quietly_too() {
-        let entry = uninstall_entry(Path::new(r"C:\Users\me\AppData\Local\Programs\Goby\goby.exe"), 460);
+        let entry = uninstall_entry(r"C:\Users\me\AppData\Local\Programs\Goby\goby.exe", 460);
         let get = |k: &str| entry.iter().find(|(n, _, _)| *n == k).and_then(|(_, v, _)| v.clone());
         assert_eq!(get("Publisher").as_deref(), Some("Azer Sadykhzadeh"));
         assert_eq!(get("URLInfoAbout").as_deref(), Some("https://azer.one"));
@@ -522,7 +518,7 @@ mod tests {
 
     #[test]
     fn folders_compare_without_case_or_trailing_slash() {
-        assert!(same_dir(Path::new(r"C:\Users\Me\Programs\Goby\"), Path::new(r"c:\users\me\programs\goby")));
-        assert!(!same_dir(Path::new(r"C:\Goby"), Path::new(r"C:\Goby2")));
+        assert!(same_dir(r"C:\Users\Me\Programs\Goby\", r"c:\users\me\programs\goby"));
+        assert!(!same_dir(r"C:\Goby", r"C:\Goby2"));
     }
 }

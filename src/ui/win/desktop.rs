@@ -95,9 +95,9 @@ impl Host for Desktop {
     }
 
     fn name_cable(&mut self, play: &Endpoint, record: &Endpoint) {
-        let exe = std::env::current_exe().unwrap_or_default();
+        let exe = crate::files::current_exe().unwrap_or_default();
         let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
-        let (exe, args) = (HSTRING::from(exe.as_os_str()), HSTRING::from(args));
+        let (exe, args) = (HSTRING::from(exe), HSTRING::from(args));
         unsafe {
             ShellExecuteW(
                 Some(self.hwnd),
