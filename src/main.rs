@@ -64,8 +64,27 @@ fn spawn(work: Work) -> Thread {
     }
 }
 
+/// The command-line arguments after the program's own name. Windows splits them itself;
+/// std::env::args would bring its own parser along.
+fn args() -> Vec<String> {
+    use windows::Win32::Foundation::{HLOCAL, LocalFree};
+    use windows::Win32::System::Environment::GetCommandLineW;
+    use windows::Win32::UI::Shell::CommandLineToArgvW;
+    let mut n = 0;
+    unsafe {
+        let argv = CommandLineToArgvW(GetCommandLineW(), &mut n);
+        if argv.is_null() {
+            return Vec::new();
+        }
+        let args = std::slice::from_raw_parts(argv, n as usize);
+        let args = args.iter().skip(1).map(|a| String::from_utf16_lossy(a.as_wide())).collect();
+        LocalFree(Some(HLOCAL(argv as _)));
+        args
+    }
+}
+
 fn main() -> windows::core::Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = args();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args.as_slice() {
         // Relaunched elevated to (re)name the virtual cable; does only that.
