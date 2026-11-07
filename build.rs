@@ -299,6 +299,12 @@ fn main() {
     std::fs::write(&path, res).expect("write goby.res");
     println!("cargo:rustc-link-arg-bins={}", path.display());
 
+    // With crt-static (.cargo/config.toml) the VC runtime is linked in, and these two take
+    // the Universal CRT from Windows (ucrtbase.dll, part of Windows 10 and 11) instead of
+    // copying it into the exe: 95 KB less than a fully static CRT.
+    println!("cargo:rustc-link-arg-bins=/NODEFAULTLIB:libucrt.lib");
+    println!("cargo:rustc-link-arg-bins=/DEFAULTLIB:ucrt.lib");
+
     if std::env::var("PROFILE").as_deref() == Ok("release") {
         // strip = true still leaves rustc passing /DEBUG, so the exe carries a debug directory
         // naming a goby.pdb that no release keeps. Debug builds keep their PDB.

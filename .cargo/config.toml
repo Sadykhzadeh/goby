@@ -1,0 +1,5 @@
+# Goby has to start on a clean Windows 10 or 11, which has no VCRUNTIME140.dll unless some
+# other program installed the VC++ redistributable. Link the VC runtime statically; build.rs
+# then swaps the static Universal CRT back for the one Windows itself ships.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
