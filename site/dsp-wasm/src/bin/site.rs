@@ -5,7 +5,7 @@
 //!
 //! The window on the page is goby.wasm, the library of this crate; until it loads, and
 //! without JavaScript, docs/images/window.webp shows the same window.
-#![allow(dead_code)]
+#![allow(dead_code, unused_macros, unused_imports)]
 
 #[path = "../../../../crates/dsp/src/dsp.rs"]
 mod dsp;
