@@ -1,5 +1,11 @@
 # Goby has to start on a clean Windows 10 or 11, which has no VCRUNTIME140.dll unless some
 # other program installed the VC++ redistributable. Link the VC runtime statically; build.rs
 # then swaps the static Universal CRT back for the one Windows itself ships.
+#
+# windows::core::Error as a bare HRESULT: no IErrorInfo is fetched after every failed call
+# or released with every error. Nothing Goby calls sets one, so messages read the same.
+#
+# Both flags sit in one list: Cargo takes target rustflags instead of [build] rustflags,
+# never both.
 [target.'cfg(all(windows, target_env = "msvc"))']
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "--cfg", "windows_slim_errors"]
