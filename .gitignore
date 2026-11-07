@@ -3,3 +3,4 @@
 
 # Built by the deploy from site/dsp-wasm; a local copy for previewing the site stays out of git.
 /docs/goby.wasm
+/site/dsp-wasm/target

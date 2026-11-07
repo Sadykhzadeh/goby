@@ -3,7 +3,7 @@ name = "goby-dsp-wasm"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Goby's voices for the website: src/dsp.rs, src/fx.rs, src/mic.rs and src/voices.rs built for wasm32."
+description = "Goby on its website: the app's window and voices built for wasm32, and the page that holds them."
 license = "GPL-3.0-or-later"
 
 [lib]

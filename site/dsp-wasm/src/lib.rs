@@ -1,25 +1,41 @@
-//! Goby's voice engine for the website's "try it" button. It compiles the app's own
-//! DSP files unchanged and exposes them as plain wasm exports for an AudioWorklet.
+//! Goby on the website: the app's own voices and its window, built for wasm32 from the
+//! app's source files unchanged. One module serves both: the page runs the window
+//! (`window.rs`, a thin shim for docs/window.js), and an AudioWorklet runs the voices
+//! (the plain exports below, for docs/worklet.js).
 //!
-//! The site's deploy builds it from the commit it publishes, so the site always plays
-//! the voices in main. To preview the site locally:
+//! The site's deploy builds it, and the page, from the commit it publishes. The same, to
+//! preview the site locally, from this folder:
 //!
-//!   cargo build --release --target wasm32-unknown-unknown
+//!   cargo build --release --locked --target wasm32-unknown-unknown --lib
 //!   cp target/wasm32-unknown-unknown/release/goby_dsp_wasm.wasm ../../docs/goby.wasm
+//!   cargo run --release --locked --bin site
 //!
-//! No wasm-bindgen: docs/worklet.js calls the plain exports below.
-//! One instance per worklet, so the state lives in a static. Calls come from the audio
-//! thread only, one at a time.
+//! No wasm-bindgen: the JavaScript calls plain exports and supplies plain imports.
+//! One instance per thread, so the state lives in statics; calls come one at a time.
 #![allow(dead_code)]
 
-#[path = "../../../src/fx.rs"]
-mod fx;
 #[path = "../../../src/dsp.rs"]
 mod dsp;
+#[path = "../../../src/fx.rs"]
+mod fx;
 #[path = "../../../src/mic.rs"]
 mod mic;
 #[path = "../../../src/voices.rs"]
 mod voices;
+
+#[path = "../../../src/demo.rs"]
+mod demo;
+#[path = "../../../src/draw.rs"]
+mod draw;
+#[path = "../../../src/host.rs"]
+mod host;
+#[path = "../../../src/settings.rs"]
+mod settings;
+#[path = "../../../src/theme.rs"]
+mod theme;
+#[path = "../../../src/ui/mod.rs"]
+mod ui;
+mod window;
 
 use dsp::Voice;
 use mic::Mic;

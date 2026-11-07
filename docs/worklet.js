@@ -4,7 +4,10 @@ class Goby extends AudioWorkletProcessor {
     super();
     try {
       const module = new WebAssembly.Module(options.processorOptions.bytes);
-      this.x = new WebAssembly.Instance(module, {}).exports;
+      // The same module draws the window on the page; here its drawing imports do nothing.
+      const imports = {};
+      for (const i of WebAssembly.Module.imports(module)) (imports[i.module] ??= {})[i.name] = () => 0;
+      this.x = new WebAssembly.Instance(module, imports).exports;
       this.at = this.x.init(sampleRate);
       this.view = new Float32Array(this.x.memory.buffer, this.at, 1024);
       this.quanta = 0;

@@ -11,6 +11,8 @@ use crate::settings::Settings;
 use crate::voices;
 
 const CABLE_PLAY: &str = "cable-play";
+/// What the app measures from a USB microphone to the cable, on average.
+const LATENCY_MS: f32 = 28.0;
 
 /// The voice and microphone settings as the window last set them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -53,7 +55,7 @@ impl Default for DemoHost {
             live: false,
             heard: Box::new([0.0; 2 * SCOPE_LEN]),
             fresh: false,
-            latency: 28.0,
+            latency: LATENCY_MS,
             opened: None,
             hotkeys: true,
             saves: Cell::new(0),
@@ -140,6 +142,9 @@ impl Host for DemoHost {
 
     fn start(&mut self, _: &str, _: bool, outputs: &[String]) -> Result<(), String> {
         self.live = outputs.iter().any(|o| o != CABLE_PLAY);
+        if !self.live {
+            self.latency = LATENCY_MS;
+        }
         Ok(())
     }
 

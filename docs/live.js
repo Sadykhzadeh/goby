@@ -1,17 +1,8 @@
 // Loaded only when a visitor asks to hear the voices. Goby's own DSP (src/dsp.rs, fx.rs,
-// mic.rs and the recipes in voices.rs, built from site/dsp-wasm) runs in an AudioWorklet
-// between the microphone and the visitor's headphones.
-export async function start(ctx) {
-  const [bytes] = await Promise.all([
-    fetch("goby.wasm").then(r => {
-      if (!r.ok) throw new Error(`goby.wasm: ${r.status}`);
-      return r.arrayBuffer();
-    }),
-    ctx.audioWorklet.addModule("worklet.js"),
-  ]);
-  // Compiled here first, so a page that may not run WebAssembly says so before it asks
-  // for the microphone. The worklet compiles its own copy from the same bytes.
-  await WebAssembly.compile(bytes);
+// mic.rs and the recipes in voices.rs, in the goby.wasm the window already runs on) works
+// in an AudioWorklet between the microphone and the visitor's headphones.
+export async function start(ctx, bytes) {
+  await ctx.audioWorklet.addModule("worklet.js");
   // Raw sound: the browser's echo cancelling and noise suppression would fight the effects.
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, latency: 0 },
@@ -42,12 +33,12 @@ export async function start(ctx) {
         rawScope.getFloatTimeDomainData(raw);
         outScope.getFloatTimeDomainData(out);
       },
-      // What the browser says about its own buffers, plus how far the voice runs behind.
+      // Milliseconds from the microphone to the ears: the browser's own buffers, as it
+      // reports them, plus how far the voice runs behind.
       latency() {
         const input = track.getSettings().latency || 0;
         const output = (ctx.baseLatency || 0) + (ctx.outputLatency || 0) + 128 / ctx.sampleRate;
-        const voice = delay / ctx.sampleRate;
-        return { input, output, voice, total: (input + output + voice) * 1000 };
+        return (input + output + delay / ctx.sampleRate) * 1000;
       },
       stop() {
         stream.getTracks().forEach(t => t.stop());
