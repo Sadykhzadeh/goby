@@ -76,3 +76,11 @@ panic = "abort"
 [profile.release.package.goby-dsp]
 # Never lower: "s" makes the heaviest voice 15-25 % slower and "z" six times.
 opt-level = 3
+
+# build.rs searches hard for the smallest icon PNGs; unoptimised, that takes 15 s each time
+# it runs, and it runs whenever src/ changes.
+[profile.dev.build-override]
+opt-level = 1
+
+[profile.release.build-override]
+opt-level = 1
