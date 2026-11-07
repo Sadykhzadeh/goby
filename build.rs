@@ -64,16 +64,6 @@ impl Bits {
         let reversed = (0..len).fold(0, |r, i| r | ((code >> i) & 1) << (len - 1 - i));
         self.put(reversed, len);
     }
-
-    /// A literal or length symbol in the fixed Huffman code of RFC 1951.
-    fn symbol(&mut self, v: u32) {
-        match v {
-            0..=143 => self.code(0x30 + v, 8),
-            144..=255 => self.code(0x190 + v - 144, 9),
-            256..=279 => self.code(v - 256, 7),
-            _ => self.code(0xC0 + v - 280, 8),
-        }
-    }
 }
 
 const LEN_BASE: [u32; 29] =
@@ -86,38 +76,250 @@ const DIST_BASE: [u32; 30] = [
 const DIST_EXTRA: [u32; 30] =
     [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
 
-/// One fixed-Huffman deflate block whose matches look one pixel or one row back. Icons are
-/// mostly transparent runs, so this small encoder already shrinks them about tenfold.
-fn deflate(data: &[u8], row: usize) -> Vec<u8> {
-    let mut b = Bits { out: Vec::new(), acc: 0, n: 0 };
-    b.put(1, 1); // last block
-    b.put(1, 2); // fixed Huffman codes
-    let mut i = 0;
-    while i < data.len() {
-        let mut best = (0usize, 0usize);
-        for d in [4, row] {
-            if d <= i {
-                let n = (0..258).take_while(|&k| i + k < data.len() && data[i + k] == data[i + k - d]).count();
-                if n > best.0 {
-                    best = (n, d);
+fn len_symbol(len: usize) -> usize {
+    LEN_BASE.iter().rposition(|&base| base as usize <= len).unwrap()
+}
+
+fn dist_symbol(dist: usize) -> usize {
+    DIST_BASE.iter().rposition(|&base| base as usize <= dist).unwrap()
+}
+
+/// Huffman code lengths for `freq`, none longer than `limit`. Unused symbols get 0. When
+/// the tree comes out too deep, the counts are halved towards each other and it is redone.
+fn code_lengths(freq: &[u64], limit: u8) -> Vec<u8> {
+    let mut freq = freq.to_vec();
+    loop {
+        let mut lens = vec![0u8; freq.len()];
+        let used: Vec<usize> = (0..freq.len()).filter(|&s| freq[s] > 0).collect();
+        if used.len() == 1 {
+            lens[used[0]] = 1;
+            return lens;
+        }
+        // Each node is (count, parent); leaves come first, in the order of `used`.
+        let mut nodes: Vec<(u64, usize)> = used.iter().map(|&s| (freq[s], usize::MAX)).collect();
+        let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, usize)>> =
+            nodes.iter().enumerate().map(|(i, n)| std::cmp::Reverse((n.0, i))).collect();
+        while heap.len() > 1 {
+            let std::cmp::Reverse((a, i)) = heap.pop().unwrap();
+            let std::cmp::Reverse((b, j)) = heap.pop().unwrap();
+            let parent = nodes.len();
+            nodes.push((a + b, usize::MAX));
+            nodes[i].1 = parent;
+            nodes[j].1 = parent;
+            heap.push(std::cmp::Reverse((a + b, parent)));
+        }
+        let mut deepest = 0;
+        for (leaf, &s) in used.iter().enumerate() {
+            let (mut depth, mut at) = (0u8, leaf);
+            while nodes[at].1 != usize::MAX {
+                at = nodes[at].1;
+                depth += 1;
+            }
+            lens[s] = depth;
+            deepest = deepest.max(depth);
+        }
+        if deepest <= limit {
+            return lens;
+        }
+        for f in freq.iter_mut().filter(|f| **f > 0) {
+            *f = f.div_ceil(2);
+        }
+    }
+}
+
+/// Canonical codes for code lengths, as RFC 1951 assigns them.
+fn canonical(lens: &[u8]) -> Vec<u32> {
+    let mut next = [0u32; 16];
+    let mut count = [0u32; 16];
+    lens.iter().filter(|&&l| l > 0).for_each(|&l| count[l as usize] += 1);
+    for bits in 1..16 {
+        next[bits] = (next[bits - 1] + count[bits - 1]) << 1;
+    }
+    lens.iter()
+        .map(|&l| {
+            let code = next[l as usize];
+            next[l as usize] += 1;
+            code
+        })
+        .collect()
+}
+
+/// For every position, the shortest distance that gives each match length, as a list of
+/// (longest length, distance) steps; found through hash chains over the whole window.
+fn matches(data: &[u8]) -> Vec<Vec<(usize, usize)>> {
+    const WINDOW: usize = 32768;
+    let hash = |i: usize| (data[i] as usize) << 16 | (data[i + 1] as usize) << 8 | data[i + 2] as usize;
+    let mut head = std::collections::HashMap::new();
+    let mut prev = vec![usize::MAX; data.len()];
+    let mut found = vec![Vec::new(); data.len()];
+    for i in 0..data.len().saturating_sub(2) {
+        let h = hash(i);
+        let (mut at, mut longest, mut tries) = (*head.get(&h).unwrap_or(&usize::MAX), 2, 0);
+        let most = (data.len() - i).min(258);
+        // Build scripts run unoptimised, so a candidate that cannot beat the longest so far
+        // is turned away on one byte.
+        while at != usize::MAX && i - at <= WINDOW && tries < 256 && longest < most {
+            if data[at + longest] == data[i + longest] {
+                let mut n = 0;
+                while n < most && data[at + n] == data[i + n] {
+                    n += 1;
+                }
+                if n > longest {
+                    longest = n;
+                    found[i].push((n, i - at));
                 }
             }
+            at = prev[at];
+            tries += 1;
         }
-        if best.0 >= 3 {
-            let (len, dist) = (best.0 as u32, best.1 as u32);
-            let k = LEN_BASE.iter().rposition(|&base| base <= len).unwrap();
-            b.symbol(257 + k as u32);
-            b.put(len - LEN_BASE[k], LEN_EXTRA[k]);
-            let k = DIST_BASE.iter().rposition(|&base| base <= dist).unwrap();
-            b.code(k as u32, 5);
-            b.put(dist - DIST_BASE[k], DIST_EXTRA[k]);
-            i += best.0;
+        prev[i] = head.insert(h, i).unwrap_or(usize::MAX);
+    }
+    found
+}
+
+/// Literals and (length, distance) matches; a literal has length 0 and the byte as distance.
+type Tokens = Vec<(usize, usize)>;
+
+/// The cheapest way through `data` under the given code lengths, by shortest path.
+fn parse(data: &[u8], found: &[Vec<(usize, usize)>], lit: &[u8], dist: &[u8]) -> Tokens {
+    let cost_of = |lens: &[u8], s: usize| if lens[s] > 0 { lens[s] as u32 } else { 16 };
+    let lit_cost: Vec<u32> = (0..256).map(|s| cost_of(lit, s)).collect();
+    let len_cost: Vec<u32> = (0..259)
+        .map(|len| if len < 3 { 0 } else { cost_of(lit, 257 + len_symbol(len)) + LEN_EXTRA[len_symbol(len)] })
+        .collect();
+    let mut best = vec![(u32::MAX, (0usize, 0usize)); data.len() + 1];
+    best[0].0 = 0;
+    for i in 0..data.len() {
+        let here = best[i].0;
+        let c = here + lit_cost[data[i] as usize];
+        if c < best[i + 1].0 {
+            best[i + 1] = (c, (0, data[i] as usize));
+        }
+        let mut from = 3;
+        for &(upto, d) in &found[i] {
+            let ds = dist_symbol(d);
+            let base = here + cost_of(dist, ds) + DIST_EXTRA[ds];
+            for len in from..=upto {
+                let c = base + len_cost[len];
+                if c < best[i + len].0 {
+                    best[i + len] = (c, (len, d));
+                }
+            }
+            from = upto + 1;
+        }
+    }
+    let mut tokens = Vec::new();
+    let mut i = data.len();
+    while i > 0 {
+        let t = best[i].1;
+        tokens.push(t);
+        i -= t.0.max(1);
+    }
+    tokens.reverse();
+    tokens
+}
+
+/// How often each literal/length and distance symbol occurs.
+fn counts(tokens: &Tokens) -> (Vec<u64>, Vec<u64>) {
+    let (mut lit, mut dist) = (vec![0u64; 286], vec![0u64; 30]);
+    for &(len, d) in tokens {
+        if len == 0 {
+            lit[d] += 1;
         } else {
-            b.symbol(data[i] as u32);
+            lit[257 + len_symbol(len)] += 1;
+            dist[dist_symbol(d)] += 1;
+        }
+    }
+    lit[256] = 1;
+    // Some decoders want at least two distance codes.
+    for d in &mut dist[..2] {
+        *d = (*d).max(1);
+    }
+    (lit, dist)
+}
+
+/// One dynamic-Huffman deflate block. The parse is refined a few times, each round costed
+/// with the codes the round before produced, much as zopfli does.
+fn deflate(data: &[u8]) -> Vec<u8> {
+    let found = matches(data);
+    let (mut lit, mut dist) = (vec![8u8; 286], vec![5u8; 30]);
+    let mut best: Option<Vec<u8>> = None;
+    for _ in 0..4 {
+        let tokens = parse(data, &found, &lit, &dist);
+        let (lf, df) = counts(&tokens);
+        (lit, dist) = (code_lengths(&lf, 15), code_lengths(&df, 15));
+        let out = write_block(&tokens, &lit, &dist);
+        if best.as_ref().is_none_or(|b| out.len() < b.len()) {
+            best = Some(out);
+        }
+    }
+    best.unwrap()
+}
+
+fn write_block(tokens: &Tokens, lit: &[u8], dist: &[u8]) -> Vec<u8> {
+    let hlit = 257.max(lit.iter().rposition(|&l| l > 0).unwrap() + 1);
+    let hdist = 1.max(dist.iter().rposition(|&l| l > 0).unwrap_or(0) + 1);
+    let all: Vec<u8> = lit[..hlit].iter().chain(&dist[..hdist]).copied().collect();
+    // Run-length the code lengths: 16 repeats the last 3-6 times, 17 and 18 are zero runs.
+    let mut rle: Vec<(usize, u32)> = Vec::new();
+    let mut i = 0;
+    while i < all.len() {
+        let run = all[i..].iter().take_while(|&&l| l == all[i]).count();
+        if all[i] == 0 && run >= 11 {
+            let n = run.min(138);
+            rle.push((18, n as u32 - 11));
+            i += n;
+        } else if all[i] == 0 && run >= 3 {
+            rle.push((17, run as u32 - 3));
+            i += run;
+        } else if i > 0 && all[i] == all[i - 1] && run >= 3 {
+            let n = run.min(6);
+            rle.push((16, n as u32 - 3));
+            i += n;
+        } else {
+            rle.push((all[i] as usize, 0));
             i += 1;
         }
     }
-    b.symbol(256);
+    let mut cf = vec![0u64; 19];
+    rle.iter().for_each(|&(s, _)| cf[s] += 1);
+    let cl = code_lengths(&cf, 7);
+    let cc = canonical(&cl);
+    const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+    let hclen = 4.max(ORDER.iter().rposition(|&s| cl[s] > 0).unwrap() + 1);
+
+    let mut b = Bits { out: Vec::new(), acc: 0, n: 0 };
+    b.put(1, 1); // last block
+    b.put(2, 2); // dynamic Huffman codes
+    b.put(hlit as u32 - 257, 5);
+    b.put(hdist as u32 - 1, 5);
+    b.put(hclen as u32 - 4, 4);
+    for &s in &ORDER[..hclen] {
+        b.put(cl[s] as u32, 3);
+    }
+    for &(s, extra) in &rle {
+        b.code(cc[s], cl[s] as u32);
+        match s {
+            16 => b.put(extra, 2),
+            17 => b.put(extra, 3),
+            18 => b.put(extra, 7),
+            _ => {}
+        }
+    }
+    let (lc, dc) = (canonical(lit), canonical(dist));
+    for &(len, d) in tokens {
+        if len == 0 {
+            b.code(lc[d], lit[d] as u32);
+        } else {
+            let k = len_symbol(len);
+            b.code(lc[257 + k], lit[257 + k] as u32);
+            b.put((len as u32) - LEN_BASE[k], LEN_EXTRA[k]);
+            let k = dist_symbol(d);
+            b.code(dc[k], dist[k] as u32);
+            b.put(d as u32 - DIST_BASE[k], DIST_EXTRA[k]);
+        }
+    }
+    b.code(lc[256], lit[256] as u32);
     if b.n > 0 {
         b.out.push(b.acc as u8);
     }
@@ -150,7 +352,7 @@ fn icon_png(size: usize) -> Vec<u8> {
         }
     }
     let mut zlib = vec![0x78, 0x01];
-    zlib.extend(deflate(&raw, 1 + size * 4));
+    zlib.extend(deflate(&raw));
     zlib.extend(adler32(&raw).to_be_bytes());
 
     let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -203,7 +405,7 @@ fn version_info(version: &str, commit: &str) -> Vec<u8> {
         ("FileDescription", "Goby voice changer".to_string()),
         ("FileVersion", version.to_string()),
         ("InternalName", "goby".to_string()),
-        ("LegalCopyright", format!("© {year} {AUTHOR}, GPL-3.0-or-later")),
+        ("LegalCopyright", format!("Â© {year} {AUTHOR}, GPL-3.0-or-later")),
         ("OriginalFilename", "goby.exe".to_string()),
         ("ProductName", "Goby".to_string()),
         // The commit rides along here, so Properties > Details names the exact build.
