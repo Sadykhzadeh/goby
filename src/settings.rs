@@ -74,7 +74,7 @@ fn presets(v: &str) -> Vec<Preset> {
         .filter_map(|entry| {
             let mut parts = entry.trim().split(':');
             let voice = parts.next()?.trim().to_ascii_lowercase();
-            let mut number = || parts.next()?.trim().parse::<f32>().ok().filter(|x| x.is_finite());
+            let mut number = || decimal(parts.next()?.trim());
             let (semitones, dry_mix, volume) = (number()?, number()?, number()?);
             (!voice.is_empty()).then(|| Preset {
                 voice,
@@ -124,7 +124,64 @@ fn list(v: &str) -> Vec<String> {
 /// A knob's value, or `default` when it is not a finite number. "NaN" parses as a float
 /// and comes through `clamp` unchanged, and one NaN gain turns every sample after it to NaN.
 fn number(v: &str, default: f32, lo: f32, hi: f32) -> f32 {
-    v.parse::<f32>().ok().filter(|x| x.is_finite()).unwrap_or(default).clamp(lo, hi)
+    decimal(v).unwrap_or(default).clamp(lo, hi)
+}
+
+/// What `str::parse::<f32>` reads, kept only when finite: a sign, digits with an optional
+/// fraction, an optional exponent. The std parser handles every corner of IEEE rounding and
+/// brings 15 KB of tables with it; the numbers in settings.ini are short, and for them one
+/// exact division in f64 lands on the same f32 (the tests compare the two widely).
+pub fn decimal(s: &str) -> Option<f32> {
+    let (neg, s) = match s.as_bytes().first() {
+        Some(b'-') => (true, &s[1..]),
+        Some(b'+') => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (mantissa, exp) = match s.find(['e', 'E']) {
+        Some(i) => (&s[..i], Some(&s[i + 1..])),
+        None => (s, None),
+    };
+    let (int, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if int.is_empty() && frac.is_empty() {
+        return None;
+    }
+    // Up to 18 digits are exact in a u64; past that they are far below an f32's precision.
+    let (mut m, mut e) = (0u64, 0i32);
+    for (i, c) in int.bytes().chain(frac.bytes()).enumerate() {
+        let d = (c as char).to_digit(10)? as u64;
+        let fraction = i >= int.len();
+        if m < 100_000_000_000_000_000 {
+            m = m * 10 + d;
+            e -= fraction as i32;
+        } else {
+            e += !fraction as i32;
+        }
+    }
+    if let Some(x) = exp {
+        let (eneg, x) = match x.as_bytes().first() {
+            Some(b'-') => (true, &x[1..]),
+            Some(b'+') => (false, &x[1..]),
+            _ => (false, x),
+        };
+        if x.is_empty() {
+            return None;
+        }
+        // Far past where an f32 overflows or vanishes; saturating keeps the sum in range.
+        let n = x.bytes().try_fold(0i32, |n, c| Some((n * 10 + (c as char).to_digit(10)? as i32).min(1000)))?;
+        e += if eneg { -n } else { n };
+    }
+    // Powers of ten up to 1e22 are exact in f64, so for those m / 10^k is one rounding.
+    let mut p = 1f64;
+    for _ in 0..e.unsigned_abs().min(400) {
+        p *= 10.0;
+    }
+    let v = match m {
+        0 => 0.0,
+        _ if e < 0 => m as f64 / p,
+        _ => m as f64 * p,
+    };
+    let v = (if neg { -v } else { v }) as f32;
+    v.is_finite().then_some(v)
 }
 
 #[cfg(windows)]
@@ -326,6 +383,145 @@ mod tests {
         assert_eq!(Settings::parse("lang=xx\n").lang, "auto");
         assert_eq!(Settings::parse("lang=auto\n").lang, "auto");
         assert_eq!(Settings::parse("").lang, "auto");
+    }
+
+    fn std_decimal(s: &str) -> Option<u32> {
+        s.parse::<f32>().ok().filter(|x| x.is_finite()).map(f32::to_bits)
+    }
+
+    #[test]
+    fn decimal_reads_what_std_reads() {
+        let odd = [
+            "",
+            "+",
+            "-",
+            ".",
+            "-.",
+            "+.",
+            "e",
+            "e5",
+            ".e5",
+            "1e",
+            "1e+",
+            "1e-",
+            "1e+-5",
+            "1ee5",
+            "1e5.0",
+            "1.2.3",
+            " 1",
+            "1 ",
+            "1_0",
+            "0x10",
+            "١",
+            "+-1",
+            "--1",
+            "++1",
+            "nan",
+            "NaN",
+            "-NaN",
+            "inf",
+            "-inf",
+            "+infinity",
+            "Infinity",
+            "0",
+            "-0",
+            "+0",
+            "00",
+            "0.",
+            ".0",
+            "-.5",
+            "5.",
+            "1.e5",
+            "1E5",
+            "1e+5",
+            "1e-5",
+            "1e0",
+            "0e999",
+            "0e-999",
+            "1e38",
+            "3.4028235e38",
+            "3.4028236e38",
+            "3.5e38",
+            "1e39",
+            "1e400",
+            "-1e400",
+            "1e-45",
+            "1e-46",
+            "1e-400",
+            "1e99999999999",
+            "1e-99999999999",
+            "0.000000000000000000000000000001e30",
+            "123456789012345678901234567890",
+            "1.23456789012345678901234567890",
+            "0.30000001192092896",
+            "16777217",
+            "16777216.5",
+            "33554433",
+            "0.1",
+            "0.2",
+            "0.3",
+            "1.1",
+            "-12.000001",
+            "9",
+            "-80",
+            "24",
+        ];
+        for s in odd {
+            assert_eq!(decimal(s).map(f32::to_bits), std_decimal(s), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn decimal_reads_back_every_value_settings_can_hold() {
+        // Every f32 in the widest knob range, gate_db's -80 up to mic_gain_db's 24, as
+        // `render` writes them and in scientific form, read back to the same bits. A
+        // stride keeps it quick while still crossing every exponent many times over.
+        let mut checked = 0;
+        for lo in [0.0f32, -0.0] {
+            let mut x = lo;
+            while x.abs() <= 80.0 {
+                for s in [format!("{x}"), format!("{x:e}"), format!("{x:.3}")] {
+                    assert_eq!(decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
+                }
+                checked += 1;
+                x = f32::from_bits(x.to_bits() + 4099);
+            }
+        }
+        assert!(checked > 500_000);
+        // And short hand-typed decimals, which need not be any float's shortest form.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        for _ in 0..200_000 {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let digits = (seed % 1_000_000_000_000) as i64 - 500_000_000_000;
+            let point = (seed >> 40) as usize % 13;
+            let mut s = digits.abs().to_string();
+            while s.len() <= point {
+                s.insert(0, '0');
+            }
+            s.insert(s.len() - point, '.');
+            if digits < 0 {
+                s.insert(0, '-');
+            }
+            assert_eq!(decimal(&s).map(f32::to_bits), std_decimal(&s), "{s}");
+        }
+    }
+
+    #[test]
+    fn windows_line_endings_empty_values_and_huge_numbers() {
+        let s = Settings::parse("voice=demon\r\nsemitones=3.5\r\nvolume=\r\nupdate_checked=17\r\nlang=ru\r\n");
+        assert_eq!((s.voice.as_str(), s.semitones, s.volume), ("demon", 3.5, 1.0));
+        assert_eq!((s.update_checked, s.lang.as_str()), (17, "ru"));
+        let s = Settings::parse("voice=demon\nsemitones=\ngate_db=\nupdate_checked=\nmic_gain_db=-\ndry_mix=.\n");
+        let d = Settings::default();
+        assert_eq!((s.semitones, s.gate_db, s.update_checked), (d.semitones, d.gate_db, 0));
+        assert_eq!((s.mic_gain_db, s.dry_mix), (d.mic_gain_db, d.dry_mix));
+        let s = Settings::parse(
+            "voice=demon\nsemitones=-1e30\nvolume=1e39\nmic_gain_db=99999999999999999999999\nupdate_checked=18446744073709551616\n",
+        );
+        assert_eq!((s.semitones, s.volume, s.mic_gain_db, s.update_checked), (-12.0, 1.0, 24.0, 0));
+        assert_eq!(Settings::parse("update_checked=+18446744073709551615\n").update_checked, u64::MAX);
     }
 
     #[test]
