@@ -71,6 +71,7 @@ Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from
 
 - [How it works](docs/how-it-works.md): audio path, latency budget, the pitch shifter, routing, measured numbers.
 - [Install, update and uninstall](docs/install.md): silent install flags, what uninstall cleans up, how signed updates work.
+- [Translating Goby](docs/translating.md): English and Russian today; a new language is one text file.
 - Build it yourself: Rust 1.88+ on Windows 10 or 11, then `cargo build --release`.
 
 Inspired by [Clownfish Voice Changer](https://clownfish-translator.com/voicechanger/).
