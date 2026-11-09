@@ -32,7 +32,7 @@ const AUTHOR: &str = "Azer Sadykhzadeh";
 const WEBSITE: &str = "https://azer.one";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn known_folder(id: &GUID) -> Option<String> {
+pub fn known_folder(id: &GUID) -> Option<String> {
     unsafe {
         let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
         let path = p.to_string().ok();
@@ -378,22 +378,41 @@ pub fn failed(error: &std::io::Error) {
 /// Runs this executable elevated with `args` and waits for it (one UAC prompt).
 fn run_elevated(args: &str) {
     let Some(exe) = files::current_exe() else { return };
-    let (exe, args) = (HSTRING::from(exe), HSTRING::from(args));
+    shell(w!("runas"), &HSTRING::from(exe), args, None, SW_HIDE, true);
+}
+
+/// ShellExecuteEx with `verb`, optionally waiting for the started process to end.
+pub fn shell(
+    verb: PCWSTR,
+    file: &HSTRING,
+    args: &str,
+    dir: Option<&HSTRING>,
+    show: SHOW_WINDOW_CMD,
+    wait: bool,
+) -> bool {
+    let args = HSTRING::from(args);
     let mut info = SHELLEXECUTEINFOW {
         cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_NOCLOSEPROCESS,
-        lpVerb: w!("runas"),
-        lpFile: PCWSTR(exe.as_ptr()),
+        lpVerb: verb,
+        lpFile: PCWSTR(file.as_ptr()),
         lpParameters: PCWSTR(args.as_ptr()),
-        nShow: SW_HIDE.0,
+        lpDirectory: dir.map_or(PCWSTR::null(), |d| PCWSTR(d.as_ptr())),
+        nShow: show.0,
         ..Default::default()
     };
     unsafe {
-        if ShellExecuteExW(&mut info).is_ok() && !info.hProcess.is_invalid() {
-            WaitForSingleObject(info.hProcess, INFINITE);
+        if ShellExecuteExW(&mut info).is_err() {
+            return false;
+        }
+        if !info.hProcess.is_invalid() {
+            if wait {
+                WaitForSingleObject(info.hProcess, INFINITE);
+            }
             let _ = CloseHandle(info.hProcess);
         }
     }
+    true
 }
 
 /// `goby.exe --uninstall [--quiet]`, as Settings > Apps runs it.

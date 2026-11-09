@@ -187,10 +187,12 @@ impl<H: Host> App<H> {
                     self.route(app.exe.clone());
                 }
             }
-            Hit::Downloads => self.host.open(Link::Downloads),
-            Hit::CableSite => {
-                self.cable_opened = true;
-                self.host.open(Link::Cable);
+            Hit::Sound => self.host.open(Link::Sound),
+            Hit::CableSetup => {
+                if !self.cable_opened {
+                    self.cable_opened = true;
+                    self.host.open(Link::Cable);
+                }
             }
             Hit::None => {}
         }

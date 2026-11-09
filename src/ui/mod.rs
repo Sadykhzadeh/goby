@@ -133,10 +133,10 @@ enum Hit {
     Nav(Page),
     /// A recent microphone user (index into `mic_apps`) to add with one click.
     Offer(usize),
-    /// The VB-Cable download page.
-    CableSite,
-    /// The Downloads folder, where the cable's archive lands.
-    Downloads,
+    /// Fetch VB-Cable and open its setup.
+    CableSetup,
+    /// Sound settings, to turn on a cable that is installed but off.
+    Sound,
 }
 
 impl Knob {
@@ -272,8 +272,10 @@ pub struct App<H: Host> {
     /// Where each program seen so far lives (lower-case exe name to full path), for icons.
     exe_paths: Vec<(String, String)>,
     apps_at: Duration,
-    /// The VB-Cable page was opened from the setup steps this session.
+    /// VB-Cable's setup was started from the setup steps this session.
     cable_opened: bool,
+    /// The cable's driver is installed, though its devices are not up.
+    cable_installed: bool,
     /// When a cable installed while Goby was open was found, to say so for a while.
     cable_found: Option<Duration>,
     /// Re-read device names a moment after the elevated rename was started.
@@ -367,6 +369,7 @@ impl<H: Host> App<H> {
             apps_at: host.now(),
             recheck_at: None,
             cable_opened: false,
+            cable_installed: false,
             cable_found: None,
             mouse: (-1.0, -1.0),
             hover: Hit::None,
@@ -495,6 +498,7 @@ impl<H: Host> App<H> {
         self.apps_at = self.host.now();
         if self.cable.is_none() {
             self.look_for_cable();
+            self.cable_installed = self.cable.is_none() && self.host.cable_installed();
         }
         let recent = self.host.recent_apps();
         for app in recent.iter().filter(|a| !a.path.is_empty()) {

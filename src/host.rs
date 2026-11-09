@@ -54,10 +54,10 @@ pub struct Pinned {
 pub enum Link {
     /// The author's site.
     Author,
-    /// The VB-Cable download page.
+    /// VB-Cable: its setup, fetched from its author, or else its download page.
     Cable,
-    /// The Downloads folder, where the cable's archive lands.
-    Downloads,
+    /// The Sound control panel's Recording tab, where a cable turned off is turned back on.
+    Sound,
 }
 
 /// What the global hotkeys ask for.
@@ -95,6 +95,8 @@ pub trait Host {
     fn default_device(&mut self, capture: bool) -> Option<Endpoint>;
     /// The virtual cable, (play side, record side), if installed.
     fn cable(&mut self) -> Option<(Endpoint, Endpoint)>;
+    /// The cable's driver is installed, whether or not its devices are up.
+    fn cable_installed(&mut self) -> bool;
     /// Gives the cable Goby's names, behind one elevation prompt.
     fn name_cable(&mut self, play: &Endpoint, record: &Endpoint);
 

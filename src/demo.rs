@@ -145,6 +145,10 @@ impl Host for DemoHost {
         Some((ep(CABLE_PLAY, "Goby (VB-Audio Virtual Cable)"), ep("cable-record", "Goby Mic (VB-Audio Virtual Cable)")))
     }
 
+    fn cable_installed(&mut self) -> bool {
+        true
+    }
+
     fn name_cable(&mut self, _: &Endpoint, _: &Endpoint) {}
 
     fn start(&mut self, _: &str, _: bool, outputs: &[String]) -> Result<(), String> {

@@ -94,6 +94,10 @@ impl Host for Desktop {
         engine::cable()
     }
 
+    fn cable_installed(&mut self) -> bool {
+        crate::cable::installed()
+    }
+
     fn name_cable(&mut self, play: &Endpoint, record: &Endpoint) {
         let exe = crate::files::current_exe().unwrap_or_default();
         let args = format!("--name-cable \"{}\" \"{}\"", play.id, record.id);
@@ -246,8 +250,8 @@ impl Host for Desktop {
     fn open(&mut self, link: Link) {
         match link {
             Link::Author => self.shell_open(w!("https://azer.one")),
-            Link::Cable => self.shell_open(w!("https://vb-audio.com/Cable/")),
-            Link::Downloads => install::launch(w!("explorer.exe"), "shell:Downloads", None, SW_SHOWNORMAL),
+            Link::Cable => crate::cable::install(),
+            Link::Sound => install::launch(w!("control.exe"), "mmsys.cpl,,1", None, SW_SHOWNORMAL),
         }
     }
 

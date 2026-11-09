@@ -87,6 +87,11 @@ impl<H: Host> App<H> {
 
         match &self.cable {
             // Setup in three steps; the last one ticks itself once the cable shows up.
+            // Installed, but no restart since, or its devices turned off in Sound settings.
+            None if self.cable_installed => {
+                let (title, desc) = (tr!("programs.installed"), tr!("programs.installed.desc"));
+                self.row_card(g, &mut y, Hit::Sound, glyph::MIC, title, desc);
+            }
             None => {
                 let title = tr!("programs.setup");
                 g.text(title, Font::Strong, R::new(x + 2.0, y, w, 20.0), Align::Start, th.text());
@@ -94,10 +99,17 @@ impl<H: Host> App<H> {
                 let why = tr!("programs.setup.desc");
                 g.text(why, Font::Caption, R::new(x + 2.0, y, w, 18.0), Align::Start, th.text_secondary());
                 y += 28.0;
-                let (title, desc) = (tr!("programs.step1"), tr!("programs.step1.desc"));
-                self.row_card(g, &mut y, Hit::CableSite, Icon::Step(1, self.cable_opened), title, desc);
+                let desc = if self.cable_opened { tr!("programs.step1.busy") } else { tr!("programs.step1.desc") };
+                self.row_card(
+                    g,
+                    &mut y,
+                    Hit::CableSetup,
+                    Icon::Step(1, self.cable_opened),
+                    tr!("programs.step1"),
+                    desc,
+                );
                 let (title, desc) = (tr!("programs.step2"), tr!("programs.step2.desc"));
-                self.row_card(g, &mut y, Hit::Downloads, Icon::Step(2, false), title, desc);
+                self.row_card(g, &mut y, Hit::None, Icon::Step(2, false), title, desc);
                 let (title, desc) = (tr!("programs.step3"), tr!("programs.step3.desc"));
                 self.row_card(g, &mut y, Hit::None, Icon::Step(3, false), title, desc);
             }

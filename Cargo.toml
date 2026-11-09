@@ -59,6 +59,10 @@ features = [
     # Updates: HTTPS through WinHTTP, signatures and hashes through CNG.
     "Win32_Networking_WinHttp",
     "Win32_Security_Cryptography",
+    # VB-Cable setup: its download must carry VB-Audio's signature.
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
 ]
 
 [profile.release]
