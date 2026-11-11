@@ -98,12 +98,12 @@ pub fn parse(text: &str) -> Option<Manifest> {
     Some(Manifest { version: version?, size: size?, sha256: sha256?, urls })
 }
 
-pub fn sha256(data: &[u8]) -> [u8; 32] {
+/// `None` when Windows could not hash, so that nothing is ever compared with a hash that
+/// was not computed.
+pub fn sha256(data: &[u8]) -> Option<[u8; 32]> {
     let mut out = [0u8; 32];
-    unsafe {
-        let _ = BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut out);
-    }
-    out
+    let hashed = unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, data, &mut out) };
+    (hashed == STATUS_SUCCESS).then_some(out)
 }
 
 /// Whether `signature` (r then s, 32 bytes each) signs `message` under `key` (X then Y).
@@ -116,7 +116,7 @@ fn verify_with(key: &[u8; 64], message: &[u8], signature: &[u8]) -> bool {
     blob.extend(header.dwMagic.to_le_bytes());
     blob.extend(header.cbKey.to_le_bytes());
     blob.extend(key);
-    let hash = sha256(message);
+    let Some(hash) = sha256(message) else { return false };
     unsafe {
         let mut alg = BCRYPT_ALG_HANDLE::default();
         let opened = BCryptOpenAlgorithmProvider(
@@ -238,12 +238,12 @@ pub fn download(m: &Manifest) -> Option<(String, File)> {
     files::create_dirs(&dir).ok()?;
     let path = format!("{dir}\\goby-{}.exe", show(m.version));
     let body = m.urls.iter().find_map(|url| get(url, m.size).filter(|b| b.len() as u64 == m.size))?;
-    if sha256(&body) != m.sha256 || !files::write(&path, &body) {
+    if sha256(&body) != Some(m.sha256) || !files::write(&path, &body) {
         return None;
     }
     let file = File::locked(&path)?;
     let again = file.read_all()?;
-    (sha256(&again) == m.sha256).then_some((path, file))
+    (sha256(&again) == Some(m.sha256)).then_some((path, file))
 }
 
 /// Leftover downloads of earlier updates.
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn sha256_matches_the_standard_vector() {
         let expected = hex32("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad").unwrap();
-        assert_eq!(sha256(b"abc"), expected);
+        assert_eq!(sha256(b"abc"), Some(expected));
     }
 
     /// `cargo test --release live_release -- --ignored --nocapture`: both hosts serve a
