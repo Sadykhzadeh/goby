@@ -10,6 +10,8 @@ use crate::host::{Hotkey, Key, Link, SCOPE_LEN};
 use crate::theme::Theme;
 use crate::ui::{App, Popup, Switch};
 
+// Named, because without a module newer toolchains leave these for the linker to find.
+#[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn begin();
     fn fill(l: f32, t: f32, r: f32, b: f32, radius: f32, rgba: u32);
