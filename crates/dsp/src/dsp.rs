@@ -335,6 +335,8 @@ pub struct Voice {
     /// Output level in samples of fade, 0..=FADE.
     level: u32,
     tone: f32,
+    /// The tone asked for; one that takes the pitch shifter in or out of use waits for a fade too.
+    next_tone: f32,
     volume: f32,
     shifters: [PitchShifter; 3],
     vibrato: Lfo,
@@ -363,6 +365,7 @@ impl Voice {
             next: Recipe::DRY,
             level: FADE,
             tone: 0.0,
+            next_tone: 0.0,
             volume: 1.0,
             shifters: std::array::from_fn(|_| PitchShifter::new(sample_rate)),
             vibrato: Lfo::default(),
@@ -386,14 +389,15 @@ impl Voice {
     /// `tone` moves any voice up or down in semitones; `volume` is the output level.
     pub fn set(&mut self, recipe: &Recipe, tone: f32, volume: f32) {
         self.next = *recipe;
-        self.tone = tone;
+        self.next_tone = tone;
         self.volume = volume;
     }
 
-    /// Swaps in the next recipe; called at the bottom of a fade, where nothing is heard.
+    /// Swaps in the next recipe and tone; called at the bottom of a fade, where nothing is heard.
     fn switch(&mut self) {
         let new = self.next;
         self.recipe = new;
+        self.tone = self.next_tone;
         let sr = self.sample_rate;
         if new.highpass_hz > 0.0 {
             self.highpass = Biquad::new(Shape::High, sr, new.highpass_hz, 0.707);
@@ -402,16 +406,24 @@ impl Voice {
             self.lowpass = Biquad::new(Shape::Low, sr, new.lowpass_hz, 0.707);
         }
         // Tails of the previous voice would ring on into the new one.
+        self.vocoder.clear();
         self.comb.clear();
         self.chorus.clear();
         self.flanger.clear();
+        self.crusher.clear();
+        self.envelope.clear();
         self.echo.clear();
         self.reverb.clear();
     }
 
     fn shifting(&self) -> bool {
+        self.shifts(self.tone)
+    }
+
+    /// Whether the current recipe would go through the pitch shifter at `tone`.
+    fn shifts(&self, tone: f32) -> bool {
         let r = &self.recipe;
-        (r.pitch + self.tone).abs() > 0.01 || r.vibrato_cents > 0.0 || r.wobble_cents > 0.0
+        (r.pitch + tone).abs() > 0.01 || r.vibrato_cents > 0.0 || r.wobble_cents > 0.0
     }
 
     /// How far behind the input the output currently is, in samples.
@@ -420,14 +432,19 @@ impl Voice {
     }
 
     /// Changing voice dips the output for FADE samples and comes back up over as many, so
-    /// the jump between two voices, or into a cleared echo, is never heard as a click.
+    /// the jump between two voices, or into a cleared echo, is never heard as a click. A tone
+    /// that takes the pitch shifter in or out of use is such a jump too: the shifter plays a
+    /// few milliseconds behind the microphone. Any other tone only bends the pitch, at once.
     pub fn process(&mut self, block: &mut [f32]) {
         let mut start = 0;
         while start < block.len() {
-            let changing = self.next != self.recipe;
+            let changing = self.next != self.recipe || self.shifts(self.next_tone) != self.shifting();
             if changing && self.level == 0 {
                 self.switch();
                 continue;
+            }
+            if !changing {
+                self.tone = self.next_tone;
             }
             // Up to the bottom of the dip, so the switch lands on a sample boundary.
             let end = if changing { block.len().min(start + self.level as usize) } else { block.len() };
@@ -563,6 +580,77 @@ mod tests {
                 (1..12).map(|h| (phase * h as f32 * 2.0 * PI).sin() / h as f32).sum::<f32>() * 0.15 * syllables
             })
             .collect()
+    }
+
+    /// A stage the other voice does not use stands still meanwhile; whatever it still held
+    /// of the last phrase used to play when its voice came back, into a quiet microphone.
+    #[test]
+    fn a_voice_picked_again_in_silence_is_silent() {
+        const D: Recipe = Recipe::DRY;
+        let stages = [
+            ("vocoder", Recipe { vocoder_hz: 110.0, gain: 1.4, ..D }),
+            ("chord", Recipe { vocoder_hz: 220.0, vocoder_chord: true, ..D }),
+            ("hiss", Recipe { hiss: 0.04, ..D }),
+            ("crusher", Recipe { crush_hz: 8000.0, crush_bits: 8, ..D }),
+            ("echo", Recipe { echo_ms: 380.0, echo_feedback: 0.28, echo_mix: 0.5, ..D }),
+            ("comb", Recipe { comb_ms: 6.0, comb_feedback: 0.55, ..D }),
+            ("chorus", Recipe { chorus: 0.5, ..D }),
+            ("flanger", Recipe { flanger_hz: 0.25, flanger_mix: 0.9, ..D }),
+            ("filters", Recipe { highpass_hz: 450.0, lowpass_hz: 2800.0, drive: 4.0, ..D }),
+            ("reverb", Recipe { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5, ..D }),
+            ("pitch", Recipe { pitch: -6.0, harmony: [-12.0, 7.0], harmony_mix: 0.5, ..D }),
+        ];
+        // The other voice is picked in the middle of a word, and then the speaker stops.
+        let (mut word, cut) = (speech(1.0), SR as usize * 3 / 4);
+        word.resize(SR as usize * 6, 0.0);
+        for (name, recipe) in stages {
+            let mut v = Voice::new(SR);
+            let mut x = word.clone();
+            v.set(&recipe, 0.0, 1.0);
+            v.process(&mut x[..cut]);
+            v.set(&D, 0.0, 1.0);
+            v.process(&mut x[cut..]);
+            v.set(&recipe, 0.0, 1.0);
+            let mut back = vec![0.0; SR as usize];
+            v.process(&mut back);
+            let peak = back.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak < 1e-6, "{name} plays {peak} of what it held");
+        }
+    }
+
+    /// The tone slider and the on/off switch can keep the recipe and still take the pitch
+    /// shifter in or out of use, between the microphone and a tap 7 ms behind it. Each used
+    /// to step by two to nine times what either side does alone.
+    #[test]
+    fn a_tone_that_starts_or_stops_the_shifter_does_not_click() {
+        const D: Recipe = Recipe::DRY;
+        let radio = Recipe { highpass_hz: 450.0, lowpass_hz: 2800.0, drive: 4.0, gain: 1.2, ..D };
+        let cave = Recipe { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5, ..D };
+        let minion = Recipe { pitch: 8.0, ..D };
+        let input = speech(2.0);
+        let run = |pick: &dyn Fn(usize) -> (Recipe, f32)| {
+            let mut v = Voice::new(SR);
+            let mut out = input.clone();
+            for (b, chunk) in out.chunks_mut(144).enumerate() {
+                let (recipe, tone) = pick(b);
+                v.set(&recipe, tone, 1.0);
+                v.process(chunk);
+            }
+            out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+        };
+        // The last two are the effect turned off, which also puts the tone back to 0.
+        let pairs = [
+            ((radio, 0.0), (radio, 1.0)),
+            ((cave, 0.0), (cave, -1.0)),
+            ((minion, 0.0), (minion, -8.0)),
+            ((cave, 3.0), (D, 0.0)),
+            ((D, 3.0), (D, 0.0)),
+        ];
+        for (i, (a, b)) in pairs.into_iter().enumerate() {
+            let steady = run(&|_| a).max(run(&|_| b));
+            let toggling = run(&|k| if k / 12 % 2 == 0 { a } else { b });
+            assert!(toggling <= steady * 1.25, "pair {i} steps {toggling}, either side alone {steady}");
+        }
     }
 
     #[test]

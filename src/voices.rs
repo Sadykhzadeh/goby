@@ -388,6 +388,27 @@ mod tests {
     }
 
     #[test]
+    fn every_voice_comes_back_silent_while_nobody_talks() {
+        // Left for "off" in the middle of a word, picked again after five seconds of silence:
+        // anything heard then is what the voice still held of that word.
+        let (mut word, cut) = (voiced(1.0), SR as usize * 3 / 4);
+        word.resize(SR as usize * 6, 0.0);
+        for def in ALL {
+            let mut v = Voice::new(SR);
+            let mut x = word.clone();
+            v.set(&def.recipe(), 0.0, 1.0);
+            v.process(&mut x[..cut]);
+            v.set(&ALL[0].recipe(), 0.0, 1.0);
+            v.process(&mut x[cut..]);
+            v.set(&def.recipe(), 0.0, 1.0);
+            let mut back = vec![0.0; SR as usize];
+            v.process(&mut back);
+            let peak = back.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak < 1e-6, "{} plays {peak} of what it held", def.id);
+        }
+    }
+
+    #[test]
     fn off_is_untouched() {
         let input = voiced(0.2);
         assert_eq!(run(&ALL[0], &input), input);
@@ -422,24 +443,40 @@ mod tests {
     #[test]
     fn switching_voices_does_not_click() {
         let ids = ["off", "minion", "giant", "radio", "bass", "helium", "robot", "demon", "man"];
-        let recipes: Vec<crate::dsp::Recipe> = ids.iter().map(|id| ALL[index_of(id).unwrap()].recipe()).collect();
         let input = speech(3.0);
-        let run = |pick: &dyn Fn(usize) -> usize| {
+        let run = |pick: &dyn Fn(usize) -> (&'static str, f32)| {
             let mut v = Voice::new(SR);
             let mut out = Vec::new();
             for (b, chunk) in input.chunks(144).enumerate() {
-                v.set(&recipes[pick(b)], 0.0, 1.0);
+                let (id, tone) = pick(b);
+                v.set(&ALL[index_of(id).unwrap()].recipe(), tone, 1.0);
                 let mut c = chunk.to_vec();
                 v.process(&mut c);
                 out.extend(c);
             }
             out
         };
-        let steady = (0..ids.len()).map(|i| biggest_step(&run(&|_| i))).fold(0.0, f32::max);
+        let steady = ids.iter().map(|id| biggest_step(&run(&|_| (id, 0.0)))).fold(0.0, f32::max);
         // A new voice every 37 ms, hopping around the list. Without the dip this came out
         // three times the steady figure; a little over it is just a modulator in another phase.
-        let hopping = biggest_step(&run(&|b| (b / 12 * 5) % ids.len()));
+        let hopping = biggest_step(&run(&|b| (ids[(b / 12 * 5) % ids.len()], 0.0)));
         assert!(hopping <= steady * 1.25, "switching steps {hopping}, a voice alone at most {steady}");
+
+        // The tone slider and the on/off switch can keep the voice and still take the pitch
+        // shifter in or out of use, between the microphone and a tap 7 ms behind it. The last
+        // two are the effect turned off, which also puts the tone back to 0.
+        let pairs = [
+            (("radio", 0.0), ("radio", 1.0)),
+            (("cave", 0.0), ("cave", -1.0)),
+            (("minion", 0.0), ("minion", -8.0)),
+            (("cave", 3.0), ("off", 0.0)),
+            (("off", 3.0), ("off", 0.0)),
+        ];
+        for (a, b) in pairs {
+            let steady = biggest_step(&run(&|_| a)).max(biggest_step(&run(&|_| b)));
+            let toggling = biggest_step(&run(&|k| if k / 12 % 2 == 0 { a } else { b }));
+            assert!(toggling <= steady * 1.25, "{a:?} to {b:?} and back steps {toggling}, either alone {steady}");
+        }
     }
 
     #[test]
