@@ -388,6 +388,27 @@ mod tests {
     }
 
     #[test]
+    fn every_voice_comes_back_silent_while_nobody_talks() {
+        // Left for "off" in the middle of a word, picked again after five seconds of silence:
+        // anything heard then is what the voice still held of that word.
+        let (mut word, cut) = (voiced(1.0), SR as usize * 3 / 4);
+        word.resize(SR as usize * 6, 0.0);
+        for def in ALL {
+            let mut v = Voice::new(SR);
+            let mut x = word.clone();
+            v.set(&def.recipe(), 0.0, 1.0);
+            v.process(&mut x[..cut]);
+            v.set(&ALL[0].recipe(), 0.0, 1.0);
+            v.process(&mut x[cut..]);
+            v.set(&def.recipe(), 0.0, 1.0);
+            let mut back = vec![0.0; SR as usize];
+            v.process(&mut back);
+            let peak = back.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak < 1e-6, "{} plays {peak} of what it held", def.id);
+        }
+    }
+
+    #[test]
     fn off_is_untouched() {
         let input = voiced(0.2);
         assert_eq!(run(&ALL[0], &input), input);

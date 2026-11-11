@@ -402,9 +402,12 @@ impl Voice {
             self.lowpass = Biquad::new(Shape::Low, sr, new.lowpass_hz, 0.707);
         }
         // Tails of the previous voice would ring on into the new one.
+        self.vocoder.clear();
         self.comb.clear();
         self.chorus.clear();
         self.flanger.clear();
+        self.crusher.clear();
+        self.envelope.clear();
         self.echo.clear();
         self.reverb.clear();
     }
@@ -563,6 +566,42 @@ mod tests {
                 (1..12).map(|h| (phase * h as f32 * 2.0 * PI).sin() / h as f32).sum::<f32>() * 0.15 * syllables
             })
             .collect()
+    }
+
+    /// A stage the other voice does not use stands still meanwhile; whatever it still held
+    /// of the last phrase used to play when its voice came back, into a quiet microphone.
+    #[test]
+    fn a_voice_picked_again_in_silence_is_silent() {
+        const D: Recipe = Recipe::DRY;
+        let stages = [
+            ("vocoder", Recipe { vocoder_hz: 110.0, gain: 1.4, ..D }),
+            ("chord", Recipe { vocoder_hz: 220.0, vocoder_chord: true, ..D }),
+            ("hiss", Recipe { hiss: 0.04, ..D }),
+            ("crusher", Recipe { crush_hz: 8000.0, crush_bits: 8, ..D }),
+            ("echo", Recipe { echo_ms: 380.0, echo_feedback: 0.28, echo_mix: 0.5, ..D }),
+            ("comb", Recipe { comb_ms: 6.0, comb_feedback: 0.55, ..D }),
+            ("chorus", Recipe { chorus: 0.5, ..D }),
+            ("flanger", Recipe { flanger_hz: 0.25, flanger_mix: 0.9, ..D }),
+            ("filters", Recipe { highpass_hz: 450.0, lowpass_hz: 2800.0, drive: 4.0, ..D }),
+            ("reverb", Recipe { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5, ..D }),
+            ("pitch", Recipe { pitch: -6.0, harmony: [-12.0, 7.0], harmony_mix: 0.5, ..D }),
+        ];
+        // The other voice is picked in the middle of a word, and then the speaker stops.
+        let (mut word, cut) = (speech(1.0), SR as usize * 3 / 4);
+        word.resize(SR as usize * 6, 0.0);
+        for (name, recipe) in stages {
+            let mut v = Voice::new(SR);
+            let mut x = word.clone();
+            v.set(&recipe, 0.0, 1.0);
+            v.process(&mut x[..cut]);
+            v.set(&D, 0.0, 1.0);
+            v.process(&mut x[cut..]);
+            v.set(&recipe, 0.0, 1.0);
+            let mut back = vec![0.0; SR as usize];
+            v.process(&mut back);
+            let peak = back.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            assert!(peak < 1e-6, "{name} plays {peak} of what it held");
+        }
     }
 
     #[test]

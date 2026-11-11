@@ -110,6 +110,10 @@ impl Biquad {
         self.z2 = self.b2 * x - self.a2 * y;
         y
     }
+
+    pub fn clear(&mut self) {
+        (self.z1, self.z2) = (0.0, 0.0);
+    }
 }
 
 /// Power-of-two delay line with fractional (linear) reads.
@@ -214,6 +218,7 @@ impl Echo {
 
     pub fn clear(&mut self) {
         self.line.clear();
+        self.tone.clear();
     }
 }
 
@@ -283,6 +288,10 @@ impl Crusher {
         }
         self.held
     }
+
+    pub fn clear(&mut self) {
+        self.held = 0.0;
+    }
 }
 
 /// Envelope follower: fast attack, slower release, in linear amplitude.
@@ -298,6 +307,10 @@ impl Envelope {
         let k = if a > self.level { attack } else { release };
         self.level += (a - self.level) * k;
         self.level
+    }
+
+    pub fn clear(&mut self) {
+        self.level = 0.0;
     }
 }
 
@@ -341,6 +354,11 @@ impl Vocoder {
             out += self.synthesis[i].process(carrier) * level;
         }
         out * 6.0
+    }
+
+    pub fn clear(&mut self) {
+        self.analysis.iter_mut().chain(&mut self.synthesis).for_each(Biquad::clear);
+        self.envelopes.iter_mut().for_each(Envelope::clear);
     }
 }
 
