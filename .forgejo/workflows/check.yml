@@ -1,0 +1,53 @@
+# What can be checked without Windows, on every pull request and on every push
+# to main: formatting, the voices' tests, clippy over the app as it is compiled
+# for Windows, and the website's wasm.
+#
+# The app's own tests need Windows to run and are not here. This does not gate
+# the deploy either; it makes a red commit visible within a few minutes.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # The label of the runner this forge provides; change it to match yours.
+    runs-on: docker
+    # From nothing the job takes a few minutes; a hang should not hold the runner longer.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Current stable on purpose, as the deploy host builds the site with whatever
+      # stable it has: a toolchain that stops building it shows up here first.
+      # rustup by hand: the forge's action mirror has no toolchain action.
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+            --profile minimal --component rustfmt,clippy \
+            --target x86_64-pc-windows-msvc,wasm32-unknown-unknown
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Test the voices
+        run: cargo test -p goby-dsp
+
+      # Checking for the Windows target needs no linker, so the app's code is read
+      # here although it cannot be built. Warnings fail the step, except the four
+      # chunks_exact ones src/apps.rs has today; drop the -A once those are gone.
+      - name: Clippy, as for Windows
+        run: cargo clippy --target x86_64-pc-windows-msvc --all-targets -- -D warnings -A clippy::chunks_exact_to_as_chunks
+
+      # The command site/dsp-wasm/src/lib.rs gives for it; the crate is a workspace of its own.
+      - name: Build the site's wasm
+        working-directory: site/dsp-wasm
+        run: cargo build --release --locked --target wasm32-unknown-unknown --lib
