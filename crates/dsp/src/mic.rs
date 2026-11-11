@@ -28,6 +28,8 @@ impl Mic {
         let hold = (0.15 * self.sample_rate) as u32;
         for s in block.iter_mut() {
             let x = *s * gain;
+            // A NaN or infinity from the driver would never leave the envelope or the voice's filters.
+            let x = if x.is_finite() { x } else { 0.0 };
             let level = self.envelope.next(x, 0.2, 0.0015);
             let target = match threshold {
                 None => 1.0,
@@ -76,6 +78,19 @@ mod tests {
         let mut speech: Vec<f32> = (0..SR as usize / 2).map(|i| sine(200.0, i, SR as f32) * 0.3).collect();
         m.process(&mut speech, 0.0, Some(-40.0));
         assert!(level(&speech[SR as usize / 100..]) > 0.29, "speech was gated");
+    }
+
+    #[test]
+    fn a_broken_sample_does_not_outlast_itself() {
+        for gate in [None, Some(-40.0)] {
+            let mut m = Mic::new(SR);
+            let mut x: Vec<f32> = (0..SR as usize).map(|i| sine(200.0, i, SR as f32) * 0.3).collect();
+            (x[1000], x[2000]) = (f32::NAN, f32::INFINITY);
+            m.process(&mut x, 0.0, gate);
+            assert!(x.iter().all(|s| s.is_finite()), "gate {gate:?}: the output is not finite");
+            assert_eq!((x[1000], x[2000]), (0.0, 0.0));
+            assert!(level(&x[SR as usize / 2..]) > 0.29, "gate {gate:?}: {}", level(&x[SR as usize / 2..]));
+        }
     }
 
     #[test]
