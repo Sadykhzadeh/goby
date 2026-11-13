@@ -587,6 +587,129 @@ impl Dropout {
     }
 }
 
+/// Radio keying: a short beep when the speaker keys up and a "kshh" tail when they stop,
+/// like a push-to-talk radio. Talking is judged on the untouched microphone sample.
+pub struct Roger {
+    env: Envelope,
+    talking: bool,
+    quiet: u32,
+    hold: u32,
+    tone: Lfo,
+    beep: u32,
+    beep_len: u32,
+    beep_fade: f32,
+    burst: u32,
+    burst_len: u32,
+    burst_gain: f32,
+    cut_step: f32,
+    cutting: bool,
+    noise: Noise,
+    hiss: Biquad,
+    sample_rate: f32,
+}
+
+impl Roger {
+    pub fn new(sample_rate: f32) -> Self {
+        let samples = |ms: f32| (ms * 0.001 * sample_rate) as u32;
+        Self {
+            env: Envelope::default(),
+            talking: false,
+            quiet: 0,
+            hold: samples(350.0),
+            tone: Lfo::default(),
+            beep: samples(60.0),
+            beep_len: samples(60.0),
+            beep_fade: samples(5.0).max(1) as f32,
+            burst: samples(140.0),
+            burst_len: samples(140.0),
+            burst_gain: 1.0,
+            cut_step: 1.0 / samples(3.0).max(1) as f32,
+            cutting: false,
+            noise: Noise::default(),
+            hiss: Biquad::new(Shape::Band, sample_rate, 2500.0, 0.8),
+            sample_rate,
+        }
+    }
+
+    /// `dry` is the untouched microphone sample, used only to tell when someone is talking;
+    /// `x` is the voice going out. Returns `x` with the keying sounds mixed in at `level`.
+    #[inline]
+    pub fn process(&mut self, dry: f32, x: f32, level: f32) -> f32 {
+        let env = self.env.next(dry, 0.01, 0.0005);
+        if !self.talking {
+            if env > 0.02 {
+                self.talking = true;
+                self.quiet = 0;
+                self.start_beep();
+            }
+        } else if env < 0.008 {
+            self.quiet += 1;
+            if self.quiet >= self.hold {
+                self.talking = false;
+                self.start_burst();
+            }
+        } else {
+            self.quiet = 0;
+        }
+        let sound = self.beep_sample() + self.burst_sample();
+        if level <= 0.0 { x } else { x + sound * level }
+    }
+
+    fn start_beep(&mut self) {
+        if self.burst < self.burst_len {
+            self.cutting = true;
+        }
+        self.beep = 0;
+        self.tone = Lfo::default();
+    }
+
+    fn start_burst(&mut self) {
+        self.burst = 0;
+        self.burst_gain = 1.0;
+        self.cutting = false;
+        self.hiss.clear();
+    }
+
+    /// 60 ms sine at 1250 Hz, faded in and out over 5 ms.
+    #[inline]
+    fn beep_sample(&mut self) -> f32 {
+        if self.beep >= self.beep_len {
+            return 0.0;
+        }
+        let edge = self.beep.min(self.beep_len - 1 - self.beep) as f32 / self.beep_fade;
+        self.beep += 1;
+        self.tone.next(1250.0, self.sample_rate) * edge.min(1.0) * 0.25
+    }
+
+    /// 140 ms of noise around 2500 Hz, dying out linearly. A new beep fades it out in 3 ms.
+    #[inline]
+    fn burst_sample(&mut self) -> f32 {
+        if self.burst >= self.burst_len {
+            return 0.0;
+        }
+        let decay = 1.0 - self.burst as f32 / self.burst_len as f32;
+        self.burst += 1;
+        let y = self.hiss.process(self.noise.next()) * decay * self.burst_gain * 0.3;
+        if self.cutting {
+            self.burst_gain -= self.cut_step;
+            if self.burst_gain <= 0.0 {
+                self.burst = self.burst_len;
+            }
+        }
+        y
+    }
+
+    pub fn clear(&mut self) {
+        self.env.clear();
+        self.talking = false;
+        self.quiet = 0;
+        self.beep = self.beep_len;
+        self.burst = self.burst_len;
+        self.cutting = false;
+        self.hiss.clear();
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -811,5 +934,61 @@ mod tests {
         for _ in 0..SR as usize * 3 {
             assert_eq!(d.process(0.0, 1.0), 0.0);
         }
+    }
+
+    #[test]
+    fn roger_stays_silent_without_speech() {
+        let mut r = Roger::new(SR);
+        for _ in 0..SR as usize {
+            assert_eq!(r.process(0.0, 0.0, 1.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn roger_at_zero_level_returns_the_voice() {
+        let mut r = Roger::new(SR);
+        for i in 0..SR as usize / 2 {
+            let dry = sine(1000.0, i, SR) * 0.3;
+            let x = sine(300.0, i, SR) * 0.5;
+            assert_eq!(r.process(dry, x, 0.0), x);
+        }
+    }
+
+    #[test]
+    fn roger_beeps_on_keyup_and_hisses_on_keydown() {
+        let mut r = Roger::new(SR);
+        let tone = SR as usize;
+        let out: Vec<f32> = (0..tone * 2)
+            .map(|i| {
+                let dry = if i < tone { sine(1000.0, i, SR) * 0.3 } else { 0.0 };
+                r.process(dry, 0.0, 1.0)
+            })
+            .collect();
+        let ms = |t: usize| (t as f32 * SR / 1000.0) as usize;
+        assert!(out.iter().all(|s| s.is_finite() && s.abs() < 0.5));
+
+        let beep = peak(out[..ms(80)].iter().copied());
+        assert!(beep > 0.1, "no beep: {beep}");
+
+        let burst = peak(out[tone + ms(480)..tone + ms(640)].iter().copied());
+        assert!(burst > 0.01, "no burst: {burst}");
+        assert!(out[tone + ms(350)..tone + ms(480)].iter().all(|&s| s == 0.0), "burst too early");
+        assert!(out[tone + ms(660)..].iter().all(|&s| s == 0.0), "burst too late");
+    }
+
+    #[test]
+    fn roger_beep_is_1250_hz() {
+        let mut r = Roger::new(SR);
+        let out: Vec<f32> = (0..SR as usize / 4)
+            .map(|i| {
+                let dry = if i < SR as usize / 10 { sine(1000.0, i, SR) * 0.3 } else { 0.0 };
+                r.process(dry, 0.0, 1.0)
+            })
+            .collect();
+        let start = out.iter().position(|s| s.abs() > 0.0).unwrap();
+        let beep = &out[start..start + (SR * 0.06) as usize];
+        let crossings = beep.windows(2).filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0)).count();
+        let hz = crossings as f32 / 2.0 / 0.06;
+        assert!((hz - 1250.0).abs() <= 60.0, "beep at {hz} Hz");
     }
 }
