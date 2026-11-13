@@ -103,6 +103,64 @@ impl Biquad {
         Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: -2.0 * cos / a0, a2: (1.0 - alpha) / a0, z1: 0.0, z2: 0.0 }
     }
 
+    /// A bell: boosts or cuts a band around `freq` by `gain_db`, everything else passes.
+    pub fn peak(sample_rate: f32, freq: f32, q: f32, gain_db: f32) -> Self {
+        let w = TAU * (freq / sample_rate).min(0.49);
+        let (sin, cos) = w.sin_cos();
+        let alpha = sin / (2.0 * q);
+        let a = 10f32.powf(gain_db / 40.0);
+        let a0 = 1.0 + alpha / a;
+        Self {
+            b0: (1.0 + alpha * a) / a0,
+            b1: -2.0 * cos / a0,
+            b2: (1.0 - alpha * a) / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha / a) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    /// Raises or lowers everything below `freq`: bass weight or rumble cut.
+    pub fn low_shelf(sample_rate: f32, freq: f32, gain_db: f32) -> Self {
+        Self::shelf(sample_rate, freq, gain_db, false)
+    }
+
+    /// Raises or lowers everything above `freq`: air, or taming a harsh top end.
+    pub fn high_shelf(sample_rate: f32, freq: f32, gain_db: f32) -> Self {
+        Self::shelf(sample_rate, freq, gain_db, true)
+    }
+
+    /// RBJ shelf with slope 1, so the transition is as steep as it gets without overshoot.
+    fn shelf(sample_rate: f32, freq: f32, gain_db: f32, high: bool) -> Self {
+        let w = TAU * (freq / sample_rate).min(0.49);
+        let (sin, cos) = w.sin_cos();
+        let a = 10f32.powf(gain_db / 40.0);
+        let alpha = sin * std::f32::consts::FRAC_1_SQRT_2;
+        let beta = 2.0 * a.sqrt() * alpha;
+        let (ap, am) = (a + 1.0, a - 1.0);
+        let (b0, b1, b2, a0, a1, a2) = if high {
+            (
+                a * (ap + am * cos + beta),
+                -2.0 * a * (am + ap * cos),
+                a * (ap + am * cos - beta),
+                ap - am * cos + beta,
+                2.0 * (am - ap * cos),
+                ap - am * cos - beta,
+            )
+        } else {
+            (
+                a * (ap - am * cos + beta),
+                2.0 * a * (am - ap * cos),
+                a * (ap - am * cos - beta),
+                ap + am * cos + beta,
+                -2.0 * (am + ap * cos),
+                ap + am * cos - beta,
+            )
+        };
+        Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0, z1: 0.0, z2: 0.0 }
+    }
+
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
         let y = self.b0 * x + self.z1;
@@ -477,5 +535,39 @@ mod tests {
         let hp = || Biquad::new(Shape::High, SR, 1000.0, 0.707);
         assert!(level(lp, 100.0) > 0.9 && level(lp, 8000.0) < 0.05);
         assert!(level(hp, 8000.0) > 0.9 && level(hp, 100.0) < 0.05);
+    }
+
+    #[test]
+    fn eq_shapes_boost_and_cut_their_band() {
+        let gain = |make: fn() -> Biquad, hz: f32| {
+            let mut f = make();
+            peak((0..SR as usize / 2).map(|i| f.process(sine(hz, i, SR))).skip(SR as usize / 4))
+        };
+        let bell = || Biquad::peak(SR, 1500.0, 1.0, 6.0);
+        assert!((1.9..2.1).contains(&gain(bell, 1500.0)));
+        assert!((0.95..1.05).contains(&gain(bell, 150.0)));
+        assert!((0.95..1.05).contains(&gain(bell, 12_000.0)));
+        let bass = || Biquad::low_shelf(SR, 200.0, 6.0);
+        assert!((1.9..2.1).contains(&gain(bass, 50.0)));
+        assert!((0.95..1.05).contains(&gain(bass, 4000.0)));
+        let air = || Biquad::high_shelf(SR, 4000.0, -6.0);
+        assert!((0.45..0.55).contains(&gain(air, 12_000.0)));
+        assert!((0.95..1.05).contains(&gain(air, 200.0)));
+    }
+
+    #[test]
+    fn zero_gain_eq_is_transparent() {
+        let gain = |make: fn() -> Biquad, hz: f32| {
+            let mut f = make();
+            peak((0..SR as usize / 2).map(|i| f.process(sine(hz, i, SR))).skip(SR as usize / 4))
+        };
+        let bell = || Biquad::peak(SR, 1500.0, 1.0, 0.0);
+        let bass = || Biquad::low_shelf(SR, 200.0, 0.0);
+        let air = || Biquad::high_shelf(SR, 4000.0, 0.0);
+        for hz in [50.0, 1500.0, 12_000.0] {
+            assert!((0.99..1.01).contains(&gain(bell, hz)), "bell at {hz}");
+            assert!((0.99..1.01).contains(&gain(bass, hz)), "low shelf at {hz}");
+            assert!((0.99..1.01).contains(&gain(air, hz)), "high shelf at {hz}");
+        }
     }
 }
