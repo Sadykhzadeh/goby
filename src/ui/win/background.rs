@@ -2,7 +2,8 @@
 
 use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsIconic, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SetForegroundWindow, ShowWindow,
+    IsIconic, SHOW_WINDOW_CMD, SM_CXSMICON, SW_HIDE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED, SetForegroundWindow,
+    ShowWindow,
 };
 
 use super::{Win, make_icon};
@@ -48,10 +49,16 @@ impl Win {
         }
     }
 
+    /// How to show the window: maximised the first time when it was closed that way.
+    pub(super) fn show_command(&mut self) -> SHOW_WINDOW_CMD {
+        if std::mem::take(&mut self.host.start_maximized) { SW_SHOWMAXIMIZED } else { SW_SHOW }
+    }
+
     pub(super) fn show(&mut self) {
         unsafe {
             let hwnd = self.host.hwnd;
-            let _ = ShowWindow(hwnd, if IsIconic(hwnd).as_bool() { SW_RESTORE } else { SW_SHOW });
+            let cmd = if IsIconic(hwnd).as_bool() { SW_RESTORE } else { self.show_command() };
+            let _ = ShowWindow(hwnd, cmd);
             let _ = SetForegroundWindow(hwnd);
         }
         self.dirty = true;
@@ -63,13 +70,14 @@ impl Win {
         if !self.settings.tray || !self.host.tray_icon {
             return true;
         }
+        self.remember_window();
         unsafe {
             let _ = ShowWindow(self.host.hwnd, SW_HIDE);
         }
         self.host.gfx = None;
-        if !self.settings.tray_told {
-            self.settings.tray_told = true;
-            self.save();
+        let told = std::mem::replace(&mut self.settings.tray_told, true);
+        self.save();
+        if !told {
             tray::notify(self.host.hwnd, tr!("tray.told"), tr!("tray.told.desc"));
         }
         false

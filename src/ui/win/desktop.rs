@@ -34,6 +34,8 @@ pub struct Desktop {
     /// The notification-area icon is up, and the tip it shows.
     pub tray_icon: bool,
     pub tray_tip: String,
+    /// The window was maximised when it was last closed: its next first show maximises it.
+    pub start_maximized: bool,
     /// A newer verified release, and the mailbox of the threads that check and download.
     pub manifest: Option<crate::update::Manifest>,
     pub inbox: Arc<Mutex<Inbox>>,
@@ -53,6 +55,7 @@ impl Desktop {
             pinned_to: String::new(),
             tray_icon: false,
             tray_tip: String::new(),
+            start_maximized: false,
             manifest: None,
             inbox: updates::inbox(),
         }
