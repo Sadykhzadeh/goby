@@ -46,7 +46,7 @@ A program with its own microphone setting (Telegram, for example) must have it o
 | Devices | Phone, Megaphone, Walkie-talkie, Old radio, Drive-thru, Cassette, Squad radio, Cheap headset, Bad connection |
 | Fun | Squeaky choir, Opera, Choir, Karaoke, Glitch, Duet, Jet, Squeaky robot, Slow motion, Auto-tune, Chord choir, Talkbox |
 
-Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from a pitch shifter, harmonies, vibrato, ring modulation, a vocoder, comb, chorus, flanger, filters, saturation, a bit crusher, echo and reverb.
+Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from a pitch shifter, a second shifter that moves pitch and timbre (formants) apart, tuning to notes, harmonies, vibrato, ring modulation, a vocoder, comb, chorus, flanger, filters, an EQ band and bass shelf, saturation, a compressor, a bit crusher, echo, reverb, dropouts and radio keying sounds.
 
 ## Everyday use
 
