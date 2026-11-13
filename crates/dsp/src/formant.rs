@@ -182,6 +182,20 @@ struct Grain {
 
 const GRAINS: usize = 8;
 
+/// `f32::clamp` without its assertion: that one prints both bounds when they are the wrong
+/// way round, which pulls the whole float formatter (24 KB) into the program. These bounds
+/// never are.
+#[inline]
+fn clamp(x: f32, low: f32, high: f32) -> f32 {
+    if x < low {
+        low
+    } else if x > high {
+        high
+    } else {
+        x
+    }
+}
+
 /// Changes the pitch and the timbre of a voice separately.
 pub struct FormantShifter {
     buf: Vec<f32>,
@@ -327,8 +341,8 @@ impl FormantShifter {
         let period = self.tracker.period();
         // How far apart grains start sets the pitch; how long each one is, read at the
         // formant's speed, is always two cycles of the source.
-        let apart = (period / self.pitch).clamp(self.min_half, self.max_half);
-        let half = (period / self.formant).clamp(self.min_half, (4.0 * apart).min(self.max_half));
+        let apart = clamp(period / self.pitch, self.min_half, self.max_half);
+        let half = clamp(period / self.formant, self.min_half, (4.0 * apart).min(self.max_half));
         let step = 1.0 - self.formant;
         // A grain read faster than time passes catches up with the microphone by its end,
         // and one read slower starts ahead of where it will be: either way it needs this
