@@ -372,6 +372,36 @@ impl Envelope {
     }
 }
 
+/// Evens out a voice: loud words are pulled down toward the threshold, so whispers and
+/// shouts sit closer together. Feed-forward peak detector, 3 ms attack, 120 ms release.
+#[derive(Clone, Copy)]
+pub struct Compressor {
+    env: Envelope,
+    attack: f32,
+    release: f32,
+}
+
+impl Compressor {
+    pub fn new(sample_rate: f32) -> Self {
+        let coef = |ms: f32| 1.0 - (-1.0 / (ms * 0.001 * sample_rate)).exp();
+        Self { env: Envelope::default(), attack: coef(3.0), release: coef(120.0) }
+    }
+
+    /// `threshold` is linear amplitude; above it, every `ratio` dB in becomes 1 dB out.
+    #[inline]
+    pub fn process(&mut self, x: f32, threshold: f32, ratio: f32) -> f32 {
+        let env = self.env.next(x, self.attack, self.release);
+        if env <= threshold {
+            return x;
+        }
+        x * (env / threshold).powf(1.0 / ratio - 1.0)
+    }
+
+    pub fn clear(&mut self) {
+        self.env.clear();
+    }
+}
+
 /// Channel vocoder: the voice's spectral envelope, measured in 16 bands, shapes a buzzy
 /// synth (one note or a chord). The classic "talking synth" robot.
 pub struct Vocoder {
@@ -568,6 +598,40 @@ mod tests {
             assert!((0.99..1.01).contains(&gain(bell, hz)), "bell at {hz}");
             assert!((0.99..1.01).contains(&gain(bass, hz)), "low shelf at {hz}");
             assert!((0.99..1.01).contains(&gain(air, hz)), "high shelf at {hz}");
+        }
+    }
+
+    #[test]
+    fn compressor_leaves_quiet_audio_and_tames_loud_audio() {
+        let mut c = Compressor::new(SR);
+        for i in 0..SR as usize / 2 {
+            let x = sine(200.0, i, SR) * 0.05;
+            assert!((c.process(x, 0.1, 4.0) - x).abs() < 1e-6);
+        }
+        let mut c = Compressor::new(SR);
+        let loud = peak((0..SR as usize).map(|i| c.process(sine(200.0, i, SR) * 0.8, 0.1, 4.0)).skip(SR as usize / 2));
+        assert!((0.15..0.19).contains(&loud), "{loud}");
+    }
+
+    #[test]
+    fn compressor_at_ratio_one_is_transparent() {
+        let mut c = Compressor::new(SR);
+        for i in 0..SR as usize / 2 {
+            let x = sine(200.0, i, SR) * 0.8;
+            assert!((c.process(x, 0.1, 1.0) - x).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn compressor_stays_finite_on_silence_and_square_waves() {
+        let mut c = Compressor::new(SR);
+        for _ in 0..SR as usize / 10 {
+            assert_eq!(c.process(0.0, 0.1, 4.0), 0.0);
+        }
+        for i in 0..SR as usize {
+            let x = if (i / 50) % 2 == 0 { 1.0 } else { -1.0 };
+            let y = c.process(x, 0.1, 4.0);
+            assert!(y.is_finite() && y.abs() <= 1.0, "{y}");
         }
     }
 }
