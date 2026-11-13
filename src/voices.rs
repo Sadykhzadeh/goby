@@ -170,8 +170,8 @@ pub static ALL: &[VoiceDef] = &[
     // People
     voice!("kid", People, { pitch: 5.0, chorus: 0.15 }),
     voice!("baby", People, { pitch: 9.0, tremolo_hz: 6.0, tremolo_depth: 0.15 }),
-    voice!("woman", People, { pitch: 5.0, formant: 1.15, highpass_hz: 120.0 }),
-    voice!("man", People, { pitch: -5.0, formant: 0.87 }),
+    voice!("woman", People, { pitch: 5.0, formant: 1.15, highpass_hz: 120.0, gain: 1.2 }),
+    voice!("man", People, { pitch: -5.0, formant: 0.87, gain: 1.2 }),
     voice!("bass", People, { pitch: -7.0, lowpass_hz: 6000.0, reverb_size: 0.2, reverb_damp: 0.6, reverb_mix: 0.1 }),
     voice!("grandpa", People, { pitch: -2.0, vibrato_hz: 5.0, vibrato_cents: 18.0, lowpass_hz: 4000.0 }),
     voice!("grandma", People, { pitch: 2.0, vibrato_hz: 5.5, vibrato_cents: 28.0, highpass_hz: 200.0 }),
@@ -183,9 +183,9 @@ pub static ALL: &[VoiceDef] = &[
     voice!("sleepy", People, { pitch: -2.0, lowpass_hz: 3500.0, tremolo_hz: 0.5, tremolo_depth: 0.25 }),
     voice!("announcer", People, { pitch: -2.0, drive: 1.5, echo_ms: 260.0, echo_feedback: 0.25, echo_mix: 0.2, reverb_size: 0.7, reverb_damp: 0.4, reverb_mix: 0.2 }),
     voice!("strongman", People, { pitch: -3.0, formant: 0.82, drive: 1.3 }),
-    voice!("trailer", People, { pitch: -3.0, formant: 0.88, bass_db: 5.0, squash: 6.0, reverb_size: 0.35, reverb_damp: 0.5, reverb_mix: 0.12, gain: 1.6 }),
+    voice!("trailer", People, { pitch: -3.0, formant: 0.88, bass_db: 5.0, squash: 6.0, reverb_size: 0.35, reverb_damp: 0.5, reverb_mix: 0.12, gain: 2.2 }),
     voice!("villain", People, { pitch: -2.0, formant: 0.9, harmony: [-12.0, 0.0], harmony_mix: 0.25, reverb_size: 0.7, reverb_damp: 0.7, reverb_mix: 0.2 }),
-    voice!("commentator", People, { eq_hz: 2500.0, eq_db: 6.0, squash: 4.0, drive: 2.0, hiss: 0.03, echo_ms: 120.0, echo_feedback: 0.2, echo_mix: 0.2 }),
+    voice!("commentator", People, { eq_hz: 2500.0, eq_db: 6.0, squash: 4.0, drive: 2.0, hiss: 0.03, echo_ms: 120.0, echo_feedback: 0.2, echo_mix: 0.2, gain: 1.25 }),
     // Creatures
     voice!("gremlin", Creatures, { pitch: 6.0, ring_hz: 90.0, ring_mix: 0.15, drive: 1.5 }),
     voice!("rodent", Creatures, { pitch: 10.0, chorus: 0.3 }),
@@ -209,7 +209,7 @@ pub static ALL: &[VoiceDef] = &[
     voice!("hologram", Robots, { ring_hz: 8.0, ring_mix: 0.25, flanger_hz: 0.6, flanger_mix: 0.5, echo_ms: 90.0, echo_feedback: 0.3, echo_mix: 0.25 }),
     voice!("spaceship", Robots, { highpass_hz: 500.0, lowpass_hz: 2500.0, hiss: 0.02, drive: 2.0, comb_ms: 1.5, comb_feedback: 0.3 }),
     voice!("broken_robot", Robots, { ring_hz: 55.0, ring_mix: 1.0, comb_ms: 6.0, comb_feedback: 0.55, wobble_hz: 6.0, wobble_cents: 250.0, dropout: 1.0, gain: 1.4 }),
-    voice!("helmet", Robots, { comb_ms: 0.8, comb_feedback: 0.5, eq_hz: 300.0, eq_db: 4.0, squash: 4.0, lowpass_hz: 5000.0 }),
+    voice!("helmet", Robots, { comb_ms: 0.8, comb_feedback: 0.5, eq_hz: 300.0, eq_db: 4.0, squash: 4.0, lowpass_hz: 5000.0, gain: 2.4 }),
     // Places
     voice!("cave", Places, { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5 }),
     voice!("cathedral", Places, { reverb_size: 1.0, reverb_damp: 0.15, reverb_mix: 0.45 }),
@@ -225,8 +225,8 @@ pub static ALL: &[VoiceDef] = &[
     voice!("old_radio", Devices, { highpass_hz: 300.0, lowpass_hz: 3500.0, drive: 2.5, hiss: 0.02, tremolo_hz: 0.5, tremolo_depth: 0.2 }),
     voice!("drive_thru", Devices, { highpass_hz: 600.0, lowpass_hz: 3000.0, drive: 4.0, hiss: 0.03 }),
     voice!("cassette", Devices, { wobble_hz: 0.8, wobble_cents: 20.0, lowpass_hz: 7000.0, hiss: 0.01, drive: 1.3 }),
-    voice!("squad_radio", Devices, { highpass_hz: 400.0, lowpass_hz: 3000.0, squash: 4.0, drive: 2.0, hiss: 0.03, roger: 1.0 }),
-    voice!("cheap_headset", Devices, { highpass_hz: 250.0, lowpass_hz: 3200.0, drive: 6.0, hard_clip: true, crush_hz: 9000.0, crush_bits: 7 }),
+    voice!("squad_radio", Devices, { highpass_hz: 400.0, lowpass_hz: 3000.0, squash: 4.0, drive: 2.0, hiss: 0.03, roger: 1.0, gain: 1.4 }),
+    voice!("cheap_headset", Devices, { highpass_hz: 250.0, lowpass_hz: 3200.0, drive: 6.0, hard_clip: true, crush_hz: 9000.0, crush_bits: 7, gain: 0.45 }),
     voice!("bad_signal", Devices, { highpass_hz: 300.0, lowpass_hz: 3400.0, drive: 1.5, hiss: 0.02, dropout: 0.8, gain: 1.3 }),
     // Fun
     voice!("chipmunk_choir", Fun, { pitch: 12.0, harmony: [16.0, 19.0], harmony_mix: 0.5 }),
@@ -240,7 +240,7 @@ pub static ALL: &[VoiceDef] = &[
     voice!("slow_motion", Fun, { pitch: -10.0, formant: 0.8, reverb_size: 0.9, reverb_damp: 0.7, reverb_mix: 0.3 }),
     voice!("autotune", Fun, { tune: 3 }),
     voice!("chord_choir", Fun, { tune: 2, harmony: [4.0, 7.0], harmony_mix: 0.6, reverb_size: 0.7, reverb_damp: 0.3, reverb_mix: 0.25 }),
-    voice!("talkbox", Fun, { tune: 1, vocoder_hz: 110.0, gain: 1.4 }),
+    voice!("talkbox", Fun, { tune: 1, vocoder_hz: 110.0 }),
 ];
 
 pub fn index_of(id: &str) -> Option<usize> {
@@ -561,5 +561,34 @@ mod tests {
             }
         }
         println!("heaviest: {} at {:.3} %", worst.1, worst.0);
+    }
+
+    /// Runs a recording through every voice and writes one file a voice, to listen to a
+    /// change without a microphone or a call. The recording is 16-bit mono at 48 kHz.
+    /// `GOBY_RENDER_IN=speech.wav GOBY_RENDER_OUT=out cargo test --release render_voices -- --ignored`
+    #[test]
+    #[ignore = "tool"]
+    fn render_voices() {
+        let (Ok(from), Ok(to)) = (std::env::var("GOBY_RENDER_IN"), std::env::var("GOBY_RENDER_OUT")) else {
+            panic!("set GOBY_RENDER_IN to a recording and GOBY_RENDER_OUT to a folder");
+        };
+        let wav = std::fs::read(from).unwrap();
+        let at = wav.windows(4).position(|w| w == b"data").expect("no data chunk") + 8;
+        let input: Vec<f32> =
+            wav[at..].chunks_exact(2).map(|s| i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0).collect();
+        std::fs::create_dir_all(&to).unwrap();
+        for def in ALL {
+            let mut out = input.clone();
+            // A tail of silence, so an echo or a room is heard to its end.
+            out.resize(input.len() + SR as usize, 0.0);
+            let mut file = wav[..at].to_vec();
+            file[at - 4..at].copy_from_slice(&(out.len() as u32 * 2).to_le_bytes());
+            let riff = (at - 8 + out.len() * 2) as u32;
+            file[4..8].copy_from_slice(&riff.to_le_bytes());
+            for s in run(def, &out) {
+                file.extend(((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+            }
+            std::fs::write(std::path::Path::new(&to).join(format!("{}.wav", def.id)), file).unwrap();
+        }
     }
 }
