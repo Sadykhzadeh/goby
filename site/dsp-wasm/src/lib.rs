@@ -16,6 +16,8 @@
 
 #[path = "../../../crates/dsp/src/dsp.rs"]
 mod dsp;
+#[path = "../../../crates/dsp/src/formant.rs"]
+mod formant;
 #[path = "../../../crates/dsp/src/fx.rs"]
 mod fx;
 #[path = "../../../crates/dsp/src/mic.rs"]

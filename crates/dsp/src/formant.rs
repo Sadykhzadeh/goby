@@ -157,7 +157,7 @@ impl PitchTracker {
         // One frame an octave off is a slip of the search far more often than a real leap
         // of the voice; a second one in a row is believed.
         let leap = period / self.period;
-        if (leap > 1.8 || leap < 0.55) && !self.doubt {
+        if !(0.55..=1.8).contains(&leap) && !self.doubt {
             self.doubt = true;
         } else {
             self.period = period;

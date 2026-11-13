@@ -3,8 +3,10 @@
 
 use std::f32::consts::PI;
 
+use crate::formant::FormantShifter;
 use crate::fx::{
-    Biquad, Crusher, Delay, Echo, Envelope, Lfo, Modulated, Noise, Reverb, Shape, Vocoder, Wander, ratio, saturate,
+    Biquad, Compressor, Crusher, Delay, Dropout, Echo, Envelope, Lfo, Modulated, Noise, Reverb, Roger, Shape, Vocoder,
+    Wander, ratio, saturate,
 };
 
 /// Delay-line pitch shifter with correlation-aligned jumps (WSOLA in a ring).
@@ -239,8 +241,15 @@ pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
 /// Everything a voice is made of. Zero switches a stage off, so a recipe only names what it uses.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Recipe {
-    /// Pitch shift in semitones; formants move with it (the chipmunk / giant colour).
+    /// Pitch shift in semitones; formants move with it (the chipmunk / giant colour)
+    /// unless `formant` says otherwise.
     pub pitch: f32,
+    /// Timbre as a ratio, apart from the pitch: 1.15 is a smaller throat, 0.85 a bigger
+    /// one, and 1.0 keeps the speaker's own while `pitch` moves. Zero leaves the voice to
+    /// the plain shifter, where timbre follows pitch.
+    pub formant: f32,
+    /// Pulls the pitch to the nearest note: 1 any semitone, 2 a major scale, 3 its five-note core.
+    pub tune: u32,
     /// Up to two extra pitched copies of the voice, in semitones (0 = unused).
     pub harmony: [f32; 2],
     pub harmony_mix: f32,
@@ -266,6 +275,13 @@ pub struct Recipe {
     pub tremolo_depth: f32,
     pub highpass_hz: f32,
     pub lowpass_hz: f32,
+    /// One peaking band: its centre in Hz and its boost or cut in dB.
+    pub eq_hz: f32,
+    pub eq_db: f32,
+    /// Boost or cut under 180 Hz, in dB.
+    pub bass_db: f32,
+    /// Compression ratio above -20 dB (0 = none): 6 is the wall of voice of a film trailer.
+    pub squash: f32,
     /// Saturation drive (0 = clean); `hard_clip` squares it off instead.
     pub drive: f32,
     pub hard_clip: bool,
@@ -274,6 +290,10 @@ pub struct Recipe {
     pub crush_bits: u32,
     /// Radio static that only plays while you talk.
     pub hiss: f32,
+    /// A bad connection: gaps and stutters, 0..=1.
+    pub dropout: f32,
+    /// Radio keying: a beep as a phrase starts and a burst of static as it ends.
+    pub roger: f32,
     pub echo_ms: f32,
     pub echo_feedback: f32,
     pub echo_mix: f32,
@@ -287,6 +307,8 @@ pub struct Recipe {
 impl Recipe {
     pub const DRY: Recipe = Recipe {
         pitch: 0.0,
+        formant: 0.0,
+        tune: 0,
         harmony: [0.0; 2],
         harmony_mix: 0.0,
         vibrato_hz: 0.0,
@@ -307,11 +329,17 @@ impl Recipe {
         tremolo_depth: 0.0,
         highpass_hz: 0.0,
         lowpass_hz: 0.0,
+        eq_hz: 0.0,
+        eq_db: 0.0,
+        bass_db: 0.0,
+        squash: 0.0,
         drive: 0.0,
         hard_clip: false,
         crush_hz: 0.0,
         crush_bits: 0,
         hiss: 0.0,
+        dropout: 0.0,
+        roger: 0.0,
         echo_ms: 0.0,
         echo_feedback: 0.0,
         echo_mix: 0.0,
@@ -320,6 +348,25 @@ impl Recipe {
         reverb_mix: 0.0,
         gain: 1.0,
     };
+}
+
+/// The note of `scale` nearest to `note`, both as MIDI numbers with fractions in between.
+fn snap(note: f32, scale: u32) -> f32 {
+    // One bit a semitone, C first: C D E F G A B, and C D E G A.
+    let allowed: u16 = match scale {
+        2 => 0b1010_1011_0101,
+        3 => 0b0010_1001_0101,
+        _ => 0xfff,
+    };
+    let near = note.round();
+    let mut best = f32::MAX;
+    for step in [0.0, -1.0, 1.0, -2.0, 2.0] {
+        let n = near + step;
+        if allowed >> (n as i32).rem_euclid(12) & 1 == 1 && (n - note).abs() < (best - note).abs() {
+            best = n;
+        }
+    }
+    best
 }
 
 /// Length of each half of the dip between two voices: 5 ms at 48 kHz.
@@ -339,6 +386,9 @@ pub struct Voice {
     next_tone: f32,
     volume: f32,
     shifters: [PitchShifter; 3],
+    former: FormantShifter,
+    /// How far `tune` last moved the pitch to reach a note; held while nobody speaks.
+    bend: f32,
     vibrato: Lfo,
     wobble: Wander,
     ring: Lfo,
@@ -350,8 +400,13 @@ pub struct Voice {
     flanger: Modulated,
     highpass: Biquad,
     lowpass: Biquad,
+    eq: Biquad,
+    bass: Biquad,
+    squash: Compressor,
     crusher: Crusher,
     envelope: Envelope,
+    dropout: Dropout,
+    roger: Roger,
     echo: Echo,
     reverb: Reverb,
 }
@@ -368,6 +423,8 @@ impl Voice {
             next_tone: 0.0,
             volume: 1.0,
             shifters: std::array::from_fn(|_| PitchShifter::new(sample_rate)),
+            former: FormantShifter::new(sample_rate),
+            bend: 1.0,
             vibrato: Lfo::default(),
             wobble: Wander::default(),
             ring: Lfo::default(),
@@ -379,8 +436,13 @@ impl Voice {
             flanger: Modulated::new(sr),
             highpass: Biquad::default(),
             lowpass: Biquad::default(),
+            eq: Biquad::default(),
+            bass: Biquad::default(),
+            squash: Compressor::new(sr),
             crusher: Crusher::default(),
             envelope: Envelope::default(),
+            dropout: Dropout::new(sr),
+            roger: Roger::new(sr),
             echo: Echo::new(sr),
             reverb: Reverb::new(sr),
         }
@@ -405,13 +467,23 @@ impl Voice {
         if new.lowpass_hz > 0.0 {
             self.lowpass = Biquad::new(Shape::Low, sr, new.lowpass_hz, 0.707);
         }
+        if new.eq_db != 0.0 {
+            self.eq = Biquad::peak(sr, new.eq_hz, 1.0, new.eq_db);
+        }
+        if new.bass_db != 0.0 {
+            self.bass = Biquad::low_shelf(sr, 180.0, new.bass_db);
+        }
+        self.bend = 1.0;
         // Tails of the previous voice would ring on into the new one.
         self.vocoder.clear();
         self.comb.clear();
         self.chorus.clear();
         self.flanger.clear();
+        self.squash.clear();
         self.crusher.clear();
         self.envelope.clear();
+        self.dropout.clear();
+        self.roger.clear();
         self.echo.clear();
         self.reverb.clear();
     }
@@ -423,12 +495,31 @@ impl Voice {
     /// Whether the current recipe would go through the pitch shifter at `tone`.
     fn shifts(&self, tone: f32) -> bool {
         let r = &self.recipe;
-        (r.pitch + tone).abs() > 0.01 || r.vibrato_cents > 0.0 || r.wobble_cents > 0.0
+        (r.pitch + tone).abs() > 0.01 || r.vibrato_cents > 0.0 || r.wobble_cents > 0.0 || self.formed()
+    }
+
+    /// Whether the current recipe moves pitch and timbre apart, which the plain shifter cannot.
+    fn formed(&self) -> bool {
+        self.recipe.formant > 0.0 || self.recipe.tune > 0
+    }
+
+    /// How much further a voice shifted by `shift` has to move to land on a note of `scale`.
+    fn bend(&mut self, shift: f32, scale: u32) -> f32 {
+        if self.former.voiced() {
+            let hz = self.sample_rate / self.former.period() * shift;
+            let note = 12.0 * (hz / 440.0).log2() + 69.0;
+            self.bend = ratio(snap(note, scale) - note);
+        }
+        self.bend
     }
 
     /// How far behind the input the output currently is, in samples.
     pub fn delay(&self) -> f32 {
-        if self.shifting() { self.shifters[0].delay } else { 0.0 }
+        match (self.shifting(), self.formed()) {
+            (false, _) => 0.0,
+            (true, false) => self.shifters[0].delay,
+            (true, true) => self.former.delay(),
+        }
     }
 
     /// Changing voice dips the output for FADE samples and comes back up over as many, so
@@ -466,15 +557,21 @@ impl Voice {
         if r == Recipe::DRY && self.tone == 0.0 {
             for s in block.iter_mut() {
                 self.shifters.iter_mut().for_each(|p| p.listen(*s));
+                self.former.listen(*s);
                 *s *= self.volume;
             }
             return;
         }
         let shifting = self.shifting();
         let modulated = r.vibrato_cents > 0.0 || r.wobble_cents > 0.0;
-        self.shifters[0].set_ratio(ratio(r.pitch + self.tone));
+        let formed = self.formed();
+        let timbre = if r.formant > 0.0 { r.formant } else { 1.0 };
+        let bend = if r.tune > 0 { self.bend(ratio(r.pitch + self.tone), r.tune) } else { 1.0 };
+        let own = ratio(r.pitch + self.tone) * bend;
+        self.shifters[0].set_ratio(own);
+        self.former.set(own, timbre);
         for (k, semis) in r.harmony.iter().enumerate() {
-            self.shifters[k + 1].set_ratio(ratio(semis + self.tone));
+            self.shifters[k + 1].set_ratio(ratio(semis + self.tone) * bend);
         }
         let harmonies = r.harmony.iter().filter(|s| **s != 0.0).count();
 
@@ -485,11 +582,20 @@ impl Voice {
                 if modulated {
                     let cents = self.vibrato.next(r.vibrato_hz, sr) * r.vibrato_cents
                         + self.wobble.next(r.wobble_hz, sr) * r.wobble_cents;
-                    self.shifters[0].set_ratio(ratio(r.pitch + self.tone + cents / 100.0));
+                    let bent = ratio(r.pitch + self.tone + cents / 100.0) * bend;
+                    self.shifters[0].set_ratio(bent);
+                    self.former.set(bent, timbre);
                 }
-                x = self.shifters[0].process(dry);
+                if formed {
+                    self.shifters[0].listen(dry);
+                    x = self.former.process(dry);
+                } else {
+                    self.former.listen(dry);
+                    x = self.shifters[0].process(dry);
+                }
             } else {
                 self.shifters[0].listen(dry);
+                self.former.listen(dry);
             }
             let mut h = 0.0;
             for k in 0..2 {
@@ -509,7 +615,9 @@ impl Voice {
                 x = x * (1.0 - r.whisper) + x * self.noise.next() * 1.7 * r.whisper;
             }
             if r.vocoder_hz > 0.0 {
-                x = self.vocoder.process(x, r.vocoder_hz, r.vocoder_chord);
+                // A tuned voice plays the synth itself: its note is the one being sung.
+                let note = if r.tune > 0 { sr / self.former.period() * own } else { r.vocoder_hz };
+                x = self.vocoder.process(x, note, r.vocoder_chord);
             }
             if r.comb_ms > 0.0 {
                 let y = x + self.comb.read(r.comb_ms * sr / 1000.0 - 1.0) * r.comb_feedback;
@@ -531,6 +639,15 @@ impl Voice {
             if r.lowpass_hz > 0.0 {
                 x = self.lowpass.process(x);
             }
+            if r.eq_db != 0.0 {
+                x = self.eq.process(x);
+            }
+            if r.bass_db != 0.0 {
+                x = self.bass.process(x);
+            }
+            if r.squash > 0.0 {
+                x = self.squash.process(x, 0.1, r.squash);
+            }
             if r.drive > 0.0 {
                 x = if r.hard_clip { (x * r.drive).clamp(-0.6, 0.6) } else { saturate(x, r.drive) * 0.8 };
             }
@@ -540,6 +657,12 @@ impl Voice {
             if r.hiss > 0.0 {
                 let talking = self.envelope.next(dry, 0.01, 0.0005);
                 x += self.noise.next() * r.hiss * (talking * 4.0).min(1.0);
+            }
+            if r.dropout > 0.0 {
+                x = self.dropout.process(x, r.dropout);
+            }
+            if r.roger > 0.0 {
+                x = self.roger.process(dry, x, r.roger);
             }
             if r.echo_mix > 0.0 {
                 x += self.echo.process(x, r.echo_ms, r.echo_feedback) * r.echo_mix;
