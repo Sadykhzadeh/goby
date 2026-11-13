@@ -22,7 +22,7 @@ use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 use super::{App, HEIGHT, MIN_H, MIN_W, Popup, WIDTH};
 use crate::draw::Color;
 use crate::gfx::Gfx;
-use crate::host::{Host, Key};
+use crate::host::{Host, Hotkey, Key};
 use crate::lang::tr;
 use crate::settings::Settings;
 use crate::theme::Theme;
@@ -484,6 +484,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             tray::WM_TRAY => {
                 match tray::event(lp) {
                     tray::SELECT | tray::KEY_SELECT => app.show(),
+                    tray::MIDDLE_CLICK => app.hotkey(Hotkey::Toggle),
                     WM_CONTEXTMENU => {
                         let (items, acts): (Vec<_>, Vec<_>) = app.tray_menu().into_iter().unzip();
                         let chosen = tray::menu(hwnd, tray::anchor(wp), &items).and_then(|i| acts.get(i).copied());
