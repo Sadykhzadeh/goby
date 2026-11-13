@@ -223,7 +223,7 @@ pub fn flush_denormals() {
 /// Dot product in eight independent lanes, which the compiler turns into SIMD; a single
 /// running sum would have to be added up in order, one sample at a time.
 #[inline]
-fn dot(a: &[f32], b: &[f32]) -> f32 {
+pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
     let (a8, a_rest) = a.as_chunks::<8>();
     let (b8, b_rest) = b.as_chunks::<8>();

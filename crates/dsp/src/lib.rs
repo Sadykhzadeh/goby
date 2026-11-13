@@ -3,6 +3,7 @@
 //! build includes these files directly.
 
 pub mod dsp;
+pub mod formant;
 pub mod fx;
 pub mod mic;
 pub mod ring;
