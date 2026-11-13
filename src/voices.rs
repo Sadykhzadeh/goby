@@ -46,7 +46,7 @@ pub struct VoiceDef {
     /// Where the voice's name is among en.lang's keys.
     name_at: usize,
     /// The recipe as what it changes from `Recipe::DRY`, field number and value. A voice
-    /// names four of the 34 fields on average, so this keeps 8 KB of zeros out of the
+    /// names four of the 42 fields on average, so this keeps 8 KB of zeros out of the
     /// executable.
     changes: &'static [(u8, f32)],
 }
@@ -137,6 +137,14 @@ fields! {
     31: reverb_damp as f32,
     32: reverb_mix as f32,
     33: gain as f32,
+    34: formant as f32,
+    35: tune as u32,
+    36: eq_hz as f32,
+    37: eq_db as f32,
+    38: bass_db as f32,
+    39: squash as f32,
+    40: dropout as f32,
+    41: roger as f32,
 }
 
 macro_rules! voice {
@@ -162,8 +170,8 @@ pub static ALL: &[VoiceDef] = &[
     // People
     voice!("kid", People, { pitch: 5.0, chorus: 0.15 }),
     voice!("baby", People, { pitch: 9.0, tremolo_hz: 6.0, tremolo_depth: 0.15 }),
-    voice!("woman", People, { pitch: 4.0, highpass_hz: 120.0 }),
-    voice!("man", People, { pitch: -3.0 }),
+    voice!("woman", People, { pitch: 5.0, formant: 1.15, highpass_hz: 120.0 }),
+    voice!("man", People, { pitch: -5.0, formant: 0.87 }),
     voice!("bass", People, { pitch: -7.0, lowpass_hz: 6000.0, reverb_size: 0.2, reverb_damp: 0.6, reverb_mix: 0.1 }),
     voice!("grandpa", People, { pitch: -2.0, vibrato_hz: 5.0, vibrato_cents: 18.0, lowpass_hz: 4000.0 }),
     voice!("grandma", People, { pitch: 2.0, vibrato_hz: 5.5, vibrato_cents: 28.0, highpass_hz: 200.0 }),
@@ -174,6 +182,10 @@ pub static ALL: &[VoiceDef] = &[
     voice!("whisper", People, { whisper: 1.0, highpass_hz: 300.0, gain: 1.6 }),
     voice!("sleepy", People, { pitch: -2.0, lowpass_hz: 3500.0, tremolo_hz: 0.5, tremolo_depth: 0.25 }),
     voice!("announcer", People, { pitch: -2.0, drive: 1.5, echo_ms: 260.0, echo_feedback: 0.25, echo_mix: 0.2, reverb_size: 0.7, reverb_damp: 0.4, reverb_mix: 0.2 }),
+    voice!("strongman", People, { pitch: -3.0, formant: 0.82, drive: 1.3 }),
+    voice!("trailer", People, { pitch: -3.0, formant: 0.88, bass_db: 5.0, squash: 6.0, reverb_size: 0.35, reverb_damp: 0.5, reverb_mix: 0.12, gain: 1.6 }),
+    voice!("villain", People, { pitch: -2.0, formant: 0.9, harmony: [-12.0, 0.0], harmony_mix: 0.25, reverb_size: 0.7, reverb_damp: 0.7, reverb_mix: 0.2 }),
+    voice!("commentator", People, { eq_hz: 2500.0, eq_db: 6.0, squash: 4.0, drive: 2.0, hiss: 0.03, echo_ms: 120.0, echo_feedback: 0.2, echo_mix: 0.2 }),
     // Creatures
     voice!("gremlin", Creatures, { pitch: 6.0, ring_hz: 90.0, ring_mix: 0.15, drive: 1.5 }),
     voice!("rodent", Creatures, { pitch: 10.0, chorus: 0.3 }),
@@ -196,6 +208,8 @@ pub static ALL: &[VoiceDef] = &[
     voice!("synth_choir", Robots, { vocoder_hz: 220.0, vocoder_chord: true, reverb_size: 0.6, reverb_damp: 0.4, reverb_mix: 0.2, gain: 1.4 }),
     voice!("hologram", Robots, { ring_hz: 8.0, ring_mix: 0.25, flanger_hz: 0.6, flanger_mix: 0.5, echo_ms: 90.0, echo_feedback: 0.3, echo_mix: 0.25 }),
     voice!("spaceship", Robots, { highpass_hz: 500.0, lowpass_hz: 2500.0, hiss: 0.02, drive: 2.0, comb_ms: 1.5, comb_feedback: 0.3 }),
+    voice!("broken_robot", Robots, { ring_hz: 55.0, ring_mix: 1.0, comb_ms: 6.0, comb_feedback: 0.55, wobble_hz: 6.0, wobble_cents: 250.0, dropout: 1.0, gain: 1.4 }),
+    voice!("helmet", Robots, { comb_ms: 0.8, comb_feedback: 0.5, eq_hz: 300.0, eq_db: 4.0, squash: 4.0, lowpass_hz: 5000.0 }),
     // Places
     voice!("cave", Places, { reverb_size: 0.95, reverb_damp: 0.45, reverb_mix: 0.5 }),
     voice!("cathedral", Places, { reverb_size: 1.0, reverb_damp: 0.15, reverb_mix: 0.45 }),
@@ -211,6 +225,9 @@ pub static ALL: &[VoiceDef] = &[
     voice!("old_radio", Devices, { highpass_hz: 300.0, lowpass_hz: 3500.0, drive: 2.5, hiss: 0.02, tremolo_hz: 0.5, tremolo_depth: 0.2 }),
     voice!("drive_thru", Devices, { highpass_hz: 600.0, lowpass_hz: 3000.0, drive: 4.0, hiss: 0.03 }),
     voice!("cassette", Devices, { wobble_hz: 0.8, wobble_cents: 20.0, lowpass_hz: 7000.0, hiss: 0.01, drive: 1.3 }),
+    voice!("squad_radio", Devices, { highpass_hz: 400.0, lowpass_hz: 3000.0, squash: 4.0, drive: 2.0, hiss: 0.03, roger: 1.0 }),
+    voice!("cheap_headset", Devices, { highpass_hz: 250.0, lowpass_hz: 3200.0, drive: 6.0, hard_clip: true, crush_hz: 9000.0, crush_bits: 7 }),
+    voice!("bad_signal", Devices, { highpass_hz: 300.0, lowpass_hz: 3400.0, drive: 1.5, hiss: 0.02, dropout: 0.8, gain: 1.3 }),
     // Fun
     voice!("chipmunk_choir", Fun, { pitch: 12.0, harmony: [16.0, 19.0], harmony_mix: 0.5 }),
     voice!("opera", Fun, { vibrato_hz: 5.5, vibrato_cents: 45.0, reverb_size: 0.9, reverb_damp: 0.3, reverb_mix: 0.3 }),
@@ -220,6 +237,10 @@ pub static ALL: &[VoiceDef] = &[
     voice!("duet", Fun, { harmony: [-12.0, 0.0], harmony_mix: 0.5 }),
     voice!("jet", Fun, { flanger_hz: 0.25, flanger_mix: 0.9 }),
     voice!("helium_robot", Fun, { pitch: 9.0, ring_hz: 70.0, ring_mix: 0.7, comb_ms: 4.0, comb_feedback: 0.4 }),
+    voice!("slow_motion", Fun, { pitch: -10.0, formant: 0.8, reverb_size: 0.9, reverb_damp: 0.7, reverb_mix: 0.3 }),
+    voice!("autotune", Fun, { tune: 3 }),
+    voice!("chord_choir", Fun, { tune: 2, harmony: [4.0, 7.0], harmony_mix: 0.6, reverb_size: 0.7, reverb_damp: 0.3, reverb_mix: 0.25 }),
+    voice!("talkbox", Fun, { tune: 1, vocoder_hz: 110.0, gain: 1.4 }),
 ];
 
 pub fn index_of(id: &str) -> Option<usize> {
@@ -292,9 +313,17 @@ mod tests {
             reverb_damp: 30.0,
             reverb_mix: 31.0,
             gain: 32.0,
+            formant: 33.0,
+            tune: 34,
+            eq_hz: 35.0,
+            eq_db: 36.0,
+            bass_db: 37.0,
+            squash: 38.0,
+            dropout: 39.0,
+            roger: 40.0,
         };
-        let mut list = [(0, 0.0); 34];
-        assert_eq!(changes(&full, &mut list), 34);
+        let mut list = [(0, 0.0); 42];
+        assert_eq!(changes(&full, &mut list), 42);
         assert_eq!(
             VoiceDef { id: "", category: Category::Fun, name_at: 0, changes: Box::leak(Box::new(list)) }.recipe(),
             full
