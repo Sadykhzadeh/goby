@@ -46,6 +46,41 @@ pub struct Settings {
     pub update_checked: u64,
     /// A language code from `lang::LANGUAGES`, or "auto" for the system's.
     pub lang: String,
+    /// Where the window was when it was last hidden or closed; `None` lets Windows choose.
+    pub window: Option<Placement>,
+}
+
+/// The window's normal (not maximised) rectangle in screen pixels, and whether it was
+/// maximised. Saved as `x,y,w,h,max`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placement {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub maximized: bool,
+}
+
+/// `x,y,w,h,max` with the maximised flag as 0 or 1. Anything else, or a window with no
+/// area, is dropped: the window then opens where Windows puts it.
+#[inline(never)]
+fn placement(dst: &mut Option<Placement>, v: &str) {
+    let int = |s: &str| {
+        let s = s.trim();
+        let (neg, digits) = s.strip_prefix('-').map_or((false, s), |d| (true, d));
+        let n = i32::try_from(whole(digits)?).ok()?;
+        Some(if neg { -n } else { n })
+    };
+    let mut parts = v.split(',');
+    *dst = (|| {
+        let (x, y, w, h) = (int(parts.next()?)?, int(parts.next()?)?, int(parts.next()?)?, int(parts.next()?)?);
+        let maximized = match parts.next()?.trim() {
+            "0" => false,
+            "1" => true,
+            _ => return None,
+        };
+        (parts.next().is_none() && w > 0 && h > 0).then_some(Placement { x, y, w, h, maximized })
+    })();
 }
 
 /// A voice as someone tuned it, saved under the name of the voice and its changes.
@@ -115,6 +150,7 @@ impl Default for Settings {
             updates: true,
             update_checked: 0,
             lang: "auto".into(),
+            window: None,
         }
     }
 }
@@ -314,6 +350,7 @@ impl Settings {
                 "update_checked" => s.update_checked = whole(v).unwrap_or(0),
                 "dry_mix" => s.dry_mix = number(v, s.dry_mix, 0.0, 1.0),
                 "lang" if crate::lang::find(v).is_some() => set(&mut s.lang, v),
+                "window" => placement(&mut s.window, v),
                 _ => {}
             }
         }
@@ -327,7 +364,7 @@ impl Settings {
 
     pub fn render(&self) -> String {
         format!(
-            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\nlang={}\n",
+            "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\nlang={}\nwindow={}\n",
             self.input,
             self.output,
             self.voice,
@@ -361,6 +398,7 @@ impl Settings {
             self.updates as u8,
             self.update_checked,
             self.lang,
+            self.window.map_or(String::new(), |p| format!("{},{},{},{},{}", p.x, p.y, p.w, p.h, p.maximized as u8)),
         )
     }
 
@@ -417,8 +455,41 @@ mod tests {
             updates: false,
             update_checked: 1_794_000_000,
             lang: "ru".into(),
+            window: Some(Placement { x: -1500, y: 40, w: 1000, h: 720, maximized: true }),
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    #[test]
+    fn the_window_place_is_read_back_and_anything_else_means_windows_chooses() {
+        let place = |v: &str| Settings::parse(&format!("window={v}\n")).window;
+        let at = |x, y, w, h, maximized| Some(Placement { x, y, w, h, maximized });
+        assert_eq!(place("10,20,1000,720,0"), at(10, 20, 1000, 720, false));
+        assert_eq!(place(" -2000 , -30 , 900 , 600 , 1 "), at(-2000, -30, 900, 600, true));
+        assert_eq!(place("+5,6,7,8,0"), at(5, 6, 7, 8, false));
+        for bad in [
+            "",
+            "1,2,3,4",
+            "1,2,3,4,5",
+            "1,2,3,4,0,0",
+            "1,2,3,4,",
+            "a,2,3,4,0",
+            "1,2,3,x,0",
+            "1.5,2,3,4,0",
+            "1,2,0,4,0",
+            "1,2,3,0,0",
+            "1,2,-3,4,0",
+            "1,2,3,-4,0",
+            "1,2,3,4,yes",
+            "--1,2,3,4,0",
+            "1,2,99999999999,4,0",
+            "2147483648,2,3,4,0",
+            ",,,,",
+        ] {
+            assert_eq!(place(bad), None, "{bad:?}");
+        }
+        assert_eq!(Settings::parse("voice=demon\n").window, None);
+        assert_eq!(Settings::default().window, None);
     }
 
     #[test]

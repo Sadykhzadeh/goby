@@ -17,6 +17,8 @@ pub const WM_QUIT_GOBY: u32 = WM_APP + 2;
 /// A click on the icon, and Enter or Space on it from the keyboard.
 pub const SELECT: u32 = NIN_SELECT;
 pub const KEY_SELECT: u32 = NIN_SELECT | NINF_KEY;
+/// The middle button released over the icon; it switches the effect like the hotkey.
+pub const MIDDLE_CLICK: u32 = WM_MBUTTONUP;
 
 const ID: u32 = 1;
 
@@ -136,6 +138,19 @@ mod tests {
         copy(&mut d.szTip, "Goby: Минион");
         let end = d.szTip.iter().position(|&c| c == 0).unwrap();
         assert_eq!(String::from_utf16(&d.szTip[..end]).unwrap(), "Goby: Минион");
+    }
+
+    #[test]
+    fn the_events_are_told_apart_from_the_icon_id_beside_them() {
+        // Version 4 puts the event in the low word and the icon's id in the high word.
+        let lp = |event: u32| LPARAM(((ID << 16) | event) as isize);
+        assert_eq!(event(lp(WM_MBUTTONUP)), MIDDLE_CLICK);
+        assert_eq!(event(lp(NIN_SELECT)), SELECT);
+        assert_eq!(event(lp(NIN_SELECT | NINF_KEY)), KEY_SELECT);
+        assert_eq!(event(lp(WM_CONTEXTMENU)), WM_CONTEXTMENU);
+        assert_ne!(event(lp(WM_MBUTTONDOWN)), MIDDLE_CLICK, "only the release counts, once");
+        assert_ne!(MIDDLE_CLICK, SELECT);
+        assert_ne!(MIDDLE_CLICK, WM_CONTEXTMENU);
     }
 
     #[test]

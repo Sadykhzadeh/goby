@@ -22,7 +22,7 @@ use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 use super::{App, HEIGHT, MIN_H, MIN_W, Popup, WIDTH};
 use crate::draw::Color;
 use crate::gfx::Gfx;
-use crate::host::{Host, Key};
+use crate::host::{Host, Hotkey, Key};
 use crate::lang::tr;
 use crate::settings::Settings;
 use crate::theme::Theme;
@@ -30,6 +30,7 @@ use crate::{hotkeys, icon, tray};
 
 mod background;
 mod desktop;
+mod placement;
 mod updates;
 
 use desktop::Desktop;
@@ -483,6 +484,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             tray::WM_TRAY => {
                 match tray::event(lp) {
                     tray::SELECT | tray::KEY_SELECT => app.show(),
+                    tray::MIDDLE_CLICK => app.hotkey(Hotkey::Toggle),
                     WM_CONTEXTMENU => {
                         let (items, acts): (Vec<_>, Vec<_>) = app.tray_menu().into_iter().unzip();
                         let chosen = tray::menu(hwnd, tray::anchor(wp), &items).and_then(|i| acts.get(i).copied());
@@ -503,6 +505,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_DESTROY => {
                 tray::remove(hwnd);
                 hotkeys::unregister(hwnd);
+                app.remember_window();
                 app.settings.save();
                 let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Win;
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
@@ -574,22 +577,33 @@ pub fn run(hidden: bool) -> Result<()> {
             None,
         )?;
 
-        // Fit the monitor the window landed on: its DPI, and its work area on small laptops.
+        // Where it was closed, if that place is still on a monitor; else fit the monitor it
+        // landed on: its DPI, and its work area on small laptops.
+        let settings = Settings::load();
+        let saved = settings.window.filter(|p| placement::restore(hwnd, p));
         let dpi = GetDpiForWindow(hwnd);
         let (mut w, mut h) = window_size(WIDTH, HEIGHT, dpi, style);
         let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
         if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info).as_bool() {
             let work = info.rcWork;
             let (min_w, min_h) = window_size(MIN_W, MIN_H, dpi, style);
-            w = w.min(work.right - work.left).max(min_w);
-            h = h.min(work.bottom - work.top).max(min_h);
-            let x = work.left + (work.right - work.left - w).max(0) / 2;
-            let y = work.top + (work.bottom - work.top - h).max(0) / 2;
-            let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER);
+            if let Some(p) = saved {
+                // Its own size, unless that is smaller than the layout can be drawn in.
+                if p.w < min_w || p.h < min_h {
+                    let _ = SetWindowPos(hwnd, None, 0, 0, p.w.max(min_w), p.h.max(min_h), SWP_NOZORDER | SWP_NOMOVE);
+                }
+            } else {
+                w = w.min(work.right - work.left).max(min_w);
+                h = h.min(work.bottom - work.top).max(min_h);
+                let x = work.left + (work.right - work.left - w).max(0) / 2;
+                let y = work.top + (work.bottom - work.top - h).max(0) / 2;
+                let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER);
+            }
         }
 
         let host = Desktop::new(hwnd);
-        let mut app = Box::new(App::new(host, Settings::load(), system_theme(), dpi as f32));
+        let mut app = Box::new(App::new(host, settings, system_theme(), dpi as f32));
+        app.host.start_maximized = saved.is_some_and(|p| p.maximized);
         app.apply_frame();
         app.add_tray_icon();
         app.use_hotkeys();
@@ -598,9 +612,10 @@ pub fn run(hidden: bool) -> Result<()> {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(app) as isize);
         if let Some(app) = app_of(hwnd) {
             app.pace(!hidden);
-        }
-        if !hidden {
-            let _ = ShowWindow(hwnd, SW_SHOW);
+            if !hidden {
+                let cmd = app.show_command();
+                let _ = ShowWindow(hwnd, cmd);
+            }
         }
 
         let mut msg = MSG::default();
