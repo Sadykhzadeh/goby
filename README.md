@@ -2,7 +2,7 @@
 
 <h1 align="center">Goby</h1>
 
-<p align="center"><b>A lightweight real-time voice changer for Windows.</b><br>61 voices for the programs you pick, from Discord and OBS to calls and recordings. One 354 KB exe, free and open source, no account.</p>
+<p align="center"><b>A lightweight real-time voice changer for Windows.</b><br>74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 354 KB exe, free and open source, no account.</p>
 
 <p align="center">
   <a href="https://github.com/Sadykhzadeh/goby/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sadykhzadeh/goby?label=download&color=ffb900&labelColor=1a1610"></a>
@@ -17,7 +17,7 @@
   <a href="https://github.com/Sadykhzadeh/goby/releases">All releases</a>
 </p>
 
-<p align="center"><img src="docs/images/goby.webp" width="760" alt="Goby's main window: the Minion voice selected above a gallery of 61 voices, each drawn as its own waveform."></p>
+<p align="center"><img src="docs/images/goby.webp" width="760" alt="Goby's main window: the Minion voice selected above a gallery of 74 voices, each drawn as its own waveform."></p>
 
 ## Why Goby
 
@@ -39,12 +39,12 @@ A program with its own microphone setting (Telegram, for example) must have it o
 | Group | Voices |
 |---|---|
 | Basics | Off, Minion, Helium, Giant, Robot, Radio |
-| People | Kid, Baby, Woman, Man, Deep voice, Grandpa, Grandma, Teen, Pirate, Nervous, Tipsy, Whisper, Sleepy, Announcer |
+| People | Kid, Baby, Woman, Man, Deep voice, Grandpa, Grandma, Teen, Pirate, Nervous, Tipsy, Whisper, Sleepy, Announcer, Big guy, Movie trailer, Cartoon villain, Sports commentator |
 | Creatures | Gremlin, Rodent, Ogre, Troll, Demon, Zombie, Ghost, Possessed, Vampire, Dragon, Swarm, Alien |
-| Robots | Android, Dictator, Cyborg, Mutant, 8-bit, Synth choir, Hologram, Spaceship |
+| Robots | Android, Dictator, Cyborg, Mutant, 8-bit, Synth choir, Hologram, Spaceship, Broken robot, Steel helmet |
 | Places | Cave, Cathedral, Bathroom, Stadium, Underwater, Canyon, Tin can |
-| Devices | Phone, Megaphone, Walkie-talkie, Old radio, Drive-thru, Cassette |
-| Fun | Squeaky choir, Opera, Choir, Karaoke, Glitch, Duet, Jet, Squeaky robot |
+| Devices | Phone, Megaphone, Walkie-talkie, Old radio, Drive-thru, Cassette, Squad radio, Cheap headset, Bad connection |
+| Fun | Squeaky choir, Opera, Choir, Karaoke, Glitch, Duet, Jet, Squeaky robot, Slow motion, Auto-tune, Chord choir, Talkbox |
 
 Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from a pitch shifter, harmonies, vibrato, ring modulation, a vocoder, comb, chorus, flanger, filters, saturation, a bit crusher, echo and reverb.
 

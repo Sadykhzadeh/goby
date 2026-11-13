@@ -9,6 +9,8 @@
 
 #[path = "../../../../crates/dsp/src/dsp.rs"]
 mod dsp;
+#[path = "../../../../crates/dsp/src/formant.rs"]
+mod formant;
 #[path = "../../../../crates/dsp/src/fx.rs"]
 mod fx;
 #[path = "../../../../src/lang.rs"]
@@ -42,10 +44,10 @@ const PAGE: &str = r##"<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Goby: a tiny voice changer for Windows</title>
-<meta name="description" content="Real-time voice changer for Windows: 61 voices for the programs you pick, from Discord and OBS to calls and recordings. One 354 KB app, free and open source, no account.">
+<meta name="description" content="Real-time voice changer for Windows: 74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 354 KB app, free and open source, no account.">
 <meta name="theme-color" content="#13100c">
 <meta property="og:title" content="Goby: a tiny voice changer for Windows">
-<meta property="og:description" content="61 voices for the programs you pick. One 354 KB Windows app, free and open source.">
+<meta property="og:description" content="74 voices for the programs you pick. One 354 KB Windows app, free and open source.">
 <meta property="og:image" content="https://goby.azer.one/images/social.png">
 <meta property="og:url" content="https://goby.azer.one/">
 <meta name="twitter:card" content="summary_large_image">
@@ -75,11 +77,11 @@ const PAGE: &str = r##"<!doctype html>
         <path id="wave" d=""/>
       </svg>
       <button class="voice" id="voice" type="button" title="Next voice">
-        <small id="count">2 / 61</small><span id="name">Minion</span><span class="next">next</span>
+        <small id="count">2 / 74</small><span id="name">Minion</span><span class="next">next</span>
       </button>
     </div>
     <div class="foot">
-      <p><b>61 voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>354 KB</b> Windows app. Free, open source, no account.</p>
+      <p><b>74 voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>354 KB</b> Windows app. Free, open source, no account.</p>
       <div class="get">
         <a class="download" href="https://github.com/Sadykhzadeh/goby/releases/latest">
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v10M5.5 8.8 10 13.3l4.5-4.5M4 17h12"/></svg>
