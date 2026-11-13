@@ -450,6 +450,143 @@ impl Vocoder {
     }
 }
 
+/// A bad connection: now and then the voice drops to silence, or stutters, repeating the
+/// last few tens of milliseconds it had. Every edge is a 3 ms crossfade, so no clicks.
+pub struct Dropout {
+    buf: Vec<f32>,
+    write: usize,
+    noise: Noise,
+    sample_rate: f32,
+    fade: usize,
+    /// Samples until the next event; counts down while idle.
+    gap: u32,
+    /// Samples left in the running event; 0 while idle.
+    left: u32,
+    /// 0 is the plain voice, 1 is the event; moves over `fade` samples at each edge.
+    mix: f32,
+    /// Stutter loop: ring index of its first sample, its length (0 for a dropout), and position.
+    loop_start: usize,
+    loop_len: usize,
+    phase: usize,
+}
+
+impl Dropout {
+    pub fn new(sample_rate: f32) -> Self {
+        Self {
+            buf: vec![0.0; (sample_rate * 0.08) as usize],
+            write: 0,
+            noise: Noise::default(),
+            sample_rate,
+            fade: ((sample_rate * 0.003) as usize).max(1),
+            gap: (sample_rate * 1.6) as u32,
+            left: 0,
+            mix: 0.0,
+            loop_start: 0,
+            loop_len: 0,
+            phase: 0,
+        }
+    }
+
+    /// `amount` 0..1 sets how often events happen; 0 passes the voice untouched.
+    #[inline]
+    pub fn process(&mut self, x: f32, amount: f32) -> f32 {
+        if amount <= 0.0 {
+            self.left = 0;
+            self.mix = 0.0;
+            self.loop_len = 0;
+            self.push(x);
+            return x;
+        }
+        if self.left > 0 {
+            self.left -= 1;
+            if self.left == 0 {
+                self.gap = self.next_gap(amount);
+            }
+        } else if self.gap > 0 {
+            self.gap -= 1;
+        } else {
+            self.begin();
+        }
+        let step = 1.0 / self.fade as f32;
+        self.mix = if self.left > 0 { (self.mix + step).min(1.0) } else { (self.mix - step).max(0.0) };
+        if self.mix == 0.0 {
+            self.loop_len = 0;
+            self.push(x);
+            return x;
+        }
+        let wet = if self.loop_len == 0 { 0.0 } else { self.loop_sample() };
+        let y = x + (wet - x) * self.mix;
+        // The ring is frozen during a stutter: the loop is read from it.
+        if self.loop_len == 0 {
+            self.push(y);
+        }
+        y
+    }
+
+    fn begin(&mut self) {
+        let sr = self.sample_rate;
+        self.left = ((0.04 + 0.16 * self.unit()) * sr) as u32;
+        let stutter = self.unit() < 0.5;
+        self.loop_len = if stutter { ((0.03 + 0.03 * self.unit()) * sr) as usize } else { 0 };
+        self.loop_start = (self.write + self.buf.len() - self.loop_len) % self.buf.len();
+        self.phase = 0;
+    }
+
+    fn next_gap(&mut self, amount: f32) -> u32 {
+        (1.6 * self.sample_rate / amount * (0.5 + self.unit())) as u32
+    }
+
+    /// The next sample of the stutter loop. The seam fades the loop's tail into the samples
+    /// just before it, so each repeat joins the next without a step.
+    #[inline]
+    fn loop_sample(&mut self) -> f32 {
+        let k = self.phase;
+        let a = self.at(self.loop_start + k);
+        let y = if k + self.fade >= self.loop_len {
+            let t = (k + self.fade + 1 - self.loop_len) as f32 / (self.fade + 1) as f32;
+            let b = self.at(self.loop_start + k + self.buf.len() - self.loop_len);
+            a + (b - a) * t
+        } else {
+            a
+        };
+        self.phase += 1;
+        if self.phase == self.loop_len {
+            self.phase = 0;
+        }
+        y
+    }
+
+    #[inline]
+    fn at(&self, i: usize) -> f32 {
+        let n = self.buf.len();
+        self.buf[if i >= n { i - n } else { i }]
+    }
+
+    #[inline]
+    fn push(&mut self, x: f32) {
+        self.buf[self.write] = x;
+        self.write += 1;
+        if self.write == self.buf.len() {
+            self.write = 0;
+        }
+    }
+
+    /// Uniform in 0..1.
+    fn unit(&mut self) -> f32 {
+        (self.noise.next() + 1.0) * 0.5
+    }
+
+    pub fn clear(&mut self) {
+        self.buf.fill(0.0);
+        self.write = 0;
+        self.gap = (self.sample_rate * 1.6) as u32;
+        self.left = 0;
+        self.mix = 0.0;
+        self.loop_len = 0;
+        self.phase = 0;
+    }
+}
+
 /// Soft saturation; `drive` 1 is gentle, 10 is fuzz.
 #[inline]
 pub fn saturate(x: f32, drive: f32) -> f32 {
@@ -632,6 +769,47 @@ mod tests {
             let x = if (i / 50) % 2 == 0 { 1.0 } else { -1.0 };
             let y = c.process(x, 0.1, 4.0);
             assert!(y.is_finite() && y.abs() <= 1.0, "{y}");
+        }
+    }
+
+    #[test]
+    fn dropout_at_zero_amount_passes_the_voice() {
+        let mut d = Dropout::new(SR);
+        for i in 0..SR as usize {
+            let x = sine(200.0, i, SR) * 0.5;
+            assert_eq!(d.process(x, 0.0), x);
+        }
+    }
+
+    #[test]
+    fn dropout_cuts_and_stutters_without_clicks() {
+        let mut d = Dropout::new(SR);
+        let (mut quiet, mut biggest_step, mut prev) = (0usize, 0.0f32, 0.0f32);
+        let total = SR as usize * 20;
+        for i in 0..total {
+            let x = sine(200.0, i, SR) * 0.5;
+            let y = d.process(x, 1.0);
+            assert!(y.is_finite() && y.abs() <= 0.5 + 1e-3, "{y} at {i}");
+            if x.abs() > 0.1 && y.abs() < 0.01 {
+                quiet += 1;
+            }
+            biggest_step = biggest_step.max((y - prev).abs());
+            prev = y;
+        }
+        let fraction = quiet as f32 / total as f32;
+        assert!((0.01..0.25).contains(&fraction), "dropout fraction {fraction}");
+        assert!(biggest_step < 0.08, "click of {biggest_step}");
+    }
+
+    #[test]
+    fn dropout_cleared_then_silence_is_exact_silence() {
+        let mut d = Dropout::new(SR);
+        for i in 0..SR as usize {
+            d.process(sine(200.0, i, SR) * 0.5, 1.0);
+        }
+        d.clear();
+        for _ in 0..SR as usize * 3 {
+            assert_eq!(d.process(0.0, 1.0), 0.0);
         }
     }
 }
