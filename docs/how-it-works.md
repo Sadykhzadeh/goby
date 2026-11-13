@@ -92,3 +92,30 @@ microphone ──WASAPI (shared, 10 ms)────▶ gain + gate ─▶ voice 
   Volume mixer (`IAudioPolicyConfigFactory`), and the cable is renamed through
   `IPolicyConfig`, the interface behind the Sound control panel. Both are undocumented
   but have kept their layout across Windows 10 and 11.
+
+## The grain shifter
+
+The plain shifter plays the voice faster or slower, so the resonances of the throat and
+mouth move with the pitch: up is a chipmunk, down is a giant. A recipe that sets `formant`
+sends the voice through a second shifter instead, which sets the pitch and the timbre
+separately.
+
+It takes the voice apart into grains about two cycles long, each centred on the loudest
+part of a cycle, where the vocal folds close and the mouth rings. Laying the grains closer
+together or further apart sets the pitch and leaves the ringing alone. Reading each grain
+faster or slower sets the timbre and leaves the pitch alone.
+
+A pitch tracker tells it how long a cycle is. It is YIN, run at a quarter of the sample
+rate and answering 200 times a second for anything from 60 to 420 Hz. Sounds with no pitch,
+an "s" or a breath, have no cycle to line the grains up on. Repeating one stretch of them at
+the grain rate would give them a buzz, so each grain reads from a random spot instead.
+
+On a synthetic vowel the pitch lands within 3 % of what was asked and the timbre within 7 %.
+The shifter costs 0.3 to 0.6 % of one core, and the heaviest new voice, Movie trailer,
+takes 0.5 %. The output stays within 15 ms of the microphone.
+
+Reproduce the cost with:
+
+```
+cargo test --release -p goby-dsp formant_cost -- --ignored --nocapture
+```
