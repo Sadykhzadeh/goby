@@ -126,12 +126,12 @@ impl PitchTracker {
         let newest = &s[longest..];
         let mut running = 0.0f32;
         self.diff[0] = 1.0;
-        for lag in 1..=longest {
+        for (lag, slot) in self.diff.iter_mut().enumerate().take(longest + 1).skip(1) {
             let from = longest - lag;
             let earlier = energy[from + n] - energy[from];
             let d = ((own + earlier) as f32 - 2.0 * dot(newest, &s[from..from + n])).max(0.0);
             running += d;
-            self.diff[lag] = d * lag as f32 / running.max(1e-12);
+            *slot = d * lag as f32 / running.max(1e-12);
         }
         self.diff[longest + 1] = 1.0;
 
