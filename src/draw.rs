@@ -94,6 +94,7 @@ pub mod glyph {
     pub const MORE: u16 = 0xE712;
     pub const CHECK: u16 = 0xE73E;
     pub const UPDATE: u16 = 0xE896;
+    pub const UPLOAD: u16 = 0xE898;
     pub const OPEN: u16 = 0xE8A7;
     pub const CHAT: u16 = 0xE8BD;
     pub const ADD: u16 = 0xE710;
@@ -178,6 +179,7 @@ pub mod glyph {
                 "M3 4h10a1.5 1.5 0 0 1 1.5 1.5v5.5a1.5 1.5 0 0 1 -1.5 1.5h-10a1.5 1.5 0 0 1 -1.5 -1.5v-5.5a1.5 1.5 0 0 1 1.5 -1.5zM4 6.6h.6M6.5 6.6h.6M9 6.6h.6M11.5 6.6h.6M4 8.4h.6M11.5 8.4h.6M5.6 10.3h4.8",
             )],
             UPDATE => &[(false, "M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10")],
+            UPLOAD => &[(false, "M8 11V2M4.5 5.5 8 2l3.5 3.5M3 14h10")],
             SPEED => &[
                 (false, "M2.3 12a6 6 0 1 1 11.4 0M8.6 9.2l2.6-3.4"),
                 (true, "M6.9 10a1.1 1.1 0 1 0 2.2 0a1.1 1.1 0 1 0 -2.2 0z"),
@@ -234,6 +236,7 @@ mod tests {
             MORE,
             CHECK,
             UPDATE,
+            UPLOAD,
             OPEN,
             CHAT,
             ADD,

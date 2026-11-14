@@ -5,18 +5,19 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::ShellExecuteW;
-use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_HIDE, SW_SHOWNORMAL};
 use windows::core::{HSTRING, PCWSTR, w};
 
+use super::WM_ASKED;
 use super::updates::{self, Inbox};
 use crate::engine::{self, Engine, Shared};
 use crate::gfx::Gfx;
-use crate::host::{AppState, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
+use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
 use crate::settings::Settings;
-use crate::{apps, hotkeys, install, policy};
+use crate::{apps, files, hotkeys, install, policy};
 
 pub struct Desktop {
     pub hwnd: HWND,
@@ -39,6 +40,8 @@ pub struct Desktop {
     /// A newer verified release, and the mailbox of the threads that check and download.
     pub manifest: Option<crate::update::Manifest>,
     pub inbox: Arc<Mutex<Inbox>>,
+    /// The file `ask` was last asked for, until the window has shown its dialog.
+    pub asked: Option<Ask>,
 }
 
 impl Desktop {
@@ -58,6 +61,7 @@ impl Desktop {
             start_maximized: false,
             manifest: None,
             inbox: updates::inbox(),
+            asked: None,
         }
     }
 
@@ -252,6 +256,23 @@ impl Host for Desktop {
             Link::Cable => self.shell_open(w!("https://vb-audio.com/Cable/")),
             Link::Downloads => install::launch(w!("explorer.exe"), "shell:Downloads", None, SW_SHOWNORMAL),
         }
+    }
+
+    fn ask(&mut self, ask: Ask) {
+        self.asked = Some(ask);
+        unsafe {
+            let _ = PostMessageW(Some(self.hwnd), WM_ASKED, WPARAM(0), LPARAM(0));
+        }
+    }
+
+    fn read_file(&self, path: &str, max: usize) -> Option<Vec<u8>> {
+        // A file of the wrong size is not read at all, so one that is huge costs nothing.
+        files::size(path).filter(|n| *n <= max as u64)?;
+        files::read(path).filter(|b| b.len() <= max)
+    }
+
+    fn write_file(&self, path: &str, data: &[u8]) -> bool {
+        files::write(path, data)
     }
 
     fn capture(&mut self, on: bool) {

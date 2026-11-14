@@ -459,6 +459,12 @@ impl<H: Host> App<H> {
         let check = tr!("settings.updates.title");
         let check_desc = tr!("settings.updates.desc");
         self.row_card(g, &mut y, Hit::Toggle(Switch::Updates), glyph::UPDATE, check, check_desc);
+        let export = tr!("settings.export.title");
+        let export_desc = self.filed_note(Ask::SaveSettings, tr!("settings.export.desc"), tr!("settings.export.done"));
+        self.row_card(g, &mut y, Hit::File(Ask::SaveSettings), glyph::UPLOAD, export, export_desc);
+        let import = tr!("settings.import.title");
+        let import_desc = self.filed_note(Ask::OpenSettings, tr!("settings.import.desc"), tr!("settings.import.done"));
+        self.row_card(g, &mut y, Hit::File(Ask::OpenSettings), glyph::UPDATE, import, import_desc);
 
         y += 20.0;
         // The commit says which code this copy claims to be built from; the signature on
@@ -474,6 +480,16 @@ impl<H: Host> App<H> {
         self.settings_max = (content - self.lay.pane.h()).max(0.0);
         self.settings_scroll.target = self.settings_scroll.target.min(self.settings_max);
         self.scrollbar(g, self.lay.pane, scroll, self.settings_max, Pane::Settings);
+    }
+
+    /// What a file row says under its title: how the last try ended, if it was this row's,
+    /// and what the row does otherwise.
+    fn filed_note(&self, ask: Ask, desc: &'static str, done: &'static str) -> &'static str {
+        match self.filed {
+            Some((a, true)) if a == ask => done,
+            Some((a, false)) if a == ask => tr!("settings.file.failed"),
+            _ => desc,
+        }
     }
 
     /// The card that offers a newer release, at the top of Settings.

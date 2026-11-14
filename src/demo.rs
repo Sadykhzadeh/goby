@@ -2,11 +2,11 @@
 //! window and for tests. Settings stay in memory. With no live microphone the scope shows
 //! the chosen voice played over a test tone; the website feeds it a real one when asked.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use crate::dsp::Voice;
-use crate::host::{AppState, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
+use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
 use crate::settings::Settings;
 use crate::voices;
 
@@ -44,6 +44,9 @@ pub struct DemoHost {
     pub opened: Option<Link>,
     pub hotkeys: bool,
     pub saves: Cell<u32>,
+    /// The last file a click asked for, and the files there are, by path.
+    pub asked: Option<Ask>,
+    pub files: RefCell<Vec<(String, Vec<u8>)>>,
     autostart: bool,
     shown: Option<Params>,
 }
@@ -62,6 +65,8 @@ impl Default for DemoHost {
             opened: None,
             hotkeys: true,
             saves: Cell::new(0),
+            asked: None,
+            files: RefCell::new(Vec::new()),
             autostart: false,
             shown: None,
         }
@@ -251,6 +256,22 @@ impl Host for DemoHost {
 
     fn open(&mut self, link: Link) {
         self.opened = Some(link);
+    }
+
+    fn ask(&mut self, ask: Ask) {
+        self.asked = Some(ask);
+    }
+
+    fn read_file(&self, path: &str, max: usize) -> Option<Vec<u8>> {
+        let files = self.files.borrow();
+        files.iter().find(|(p, _)| p == path).map(|(_, d)| d.clone()).filter(|d| d.len() <= max)
+    }
+
+    fn write_file(&self, path: &str, data: &[u8]) -> bool {
+        let mut files = self.files.borrow_mut();
+        files.retain(|(p, _)| p != path);
+        files.push((path.into(), data.to_vec()));
+        true
     }
 
     fn capture(&mut self, _: bool) {}

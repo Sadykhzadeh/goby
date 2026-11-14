@@ -22,7 +22,7 @@ use windows::core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, Result, w};
 use super::{App, HEIGHT, MIN_H, MIN_W, Popup, WIDTH};
 use crate::draw::Color;
 use crate::gfx::Gfx;
-use crate::host::{Host, Hotkey, Key};
+use crate::host::{Ask, Host, Hotkey, Key};
 use crate::lang::tr;
 use crate::settings::Settings;
 use crate::theme::Theme;
@@ -38,6 +38,9 @@ use desktop::Desktop;
 type Win = App<Desktop>;
 
 const WS_EX_NOREDIRECTIONBITMAP: WINDOW_EX_STYLE = WINDOW_EX_STYLE(0x0020_0000);
+
+/// Posted by `Desktop::ask`: a dialog is wanted, once the click that asked is over.
+const WM_ASKED: u32 = WM_APP + 5;
 
 /// Shows a menu from the window at its place under the card, with no borrow of the window
 /// state alive: the menu runs a modal loop that sends timers and paints back to wndproc.
@@ -100,12 +103,20 @@ struct OpenFileName {
 #[link(name = "comdlg32", kind = "raw-dylib")]
 unsafe extern "system" {
     fn GetOpenFileNameW(ofn: *mut OpenFileName) -> BOOL;
+    fn GetSaveFileNameW(ofn: *mut OpenFileName) -> BOOL;
 }
 
-/// The standard Open dialog, filtered to programs; returns the lower-case exe name.
-fn browse_exe(owner: HWND, title: &str) -> Option<String> {
+/// The standard Open dialog, or with `save` the Save one that starts on the file name
+/// `name` and adds `.txt` to a name typed without an extension. `types` is the filter's
+/// text and pattern in one: "Programs (*.exe)\0*.exe\0". Returns the full path chosen.
+fn pick_file(owner: HWND, title: &str, types: &str, save: Option<&str>) -> Option<String> {
     let mut file = [0u16; 1024];
-    let filter: Vec<u16> = format!("{}\0*.exe\0\0", tr!("programs.menu.filter")).encode_utf16().collect();
+    if let Some(name) = save {
+        for (to, c) in file.iter_mut().zip(name.encode_utf16()) {
+            *to = c;
+        }
+    }
+    let filter: Vec<u16> = format!("{types}\0").encode_utf16().collect();
     let title = HSTRING::from(title);
     let mut ofn = OpenFileName {
         struct_size: size_of::<OpenFileName>() as u32,
@@ -121,11 +132,12 @@ fn browse_exe(owner: HWND, title: &str) -> Option<String> {
         max_file_title: 0,
         initial_dir: PCWSTR::null(),
         title: PCWSTR(title.as_ptr()),
-        // OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
-        flags: 0x0008_0000 | 0x1000 | 0x0800 | 0x0008,
+        // OFN_EXPLORER | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST, and OFN_FILEMUSTEXIST to open
+        // or OFN_OVERWRITEPROMPT to save
+        flags: 0x0008_0000 | 0x0008 | 0x0800 | if save.is_some() { 0x0002 } else { 0x1000 },
         file_offset: 0,
         file_extension: 0,
-        default_ext: PCWSTR::null(),
+        default_ext: if save.is_some() { w!("txt") } else { PCWSTR::null() },
         custom_data: LPARAM(0),
         hook: std::ptr::null_mut(),
         template_name: PCWSTR::null(),
@@ -133,13 +145,28 @@ fn browse_exe(owner: HWND, title: &str) -> Option<String> {
         reserved2: 0,
         flags_ex: 0,
     };
-    if !unsafe { GetOpenFileNameW(&mut ofn) }.as_bool() {
+    let chosen = unsafe { if save.is_some() { GetSaveFileNameW(&mut ofn) } else { GetOpenFileNameW(&mut ofn) } };
+    if !chosen.as_bool() {
         return None;
     }
     let len = file.iter().position(|c| *c == 0).unwrap_or(file.len());
-    let path = String::from_utf16_lossy(&file[..len]);
-    let name = path.rsplit('\\').next()?.to_ascii_lowercase();
+    Some(String::from_utf16_lossy(&file[..len]))
+}
+
+/// The Open dialog, filtered to programs; returns the lower-case exe name.
+fn browse_exe(owner: HWND, title: &str) -> Option<String> {
+    let types = format!("{}\0*.exe\0", tr!("programs.menu.filter"));
+    let name = pick_file(owner, title, &types, None)?.rsplit('\\').next()?.to_ascii_lowercase();
     name.ends_with(".exe").then_some(name)
+}
+
+/// The dialog for a file `Host::ask` was asked for, and the path chosen in it.
+fn ask_path(owner: HWND, ask: Ask) -> Option<String> {
+    let types = format!("{}\0*.txt\0", tr!("settings.file.filter"));
+    match ask {
+        Ask::SaveSettings => pick_file(owner, tr!("settings.export.dialog"), &types, Some("goby-settings.txt")),
+        Ask::OpenSettings => pick_file(owner, tr!("settings.import.dialog"), &types, None),
+    }
 }
 
 /// Lets Win32 menus follow the dark theme. uxtheme exports these by ordinal only; they have
@@ -466,6 +493,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_HOTKEY => {
                 if let Some(action) = hotkeys::action(wp.0) {
                     app.hotkey(action);
+                }
+                LRESULT(0)
+            }
+            WM_ASKED => {
+                if let Some(ask) = app.host.asked.take() {
+                    // `app` is not used across the dialog's modal loop; it is fetched again after.
+                    let path = ask_path(hwnd, ask);
+                    let Some(app) = app_of(hwnd) else { return LRESULT(0) };
+                    app.answered(ask, path);
                 }
                 LRESULT(0)
             }

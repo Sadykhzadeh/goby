@@ -7,9 +7,9 @@ use std::time::Duration;
 
 use crate::draw::{Align, Canvas, Font, R, glyph};
 use crate::fx::clamp;
-use crate::host::{AppState, Endpoint, Host, Hotkey, Key, Link, MicApp, SCOPE_LEN};
+use crate::host::{AppState, Ask, Endpoint, Host, Hotkey, Key, Link, MicApp, SCOPE_LEN};
 use crate::lang::{self, tr, trf};
-use crate::settings::{Preset, Settings, signed, write_decimal};
+use crate::settings::{IMPORT_MAX, Preset, Settings, signed, write_decimal};
 use crate::theme::{Theme, argb, with_alpha};
 use crate::voices::{self, Category};
 
@@ -124,6 +124,8 @@ enum Hit {
     Pick(Pick),
     /// The author's site.
     About,
+    /// Choose a file to write or read.
+    File(Ask),
     /// Take a chosen program (index into `settings.routed`) off the list.
     Remove(usize),
     /// Choose another program that should hear Goby.
@@ -255,6 +257,8 @@ pub struct App<H: Host> {
     /// The advanced microphone settings are unfolded.
     advanced: bool,
     page: Page,
+    /// How the last file asked for in Settings ended, until the page is left: it worked or not.
+    filed: Option<(Ask, bool)>,
 
     status: String,
     healthy: bool,
@@ -355,6 +359,7 @@ impl<H: Host> App<H> {
             shelf: Shelf::All,
             advanced: false,
             page: Page::Voices,
+            filed: None,
             status: String::new(),
             healthy: true,
             retry_at: None,

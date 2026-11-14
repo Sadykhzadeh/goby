@@ -60,6 +60,15 @@ pub enum Link {
     Downloads,
 }
 
+/// A file the window asks for, through the system's own Save or Open dialog.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Ask {
+    /// Where to write the exported settings.
+    SaveSettings,
+    /// Which exported settings to read.
+    OpenSettings,
+}
+
 /// What the global hotkeys ask for.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hotkey {
@@ -133,6 +142,14 @@ pub trait Host {
     fn icon(&self, path: &str, px: u32) -> Option<Vec<u8>>;
 
     fn open(&mut self, link: Link);
+    /// Asks for a file once the click that wanted it is dealt with: a dialog runs its own
+    /// message loop, which the window must not be inside of. The answer, a path or none
+    /// when it was cancelled, comes back to `App::answered`.
+    fn ask(&mut self, ask: Ask);
+    /// What the file holds, unless it is missing or longer than `max` bytes.
+    fn read_file(&self, path: &str, max: usize) -> Option<Vec<u8>>;
+    /// Creates or replaces the file; false when that did not work.
+    fn write_file(&self, path: &str, data: &[u8]) -> bool;
     /// Keeps the pointer while a slider or scrollbar is dragged.
     fn capture(&mut self, on: bool);
     fn autostart(&self) -> bool;

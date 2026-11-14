@@ -102,6 +102,40 @@ impl<H: Host> App<H> {
         self.dirty = true;
     }
 
+    /// A file `Host::ask` wanted was chosen, or none (`path` is `None`) as the dialog was
+    /// cancelled. Exporting writes it; importing reads it and, if it is an export, applies
+    /// it as the settings page would have, with no restart.
+    pub fn answered(&mut self, ask: Ask, path: Option<String>) {
+        let Some(path) = path else { return };
+        let ok = match ask {
+            Ask::SaveSettings => self.host.write_file(&path, self.settings.export().as_bytes()),
+            Ask::OpenSettings => self.import(&path),
+        };
+        self.filed = Some((ask, ok));
+        self.dirty = true;
+    }
+
+    fn import(&mut self, path: &str) -> bool {
+        let Some(bytes) = self.host.read_file(path, IMPORT_MAX) else { return false };
+        let s = &self.settings;
+        let (monitor, exclusive, hotkeys) = (s.monitor, s.exclusive, s.hotkeys);
+        if !self.settings.import(&bytes) {
+            return false;
+        }
+        let s = &self.settings;
+        self.voice = voices::index_of(&s.voice).unwrap_or(self.voice);
+        if s.hotkeys != hotkeys {
+            self.use_hotkeys();
+        }
+        self.apply();
+        // The language, the tabs measured in it, and the save.
+        self.set_language(self.settings.lang.clone());
+        if (self.settings.monitor, self.settings.exclusive) != (monitor, exclusive) {
+            self.restart();
+        }
+        true
+    }
+
     fn hit_at(&self, p: (f32, f32)) -> Hit {
         self.hits.iter().rev().find(|(r, _)| r.has(p)).map_or(Hit::None, |(_, h)| *h)
     }
@@ -173,6 +207,7 @@ impl<H: Host> App<H> {
             }
             Hit::AddApp => return self.app_popup(),
             Hit::About => self.host.open(Link::Author),
+            Hit::File(ask) => self.host.ask(ask),
             Hit::Scrollbar(pane) => {
                 let at = match pane {
                     Pane::Gallery => self.gallery_scroll.value,
@@ -268,6 +303,7 @@ impl<H: Host> App<H> {
     fn go(&mut self, page: Page) {
         if self.page != page {
             self.page = page;
+            self.filed = None;
             self.settings_scroll = Anim::default();
             // The page rises into place the way WinUI's do, unless animations are off
             // in Windows' Accessibility settings.

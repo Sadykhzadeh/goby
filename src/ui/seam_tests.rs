@@ -134,7 +134,7 @@ fn the_language_menu_switches_the_whole_window_at_once() {
     app.still = true;
     app.down((app.lay.nav_settings.l + 5.0, app.lay.nav_settings.t + 5.0), false);
     app.draw(&Record::default());
-    app.wheel((app.lay.pane.l + 5.0, app.lay.pane.t + 5.0), -20.0);
+    app.wheel((app.lay.pane.l + 5.0, app.lay.pane.t + 5.0), -4.0);
     app.tick();
     app.draw(&Record::default());
     let row = hit(&app, Hit::Pick(Pick::Lang));
@@ -174,4 +174,49 @@ fn slider_readouts_read_as_they_did_with_float_formatting() {
             }
         }
     }
+}
+
+#[test]
+fn settings_go_out_through_a_file_and_come_back_without_a_restart() {
+    let (mut app, _) = window(demo::settings(), false, WIDTH);
+    app.still = true;
+    app.down((app.lay.nav_settings.l + 5.0, app.lay.nav_settings.t + 5.0), false);
+    app.draw(&Record::default());
+    app.wheel((app.lay.pane.l + 5.0, app.lay.pane.t + 5.0), -50.0);
+    app.tick();
+    app.draw(&Record::default());
+    let row = hit(&app, Hit::File(Ask::SaveSettings));
+    assert!(app.down((row.l + 5.0, row.t + 5.0), false).is_none());
+    assert_eq!(app.host.asked, Some(Ask::SaveSettings));
+
+    // Saved: the voice is in the file, the PC's own programs are not.
+    app.answered(Ask::SaveSettings, None);
+    assert!(app.host.files.borrow().is_empty(), "cancelled");
+    app.answered(Ask::SaveSettings, Some("a.txt".into()));
+    let written = String::from_utf8(app.host.files.borrow()[0].1.clone()).unwrap();
+    assert!(written.contains("favorites=minion,robot,helium,demon") && !written.contains("cs2.exe"), "{written}");
+    assert_eq!(app.filed, Some((Ask::SaveSettings, true)));
+
+    // Another voice, then the file read back: the first is on again, in the engine too.
+    let robot = voices::index_of("robot").unwrap();
+    app.choose(Fav::Voice(robot), false);
+    app.settings.favorites.clear();
+    app.settings.routed.push("zoom.exe".into());
+    let saves = app.host.saves.get();
+    app.answered(Ask::OpenSettings, Some("a.txt".into()));
+    assert_eq!(app.filed, Some((Ask::OpenSettings, true)));
+    assert_eq!(app.host.params.get().voice, voices::index_of("minion").unwrap());
+    assert_eq!(app.settings.favorites.len(), 4);
+    assert_eq!(app.settings.routed, ["cs2.exe", "discord.exe", "zoom.exe"], "the programs stay");
+    assert!(app.host.saves.get() > saves);
+
+    // Files that are not exports, or are missing, change nothing.
+    app.host.write_file("bad.txt", b"voice=robot\n");
+    let before = app.settings.clone();
+    for path in ["bad.txt", "missing.txt"] {
+        app.answered(Ask::OpenSettings, Some(path.into()));
+        assert_eq!(app.filed, Some((Ask::OpenSettings, false)));
+        assert_eq!(app.settings, before);
+    }
+    app.draw(&Record::default());
 }

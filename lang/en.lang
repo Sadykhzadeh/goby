@@ -92,6 +92,16 @@ settings.hotkeys.desc = Ctrl+Alt+G effect, PgUp/PgDn voice
 settings.hotkeys.taken = Some keys are taken elsewhere
 settings.updates.title = Check for updates
 settings.updates.desc = Once a day, only releases the author signed
+settings.export.title = Export settings
+settings.export.desc = Voice, favourites, own voices, hotkeys and options, to a file
+settings.export.done = Saved. Devices and programs are not in the file
+settings.import.title = Import settings
+settings.import.desc = Read such a file; this PC's devices and programs stay
+settings.import.done = Imported
+settings.file.failed = Failed: the file is not a Goby export, or cannot be read or written
+settings.export.dialog = Save Goby settings
+settings.import.dialog = Open Goby settings
+settings.file.filter = Text files (*.txt)
 
 # Updates
 update.out = Goby {version} is out
