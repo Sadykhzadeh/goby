@@ -3,6 +3,18 @@
 // The website builds this file too; it keeps its settings in the page, not in files.
 #[cfg(windows)]
 use crate::files;
+use crate::voices;
+
+/// The first line of an exported file. `parse` skips it, having no `=`.
+const EXPORT_HEADER: &str = "# Goby settings";
+/// What an export leaves out: devices, the window and the programs are this PC's own, and
+/// the rest only remembers what happened here.
+const LOCAL_KEYS: [&str; 8] =
+    ["input", "output", "routed", "unroute", "cable_named_tried", "tray_told", "update_checked", "window"];
+/// The most an import reads. An export with every voice starred is under 2 KB.
+pub const IMPORT_MAX: usize = 64 * 1024;
+/// More saved voices than anyone makes; an import keeps this many.
+const MAX_PRESETS: usize = 200;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -402,6 +414,60 @@ impl Settings {
         )
     }
 
+    /// What goes to another PC: `render` without the keys that only mean something here,
+    /// under a header line that `import` looks for.
+    pub fn export(&self) -> String {
+        let mut out = String::from(EXPORT_HEADER) + "\n";
+        for line in self.render().lines().filter(|l| !LOCAL_KEYS.contains(&l.split('=').next().unwrap_or(""))) {
+            out.push_str(line);
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Takes the portable settings from a file `export` wrote. Anything else, a file that
+    /// is too big, not text, or without the header, is refused and nothing changes. Inside
+    /// the file `parse` does the reading, so its limits apply; the keys of `LOCAL_KEYS`
+    /// are not taken even if they are there, and a voice or a star Goby has no voice for
+    /// is dropped. A key the file leaves out is its default, as in settings.ini.
+    #[inline(never)]
+    pub fn import(&mut self, bytes: &[u8]) -> bool {
+        let Ok(text) = std::str::from_utf8(bytes) else { return false };
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        if bytes.len() > IMPORT_MAX || text.contains('\0') || text.lines().next().map(str::trim) != Some(EXPORT_HEADER)
+        {
+            return false;
+        }
+        let mut new = Settings::parse(text);
+        let mut seen = Vec::new();
+        new.favorites.retain(|id| {
+            voices::index_of(id).is_some_and(|i| {
+                !seen.contains(&i) && {
+                    seen.push(i);
+                    true
+                }
+            })
+        });
+        new.presets.retain(|p| voices::index_of(&p.voice).is_some());
+        new.presets.truncate(MAX_PRESETS);
+        if voices::index_of(&new.voice).is_none() {
+            new.voice = std::mem::take(&mut self.voice);
+        }
+        let old = std::mem::take(self);
+        *self = Settings {
+            input: old.input,
+            output: old.output,
+            routed: old.routed,
+            unroute: old.unroute,
+            cable_named_tried: old.cable_named_tried,
+            tray_told: old.tray_told,
+            update_checked: old.update_checked,
+            window: old.window,
+            ..new
+        };
+        true
+    }
+
     #[cfg(windows)]
     pub fn load() -> Settings {
         let text = path().and_then(|p| files::read(&p)).and_then(|b| String::from_utf8(b).ok());
@@ -458,6 +524,138 @@ mod tests {
             window: Some(Placement { x: -1500, y: 40, w: 1000, h: 720, maximized: true }),
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    /// Everything set, the portable part and this PC's own.
+    fn full() -> Settings {
+        Settings {
+            input: "{0.0.1.00000000}.{abc}".into(),
+            output: "{0.0.0.00000000}.{def}".into(),
+            voice: "demon".into(),
+            semitones: -6.0,
+            volume: 1.25,
+            monitor: true,
+            enabled: false,
+            mic_gain_db: 6.0,
+            gate: true,
+            gate_db: -45.0,
+            dry_mix: 0.25,
+            exclusive: true,
+            routed: vec!["cs2.exe".into()],
+            unroute: vec!["obs64.exe".into()],
+            cable_named_tried: true,
+            tray: false,
+            tray_told: true,
+            hotkeys: false,
+            favorites: vec!["demon".into(), "robot".into()],
+            presets: vec![Preset { voice: "robot".into(), semitones: -2.5, dry_mix: 0.5, volume: 1.5 }],
+            updates: false,
+            update_checked: 1_794_000_000,
+            lang: "ru".into(),
+            window: Some(Placement { x: 10, y: 20, w: 1000, h: 720, maximized: false }),
+        }
+    }
+
+    #[test]
+    fn an_export_has_nothing_of_this_pc_and_imports_everything_else() {
+        let a = full();
+        let text = a.export();
+        for key in LOCAL_KEYS {
+            assert!(!text.lines().any(|l| l.starts_with(&format!("{key}="))), "{key} was exported");
+        }
+        for secret in ["{0.0.1", "abc", "cs2.exe", "obs64.exe", "1794000000", "1000,720"] {
+            assert!(!text.contains(secret), "{secret} was exported");
+        }
+        // Onto another PC: its own devices, programs and window stay, the rest is replaced.
+        let mut b = Settings {
+            input: "other-mic".into(),
+            output: "other-out".into(),
+            routed: vec!["discord.exe".into()],
+            window: None,
+            update_checked: 5,
+            ..Settings::default()
+        };
+        let own = b.clone();
+        assert!(b.import(text.as_bytes()));
+        assert_eq!(
+            b,
+            Settings {
+                input: own.input,
+                output: own.output,
+                routed: own.routed,
+                unroute: own.unroute,
+                cable_named_tried: own.cable_named_tried,
+                tray_told: own.tray_told,
+                update_checked: own.update_checked,
+                window: own.window,
+                ..a
+            }
+        );
+        // The same file twice, and a file saved by Notepad with a mark and Windows line ends.
+        assert_eq!(b.export(), text);
+        let mut c = Settings::default();
+        assert!(c.import(format!("\u{feff}{}", text.replace('\n', "\r\n")).as_bytes()));
+        assert_eq!((c.voice.as_str(), c.favorites.len(), c.lang.as_str()), ("demon", 2, "ru"));
+    }
+
+    #[test]
+    fn what_is_not_an_export_is_refused_and_changes_nothing() {
+        let mut s = full();
+        let before = s.clone();
+        let header = EXPORT_HEADER;
+        let mut huge = format!("{header}\nvoice=robot\n");
+        huge.push_str(&"#".repeat(IMPORT_MAX));
+        let binary: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
+        let mut noise = header.as_bytes().to_vec();
+        noise.extend([b'\n', 0xff, 0xfe, 0x80, b'=', 0]);
+        for bad in [
+            &b""[..],
+            b"voice=robot\n",
+            b"# Goby settings extra\nvoice=robot\n",
+            b"\n# Goby settings\nvoice=robot\n",
+            huge.as_bytes(),
+            &binary,
+            &noise,
+            b"# Goby settings\nvoice=robot\0\n",
+            &[0xef, 0xbb, 0xbf],
+            &[0xff; 100],
+        ] {
+            assert!(!s.import(bad), "{:?}", &bad[..bad.len().min(20)]);
+            assert_eq!(s, before);
+        }
+        let exactly = format!("{header}\n{}", "#".repeat(IMPORT_MAX - header.len() - 1));
+        assert!(s.import(exactly.as_bytes()), "the limit itself is fine");
+    }
+
+    #[test]
+    fn a_hostile_export_is_read_like_settings_ini_and_cannot_set_local_keys() {
+        let mut s = full();
+        let own = s.clone();
+        let stars = "demon,".repeat(4_000);
+        let presets = "robot:1:0:1;".repeat(1_500) + "nobody:1:0:1;demon:NaN:0:1";
+        let text = format!(
+            "{EXPORT_HEADER}\nvoice=nobody\nsemitones=NaN\nvolume=1e999\nmic_gain_db=-inf\ngate_db=x\n\
+             input=evil\noutput=evil\nrouted=evil.exe\nunroute=evil.exe\nwindow=1,2,3,4,1\nupdate_checked=5\n\
+             tray_told=0\ncable_named_tried=0\nlang=xx\nfavorites=nobody,robot,{stars}\npresets={presets}\n\
+             {}=1\n=\n==\n\u{202e}\n",
+            "k".repeat(3_000),
+        );
+        assert!(s.import(text.as_bytes()));
+        assert_eq!(s.voice, "demon", "an unknown voice leaves the one in use");
+        let d = Settings::default();
+        assert_eq!(
+            (s.semitones, s.volume, s.mic_gain_db, s.gate_db),
+            (d.semitones, d.volume, d.mic_gain_db, d.gate_db)
+        );
+        assert_eq!(s.lang, "auto");
+        assert_eq!(s.favorites, ["robot", "demon"]);
+        assert_eq!(s.presets.len(), MAX_PRESETS);
+        assert!(s.presets.iter().all(|p| p.voice == "robot"));
+        for (a, b) in [(&s.input, &own.input), (&s.output, &own.output)] {
+            assert_eq!(a, b);
+        }
+        assert_eq!((&s.routed, &s.unroute, s.window), (&own.routed, &own.unroute, own.window));
+        assert_eq!((s.tray_told, s.cable_named_tried, s.update_checked), (true, true, 1_794_000_000));
     }
 
     #[test]
