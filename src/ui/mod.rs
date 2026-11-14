@@ -17,6 +17,7 @@ mod controls;
 mod input;
 mod library;
 mod pages;
+mod report;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
