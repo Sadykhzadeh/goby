@@ -272,6 +272,8 @@ export function toggle() {
 // The recording: a few seconds of speech, decoded once. Its ends fade in and out and a
 // short silence follows, so it loops without a click and the voices' tails die away
 // before it comes round again. Without it, or if it cannot be decoded, the button says so.
+// sample.mp3 is a public-domain dialogue from VOA Learning English ("Oh, hi, Pete. How's
+// it going?"), taken from Wikimedia Commons, with its pauses shortened.
 let sampleBuf = null, sampleReady;
 function loadSample() {
   return sampleReady ??= fetch(new URL("sample.mp3", import.meta.url))
