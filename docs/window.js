@@ -8,6 +8,7 @@ const HOTKEYS = { KeyG: 0, PageDown: 1, PageUp: 2 };
 const LINKS = [, "https://azer.one", "https://vb-audio.com/Cable/"];
 const BG = "#201e1b"; // Mica over a warm wallpaper, as near as a flat colour gets
 const $ = id => document.getElementById(id);
+const T = JSON.parse($("texts").textContent); // the page's texts, in its language
 
 let x, bytes, frameEl, canvas, ctx, menuEl, audio = null, starting = false;
 let W = 1000, H = 680, k = 1, running = false, wantsLive = false, sent = "", lastLatency = 0;
@@ -196,7 +197,7 @@ function after() {
 const tryBtn = $("try"), tryLabel = $("try-label"), note = $("try-note"), note0 = note.innerHTML;
 async function live(on) {
   tryBtn.setAttribute("aria-pressed", on);
-  tryLabel.textContent = on ? "Stop listening" : "Try it with your microphone";
+  tryLabel.textContent = on ? T["try.on"] : T["try.off"];
   if (!on) {
     audio?.stop();
     audio = null;
@@ -204,22 +205,22 @@ async function live(on) {
     return;
   }
   if (starting) return;
-  if (!window.AudioWorkletNode || !navigator.mediaDevices?.getUserMedia) return failed("This browser cannot run the voices live. A current Chrome, Edge, Firefox or Safari can.");
+  if (!window.AudioWorkletNode || !navigator.mediaDevices?.getUserMedia) return failed(T.unsupported);
   const ctx = new AudioContext({ latencyHint: "interactive" }); // made inside the click, so it may play
   starting = true;
-  note.textContent = "Your browser asks for the microphone…";
+  note.textContent = T.asking;
   try {
     const started = await (await import("./live.js")).start(ctx, bytes);
     if (!wantsLive) return started.stop();
     audio = started;
     sent = "";
     after();
-    note.textContent = "Listening. Pick voices and drag Pitch while you talk.";
+    note.textContent = T.listening;
   } catch (err) {
     ctx.close();
-    failed(err?.name === "NotAllowedError" ? "The microphone was not allowed, so there is nothing to hear yet."
-      : err?.name === "NotFoundError" ? "No microphone was found on this device."
-      : "The voices could not start here: " + (err?.message || err));
+    failed(err?.name === "NotAllowedError" ? T.denied
+      : err?.name === "NotFoundError" ? T.nomic
+      : T.failed + (err?.message || err));
   } finally {
     starting = false;
   }
@@ -244,10 +245,11 @@ export async function open(wasm) {
   canvas = document.createElement("canvas");
   canvas.tabIndex = 0;
   canvas.setAttribute("role", "application");
-  canvas.setAttribute("aria-label", "Goby's window. Arrow keys pick a voice; Escape goes back to the voices.");
+  canvas.setAttribute("aria-label", T.window);
   ctx = canvas.getContext("2d");
   await document.fonts?.ready;
-  const language = new TextEncoder().encodeInto(navigator.language || "", new Uint8Array(x.memory.buffer, x.ui_language(), 35));
+  // The window starts in the language of the page, not of the browser.
+  const language = new TextEncoder().encodeInto(document.documentElement.lang,new Uint8Array(x.memory.buffer, x.ui_language(), 35));
   x.ui_start(1000, 680, matchMedia("(prefers-reduced-motion: reduce)").matches, language.written);
   frameEl.querySelector(".shot").replaceWith(canvas);
   size();

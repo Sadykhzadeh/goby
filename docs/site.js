@@ -2,6 +2,10 @@
 // while something is changing.
 const $ = id => document.getElementById(id);
 const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+// The page's texts in its language, and where the other files are: the Russian page is
+// one folder down.
+const TEXT = JSON.parse($("texts").textContent);
+const HERE = document.currentScript.src;
 
 // Every voice's name and waveform, as the app draws it on its tile.
 const VOICES = JSON.parse($("hero-voices").textContent).map(([name, pts]) => ({ name, pts }));
@@ -20,7 +24,7 @@ const ease = k => 1 - Math.pow(1 - Math.min(1, k), 3);
 // ---- The hero: it eases from one voice's waveform to the next while it is on screen. ----
 {
   const wave = $("wave"), echo = $("echo"), nameEl = $("name"), countEl = $("count"), hero = document.querySelector(".hero");
-  let at = Math.max(0, VOICES.findIndex(v => v.name === "Minion"));
+  let at = Math.max(0, VOICES.findIndex(v => v.name === nameEl.textContent));
   let shown = VOICES[at].pts.slice(), from = shown, to = shown, t0 = 0, running = false;
   const draw = k => {
     const e = ease(k);
@@ -56,10 +60,10 @@ const ease = k => 1 - Math.pow(1 - Math.min(1, k), 3);
 // ---- The window: the app's own UI, built for the web. Fetched once it is about to be seen,
 // or when someone asks to hear the voices; window.js swaps it in for the picture. ----
 let loading;
-const load = () => loading ??= fetch("goby.wasm")
+const load = () => loading ??= fetch(new URL("goby.wasm", HERE))
   .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error("goby.wasm: " + r.status)))
   .then(async bytes => {
-    const w = await import("./window.js");
+    const w = await import(new URL("window.js", HERE));
     await w.open(bytes);
     return w;
   });
@@ -67,5 +71,5 @@ new IntersectionObserver((seen, io) => {
   if (seen.some(e => e.isIntersecting)) { io.disconnect(); load().catch(() => {}); }
 }, { rootMargin: "600px" }).observe($("win"));
 $("try").addEventListener("click", () => load().then(w => w.toggle(), err => {
-  $("try-note").textContent = "The voices could not load here: " + err.message;
+  $("try-note").textContent = TEXT.loadfail + err.message;
 }));

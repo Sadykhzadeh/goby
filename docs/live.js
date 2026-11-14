@@ -2,7 +2,7 @@
 // mic.rs and the recipes in voices.rs, in the goby.wasm the window already runs on) works
 // in an AudioWorklet between the microphone and the visitor's headphones.
 export async function start(ctx, bytes) {
-  await ctx.audioWorklet.addModule("worklet.js");
+  await ctx.audioWorklet.addModule(new URL("worklet.js", import.meta.url));
   // Raw sound: the browser's echo cancelling and noise suppression would fight the effects.
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, channelCount: 1, latency: 0 },
