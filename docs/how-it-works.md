@@ -8,7 +8,7 @@ Release build on Windows 11 with a USB microphone (fifine) and VB-Cable:
 
 | | |
 |---|---|
-| Executable | 354 KB (361,984 bytes), icons, installer, tray and updates included |
+| Executable | 374 KB (382,976 bytes), icons, installer, tray and updates included |
 | Dependencies | `windows`, `windows-core`, `windows-numerics` (Microsoft's own bindings) |
 | CPU, idle window | 0.16 % of one core |
 | CPU, behind a fullscreen game | the window stops drawing; only the audio threads run |

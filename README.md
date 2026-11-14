@@ -2,7 +2,7 @@
 
 <h1 align="center">Goby</h1>
 
-<p align="center"><b>A lightweight real-time voice changer for Windows.</b><br>74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 354 KB exe, free and open source, no account.</p>
+<p align="center"><b>A lightweight real-time voice changer for Windows.</b><br>74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 374 KB exe, free and open source, no account.</p>
 
 <p align="center">
   <a href="https://github.com/Sadykhzadeh/goby/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/Sadykhzadeh/goby?label=download&color=ffb900&labelColor=1a1610"></a>
@@ -21,14 +21,14 @@
 
 ## Why Goby
 
-- **Small and quick.** One 354 KB executable, about 28 ms from your mouth to the other program, under 1 % of one CPU core.
+- **Small and quick.** One 374 KB executable, about 28 ms from your mouth to the other program, under 1 % of one CPU core.
 - **Only where you want it.** Pick Discord, OBS or a call app on the *Programs* page and only they hear the voice. Everything else keeps your real microphone.
 - **Stays out of the way.** Hotkeys that work even in fullscreen apps, favorites, your own tuned voices, and it keeps running in the tray.
 - **Nothing to sign up for.** No account, no ads, nothing sent anywhere. Updates come only from releases signed by the author.
 
 ## Get started
 
-1. Download `goby-0.4.1-windows-x64.exe` from [Releases](https://github.com/Sadykhzadeh/goby/releases/latest) and choose **Install Goby** (or **Just run it**).
+1. Download `goby-0.5.0-windows-x64.exe` from [Releases](https://github.com/Sadykhzadeh/goby/releases/latest) and choose **Install Goby** (or **Just run it**).
 2. Goby needs the free [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) to reach other programs. Without it Goby walks you through installing it and picks it up without a restart.
 3. Open **Programs** and press **+** next to Discord, OBS or any other program. Done: talk.
 
