@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
 use crate::dsp::Voice;
-use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
+use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN, System};
 use crate::settings::Settings;
 use crate::voices;
 
@@ -272,6 +272,14 @@ impl Host for DemoHost {
         files.retain(|(p, _)| p != path);
         files.push((path.into(), data.to_vec()));
         true
+    }
+
+    fn system(&self) -> System {
+        System { windows: "10.0.26200.1".into(), user: "Azer".into(), machine: "DESKTOP-1".into() }
+    }
+
+    fn mix_format(&mut self, _: &str) -> Option<String> {
+        Some("48000 Hz, 2 ch, 32 bit".into())
     }
 
     fn capture(&mut self, _: bool) {}

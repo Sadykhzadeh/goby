@@ -5,7 +5,8 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, WPARAM};
+use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_HIDE, SW_SHOWNORMAL};
@@ -15,7 +16,7 @@ use super::WM_ASKED;
 use super::updates::{self, Inbox};
 use crate::engine::{self, Engine, Shared};
 use crate::gfx::Gfx;
-use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN};
+use crate::host::{AppState, Ask, Endpoint, Host, Link, MicApp, Pinned, SCOPE_LEN, System};
 use crate::settings::Settings;
 use crate::{apps, files, hotkeys, install, policy};
 
@@ -69,6 +70,39 @@ impl Desktop {
         unsafe {
             ShellExecuteW(Some(self.hwnd), w!("open"), target, PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
         }
+    }
+}
+
+/// Windows' version and build as the registry has them, such as "10.0.26200.1234": the
+/// version functions of the API report what the manifest says, not what is installed.
+fn windows_version() -> String {
+    const KEY: PCWSTR = w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+    let mut build = [0u16; 16];
+    let mut size = size_of_val(&build) as u32;
+    let mut revision = 0u32;
+    let mut rsize = 4u32;
+    unsafe {
+        let ok = RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            KEY,
+            w!("CurrentBuildNumber"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(build.as_mut_ptr() as _),
+            Some(&mut size),
+        ) == ERROR_SUCCESS;
+        let _ = RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            KEY,
+            w!("UBR"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut revision as *mut u32 as _),
+            Some(&mut rsize),
+        );
+        let len = build.iter().position(|c| *c == 0).unwrap_or(build.len());
+        let build = if ok { String::from_utf16_lossy(&build[..len]) } else { "?".into() };
+        format!("10.0.{build}.{revision}")
     }
 }
 
@@ -273,6 +307,16 @@ impl Host for Desktop {
 
     fn write_file(&self, path: &str, data: &[u8]) -> bool {
         files::write(path, data)
+    }
+
+    fn system(&self) -> System {
+        let var = |name| std::env::var(name).unwrap_or_default();
+        System { windows: windows_version(), user: var("USERNAME"), machine: var("COMPUTERNAME") }
+    }
+
+    fn mix_format(&mut self, id: &str) -> Option<String> {
+        let (hz, channels, bits) = engine::mix_format(id)?;
+        Some(format!("{hz} Hz, {channels} ch, {bits} bit"))
     }
 
     fn capture(&mut self, on: bool) {

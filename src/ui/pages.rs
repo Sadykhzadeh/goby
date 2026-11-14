@@ -473,6 +473,9 @@ impl<H: Host> App<H> {
             "" => format!("Goby {VERSION}"),
             commit => format!("Goby {VERSION} · {commit}"),
         };
+        let report = tr!("settings.report.title");
+        let report_desc = self.filed_note(Ask::SaveReport, tr!("settings.report.desc"), tr!("settings.report.done"));
+        self.row_card(g, &mut y, Hit::File(Ask::SaveReport), glyph::CHAT, report, report_desc);
         self.row_card(g, &mut y, Hit::About, glyph::INFO, &about, "Azer Sadykhzadeh · azer.one");
 
         g.unclip();

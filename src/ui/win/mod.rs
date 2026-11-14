@@ -166,6 +166,7 @@ fn ask_path(owner: HWND, ask: Ask) -> Option<String> {
     match ask {
         Ask::SaveSettings => pick_file(owner, tr!("settings.export.dialog"), &types, Some("goby-settings.txt")),
         Ask::OpenSettings => pick_file(owner, tr!("settings.import.dialog"), &types, None),
+        Ask::SaveReport => pick_file(owner, tr!("settings.report.dialog"), &types, Some("goby-report.txt")),
     }
 }
 

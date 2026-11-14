@@ -193,6 +193,19 @@ pub fn cable() -> Option<(Endpoint, Endpoint)> {
     Some((play, record))
 }
 
+/// What a device itself runs at in shared mode, as (Hz, channels, bits per sample). Only
+/// asks: no stream is opened.
+pub fn mix_format(id: &str) -> Option<(u32, u16, u16)> {
+    unsafe {
+        let dev = enumerator().ok()?.GetDevice(&HSTRING::from(id)).ok()?;
+        let client: IAudioClient = dev.Activate(CLSCTX_ALL, None).ok()?;
+        let fmt = client.GetMixFormat().ok()?;
+        let mix = *fmt;
+        CoTaskMemFree(Some(fmt as _));
+        Some((mix.nSamplesPerSec, mix.nChannels, mix.wBitsPerSample))
+    }
+}
+
 pub fn default_endpoint(capture: bool) -> Option<Endpoint> {
     let flow = if capture { eCapture } else { eRender };
     let dev = unsafe { enumerator().ok()?.GetDefaultAudioEndpoint(flow, eConsole) }.ok()?;

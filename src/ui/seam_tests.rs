@@ -220,3 +220,20 @@ fn settings_go_out_through_a_file_and_come_back_without_a_restart() {
     }
     app.draw(&Record::default());
 }
+
+#[test]
+fn the_support_report_is_written_where_it_was_asked_for_and_keeps_names_out() {
+    let (mut app, _) = window(demo::settings(), false, WIDTH);
+    app.settings.routed.push(r"C:\Users\Azer\Games\x.exe".into());
+    app.answered(Ask::SaveReport, Some("r.txt".into()));
+    assert_eq!(app.filed, Some((Ask::SaveReport, true)));
+    let text = String::from_utf8(app.host.files.borrow()[0].1.clone()).unwrap();
+    assert!(text.starts_with("Goby "), "{text}");
+    for line in
+        ["Windows 10.0.26200.1\n", "Cable: found\n", "Programs: cs2.exe, discord.exe, %USERPROFILE%\\Games\\x.exe\n"]
+    {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+    assert!(text.contains("Microphone: ") && text.contains(", 48000 Hz, 2 ch, 32 bit\n"), "{text}");
+    assert!(!text.contains("Azer") && !text.contains("DESKTOP-1") && !text.contains("{"), "{text}");
+}

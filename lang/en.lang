@@ -101,6 +101,10 @@ settings.import.done = Imported
 settings.file.failed = Failed: the file is not a Goby export, or cannot be read or written
 settings.export.dialog = Save Goby settings
 settings.import.dialog = Open Goby settings
+settings.report.title = Save a report for support
+settings.report.desc = Version, Windows, audio devices and voice, with no names or paths
+settings.report.done = Saved. Attach the file to your bug report
+settings.report.dialog = Save the report for support
 settings.file.filter = Text files (*.txt)
 
 # Updates

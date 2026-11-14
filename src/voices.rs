@@ -159,6 +159,9 @@ macro_rules! voice {
     }};
 }
 
+// Each voice looks its name up in en.lang while compiling, and with this many lines the
+// compiler warns that it takes long; it does, a few seconds.
+#[allow(long_running_const_eval)]
 pub static ALL: &[VoiceDef] = &[
     // Basics: the first six keep the ids the app started with.
     voice!("off", Basics, {}),

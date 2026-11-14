@@ -110,9 +110,43 @@ impl<H: Host> App<H> {
         let ok = match ask {
             Ask::SaveSettings => self.host.write_file(&path, self.settings.export().as_bytes()),
             Ask::OpenSettings => self.import(&path),
+            Ask::SaveReport => {
+                let text = self.report();
+                self.host.write_file(&path, text.as_bytes())
+            }
         };
         self.filed = Some((ask, ok));
         self.dirty = true;
+    }
+
+    /// The devices in use as a line each: their name and what they run at.
+    fn device_line(&mut self, device: Option<Endpoint>) -> String {
+        let Some(e) = device else { return "none".into() };
+        match self.host.mix_format(&e.id) {
+            Some(format) => format!("{}, {format}", e.name),
+            None => e.name,
+        }
+    }
+
+    /// What the report for support says, from the state of the window and the system.
+    fn report(&mut self) -> String {
+        let (mic, out) = (self.inputs.get(self.input).cloned(), self.outputs.get(self.output).cloned());
+        let (mic, output) = (self.device_line(mic), self.device_line(out));
+        let system = self.host.system();
+        let facts = report::Facts {
+            version: VERSION,
+            commit: option_env!("GOBY_COMMIT").unwrap_or(""),
+            windows: &system.windows,
+            mic: &mic,
+            output: &output,
+            cable: self.cable.is_some(),
+            exclusive: (self.settings.exclusive, self.host.exclusive()),
+            latency_ms: self.latency,
+            voice: voices::ALL[self.voice].id,
+            effect: self.settings.enabled,
+            programs: &self.settings.routed,
+        };
+        report::build(&facts, &report::Who { user: &system.user, machine: &system.machine })
     }
 
     fn import(&mut self, path: &str) -> bool {

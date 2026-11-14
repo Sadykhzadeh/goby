@@ -67,6 +67,18 @@ pub enum Ask {
     SaveSettings,
     /// Which exported settings to read.
     OpenSettings,
+    /// Where to write the report for support.
+    SaveReport,
+}
+
+/// What a support report says about the system itself.
+#[derive(Clone, Debug, PartialEq)]
+pub struct System {
+    /// The version and build, such as "10.0.26200.1234".
+    pub windows: String,
+    /// The user's and the PC's names, which the report takes out wherever they turn up.
+    pub user: String,
+    pub machine: String,
 }
 
 /// What the global hotkeys ask for.
@@ -150,6 +162,9 @@ pub trait Host {
     fn read_file(&self, path: &str, max: usize) -> Option<Vec<u8>>;
     /// Creates or replaces the file; false when that did not work.
     fn write_file(&self, path: &str, data: &[u8]) -> bool;
+    fn system(&self) -> System;
+    /// What the device `id` runs at, such as "48000 Hz, 2 ch, 16 bit", if it says.
+    fn mix_format(&mut self, id: &str) -> Option<String>;
     /// Keeps the pointer while a slider or scrollbar is dragged.
     fn capture(&mut self, on: bool);
     fn autostart(&self) -> bool;

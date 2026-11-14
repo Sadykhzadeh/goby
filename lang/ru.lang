@@ -100,6 +100,10 @@ settings.import.done = Импортировано
 settings.file.failed = Не вышло: файл не от экспорта Goby или его нельзя прочитать или записать
 settings.export.dialog = Сохранить настройки Goby
 settings.import.dialog = Открыть настройки Goby
+settings.report.title = Сохранить отчёт для поддержки
+settings.report.desc = Версия, Windows, аудиоустройства и голос, без имён и путей
+settings.report.done = Сохранено. Приложите файл к сообщению об ошибке
+settings.report.dialog = Сохранить отчёт для поддержки
 settings.file.filter = Текстовые файлы (*.txt)
 
 # Updates
