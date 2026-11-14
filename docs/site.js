@@ -70,6 +70,6 @@ const load = () => loading ??= fetch(new URL("goby.wasm", HERE))
 new IntersectionObserver((seen, io) => {
   if (seen.some(e => e.isIntersecting)) { io.disconnect(); load().catch(() => {}); }
 }, { rootMargin: "600px" }).observe($("win"));
-$("try").addEventListener("click", () => load().then(w => w.toggle(), err => {
-  $("try-note").textContent = TEXT.loadfail + err.message;
-}));
+const loadFailed = err => { $("try-note").textContent = TEXT.loadfail + err.message; };
+$("try").addEventListener("click", () => load().then(w => w.toggle(), loadFailed));
+$("sample").addEventListener("click", () => load().then(w => w.sample(), loadFailed));

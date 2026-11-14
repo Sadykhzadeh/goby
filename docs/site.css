@@ -144,7 +144,21 @@ footer .credit:hover { color: var(--ink); text-decoration: underline; text-under
 .live { padding: 40px 0 70px; }
 .live-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 18px 40px; margin-bottom: 30px; }
 .live-head h2 { margin: 0; }
-.try { display: grid; gap: 10px; justify-items: start; max-width: 380px; }
+.try { display: grid; gap: 10px; justify-items: start; max-width: 500px; }
+.try-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 22px; }
+/* The sample is a text control, like the hero's "next": muted until it is hovered, amber
+   while it plays. */
+.sample {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 0;
+  background: none; border: 0; cursor: pointer; color: var(--muted);
+  font: 400 15px var(--body); transition: color .2s;
+}
+.sample:hover { color: var(--ink); }
+.sample .ic { width: 12px; height: 12px; fill: currentColor; }
+.sample .stop, .sample.on .play { display: none; }
+.sample.on { color: var(--amber-ink); }
+.sample.on .stop { display: inline; }
+.sample:disabled { cursor: default; color: var(--muted); opacity: .55; }
 .try-btn {
   display: inline-flex; align-items: center; gap: 12px; cursor: pointer;
   padding: 13px 20px 13px 17px; border: 0; border-radius: 12px;

@@ -125,7 +125,15 @@ const TEXTS: &[(&str, &str, &str)] = &[
         "Настоящее приложение, прямо здесь. Скачивать не нужно.",
     ),
     ("js.try.off", "Try it with your microphone", "Попробовать с микрофоном"),
-    ("js.try.on", "Stop listening", "Остановить"),
+    ("js.try.on", "Stop listening", "Выключить микрофон"),
+    ("js.sample.play", "Play a sample", "Послушать пример"),
+    ("js.sample.stop", "Stop the sample", "Остановить пример"),
+    ("js.sample.none", "Sample unavailable", "Пример недоступен"),
+    (
+        "js.sample.note",
+        "Playing a sample. Pick voices and drag Pitch while it plays.",
+        "Играет пример. Выбирайте голоса и двигайте «Тон», пока он звучит.",
+    ),
     (
         "live.note",
         "Put headphones on first: through speakers your voice comes back into the mic. Nothing leaves your browser.",
@@ -218,7 +226,11 @@ const TEXTS: &[(&str, &str, &str)] = &[
         "Goby never touches the game: it does not inject anything or read its memory. The game only sees one more microphone, made by VB-Audio's ordinary signed driver.",
         "Goby не трогает игру: ничего в неё не внедряет и не читает её память. Игра видит лишь ещё один микрофон, созданный обычным подписанным драйвером VB-Audio.",
     ),
-    ("faq.2.q", "Can other programs still use my microphone?", "Смогут ли другие программы пользоваться моим микрофоном?"),
+    (
+        "faq.2.q",
+        "Can other programs still use my microphone?",
+        "Смогут ли другие программы пользоваться моим микрофоном?",
+    ),
     (
         "faq.2.a",
         "Yes, Goby shares it. <i>Low latency</i> under Settings &gt; Advanced takes it exclusively for about 11 ms less delay, and then nothing else can record from it while Goby runs.",
@@ -311,7 +323,10 @@ const PAGE: &str = r##"<!doctype html>
     <div class="live-head">
       <h2>{{live.title}}</h2>
       <div class="try">
-        <button class="try-btn" id="try" type="button" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.8" y="1.5" width="4.4" height="8" rx="2.2"/><path d="M3.3 7.6a4.7 4.7 0 0 0 9.4 0M8 12.3v2.2"/></svg><span id="try-label">{{js.try.off}}</span></button>
+        <div class="try-row">
+          <button class="try-btn" id="try" type="button" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.8" y="1.5" width="4.4" height="8" rx="2.2"/><path d="M3.3 7.6a4.7 4.7 0 0 0 9.4 0M8 12.3v2.2"/></svg><span id="try-label">{{js.try.off}}</span></button>
+          <button class="sample" id="sample" type="button"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path class="play" d="M4.5 2.8v10.4L13 8z"/><rect class="stop" x="3.5" y="3.5" width="9" height="9" rx="1.6"/></svg><span id="sample-label">{{js.sample.play}}</span></button>
+        </div>
         <p id="try-note">{{live.note}}</p>
       </div>
     </div>

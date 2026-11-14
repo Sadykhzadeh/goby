@@ -10,7 +10,7 @@ const BG = "#201e1b"; // Mica over a warm wallpaper, as near as a flat colour ge
 const $ = id => document.getElementById(id);
 const T = JSON.parse($("texts").textContent); // the page's texts, in its language
 
-let x, bytes, frameEl, canvas, ctx, menuEl, audio = null, starting = false;
+let x, bytes, frameEl, canvas, ctx, menuEl, audio = null;
 let W = 1000, H = 680, k = 1, running = false, wantsLive = false, sent = "", lastLatency = 0;
 const dec = new TextDecoder(), colors = new Map(), paths = new Map(), fits = new Map();
 const str = (p, n) => dec.decode(new Uint8Array(x.memory.buffer, p, n));
@@ -193,36 +193,59 @@ function after() {
   }
 }
 
-// The voices on the visitor's microphone, through the same wasm in an AudioWorklet.
+// The voices on the visitor's microphone, or on a recording of speech, through the same
+// wasm in an AudioWorklet. One source plays at a time: `source` says which, and `run`
+// numbers the starts, so one that is stopped or replaced while it is still starting
+// shuts itself down instead of playing.
 const tryBtn = $("try"), tryLabel = $("try-label"), note = $("try-note"), note0 = note.innerHTML;
+const sampleBtn = $("sample"), sampleLabel = $("sample-label");
+let source = "mic", pending = null, run = 0;
+
+function ui() {
+  const mic = wantsLive && source === "mic", playing = wantsLive && source === "sample";
+  tryBtn.setAttribute("aria-pressed", mic);
+  tryLabel.textContent = mic ? T["try.on"] : T["try.off"];
+  sampleBtn.classList.toggle("on", playing);
+  if (!sampleBtn.disabled) sampleLabel.textContent = playing ? T["sample.stop"] : T["sample.play"];
+}
+
 async function live(on) {
-  tryBtn.setAttribute("aria-pressed", on);
-  tryLabel.textContent = on ? T["try.on"] : T["try.off"];
-  if (!on) {
+  if (on) {
+    source = pending ?? "mic";
+    pending = null;
+  } else {
+    run++;
     audio?.stop();
     audio = null;
+    source = "mic";
     note.innerHTML = note0;
-    return;
   }
-  if (starting) return;
-  if (!window.AudioWorkletNode || !navigator.mediaDevices?.getUserMedia) return failed(T.unsupported);
-  const ctx = new AudioContext({ latencyHint: "interactive" }); // made inside the click, so it may play
-  starting = true;
-  note.textContent = T.asking;
+  ui();
+  if (on) await begin();
+}
+
+// Starts the source, and stops the one playing. Called inside a click, so the audio
+// context made here is allowed to play.
+async function begin() {
+  const mine = ++run;
+  audio?.stop();
+  audio = null;
+  if (!window.AudioWorkletNode || (source === "mic" && !navigator.mediaDevices?.getUserMedia)) return failed(T.unsupported);
+  const ac = new AudioContext({ latencyHint: "interactive" });
+  note.textContent = source === "mic" ? T.asking : T["sample.note"];
   try {
-    const started = await (await import("./live.js")).start(ctx, bytes);
-    if (!wantsLive) return started.stop();
+    const started = await (await import("./live.js")).start(ac, bytes, source === "sample" ? sampleBuf : null);
+    if (mine !== run) return started.stop();
     audio = started;
     sent = "";
     after();
-    note.textContent = T.listening;
+    note.textContent = source === "mic" ? T.listening : T["sample.note"];
   } catch (err) {
-    ctx.close();
+    ac.close();
+    if (mine !== run) return;
     failed(err?.name === "NotAllowedError" ? T.denied
       : err?.name === "NotFoundError" ? T.nomic
       : T.failed + (err?.message || err));
-  } finally {
-    starting = false;
   }
 }
 function failed(text) {
@@ -231,9 +254,62 @@ function failed(text) {
   note.textContent = text;
 }
 
-export function toggle() {
-  x.ui_monitor(!wantsLive);
+function monitor(on) {
+  x.ui_monitor(on);
   after();
+}
+
+// The microphone button: it starts the microphone, or takes it over from the sample.
+export function toggle() {
+  if (wantsLive && source === "sample") {
+    source = "mic";
+    ui();
+    return begin();
+  }
+  monitor(!wantsLive);
+}
+
+// The recording: a few seconds of speech, decoded once. Its ends fade in and out and a
+// short silence follows, so it loops without a click and the voices' tails die away
+// before it comes round again. Without it, or if it cannot be decoded, the button says so.
+let sampleBuf = null, sampleReady;
+function loadSample() {
+  return sampleReady ??= fetch(new URL("sample.mp3", import.meta.url))
+    .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error("sample.mp3: " + r.status)))
+    .then(bytes => new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes))
+    .then(speech => {
+      const rate = speech.sampleRate, fade = Math.round(rate * 0.015);
+      const buf = new AudioBuffer({ length: speech.length + Math.round(rate * 0.4), sampleRate: rate });
+      const d = buf.getChannelData(0);
+      d.set(speech.getChannelData(0));
+      for (let i = 0; i < fade; i++) {
+        d[i] *= i / fade;
+        d[speech.length - 1 - i] *= i / fade;
+      }
+      return sampleBuf = buf;
+    });
+}
+function checkSample() {
+  loadSample().catch(() => {
+    sampleBtn.disabled = true;
+    sampleLabel.textContent = T["sample.none"];
+  });
+}
+
+export async function sample() {
+  if (!sampleBuf) {
+    try { await loadSample(); } catch { return; }
+  }
+  if (!wantsLive) {
+    pending = "sample";
+    monitor(true);
+  } else if (source === "sample") {
+    monitor(false);
+  } else {
+    source = "sample";
+    ui();
+    begin();
+  }
 }
 
 export async function open(wasm) {
@@ -255,6 +331,9 @@ export async function open(wasm) {
   size();
   new ResizeObserver(size).observe(frameEl);
   visualViewport?.addEventListener("resize", size);
+  checkSample();
+  // A context a browser left suspended starts with the next touch.
+  document.addEventListener("pointerdown", () => audio?.resume(), true);
 
   const at = e => {
     const r = canvas.getBoundingClientRect(), s = r.width / W;
