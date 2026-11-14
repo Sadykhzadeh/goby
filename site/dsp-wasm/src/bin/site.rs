@@ -92,11 +92,11 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("switch.label", "RU", "EN"),
     ("switch.title", "Русский", "English"),
     // The head.
-    ("title", "Goby: a tiny voice changer for Windows", "Goby: крошечный изменитель голоса для Windows"),
+    ("title", "Goby: a tiny voice changer for Windows", "Goby: маленькая программа для смены голоса в Windows"),
     (
         "description",
         "Real-time voice changer for Windows: 74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 374 KB app, free and open source, no account.",
-        "Изменитель голоса для Windows в реальном времени: 74 голоса для выбранных вами программ, от Discord и OBS до звонков и записи. Одно приложение на 374 КБ, бесплатное, с открытым кодом, без аккаунта.",
+        "Меняет голос в Windows в реальном времени: 74 голоса для программ, которые вы выберете, от Discord и OBS до звонков и записи. Одно приложение на 374 КБ, бесплатное, с открытым кодом, без аккаунта.",
     ),
     (
         "og.description",
@@ -121,8 +121,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     // The live window.
     (
         "live.title",
-        "The real app, right here. Nothing to install.",
-        "Настоящее приложение, прямо здесь. Скачивать не нужно.",
+        "Try the real app right here. Nothing to install.",
+        "Попробуйте приложение вживую. Скачивать не нужно.",
     ),
     ("js.try.off", "Try it with your microphone", "Попробовать с микрофоном"),
     ("js.try.on", "Stop listening", "Выключить микрофон"),
