@@ -136,7 +136,7 @@ impl PitchShifter {
         best
     }
 
-    #[inline]
+    #[inline(always)]
     fn tap(&self, delay: f32) -> f32 {
         // Cubic Hermite read `delay` samples behind the write head.
         let pos = self.write as f32 - delay;
