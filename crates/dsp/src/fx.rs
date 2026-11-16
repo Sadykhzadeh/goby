@@ -991,4 +991,54 @@ mod tests {
         let hz = crossings as f32 / 2.0 / 0.06;
         assert!((hz - 1250.0).abs() <= 60.0, "beep at {hz} Hz");
     }
+
+    #[test]
+    fn biquads_stay_finite_and_bounded_at_extreme_settings() {
+        for rate in [44_100.0f32, 48_000.0, 96_000.0, 192_000.0] {
+            for freq in [60.0, 180.0, 1_000.0, 6_000.0, 0.45 * rate] {
+                for q in [0.707, 1.0] {
+                    for gain in [-12.0f32, 0.0, 12.0] {
+                        let mut filters = [
+                            Biquad::new(Shape::Low, rate, freq, q),
+                            Biquad::new(Shape::High, rate, freq, q),
+                            Biquad::new(Shape::Band, rate, freq, q),
+                            Biquad::peak(rate, freq, q, gain),
+                            Biquad::low_shelf(rate, freq, gain),
+                            Biquad::high_shelf(rate, freq, gain),
+                        ];
+                        let mut noise = Noise::default();
+                        for f in filters.iter_mut() {
+                            let mut worst = 0.0f32;
+                            // Loud noise, then silence long enough for the state to decay into denormals.
+                            for i in 0..(rate as usize / 2 + 200_000) {
+                                let x = if i < rate as usize / 2 { noise.next() } else { 0.0 };
+                                let y = f.process(x);
+                                assert!(y.is_finite(), "rate {rate} freq {freq} q {q} gain {gain}: {y} at {i}");
+                                worst = worst.max(y.abs());
+                            }
+                            assert!(worst < 1e4, "rate {rate} freq {freq} q {q} gain {gain}: peak {worst}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compressor_never_amplifies_at_any_ratio_or_threshold() {
+        for rate in [8_000.0f32, 96_000.0] {
+            for ratio in [1.0f32, 2.0, 20.0, 1_000.0] {
+                for threshold in [1e-6f32, 0.05, 1.0] {
+                    let mut c = Compressor::new(rate);
+                    let mut noise = Noise::default();
+                    for i in 0..rate as usize {
+                        let x = noise.next() * if i % 4000 < 2000 { 1.0 } else { 0.001 };
+                        let y = c.process(x, threshold, ratio);
+                        assert!(y.is_finite(), "ratio {ratio} threshold {threshold}: {y}");
+                        assert!(y.abs() <= x.abs() * (1.0 + 1e-5), "ratio {ratio}: {x} came out as {y}");
+                    }
+                }
+            }
+        }
+    }
 }
