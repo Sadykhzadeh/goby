@@ -786,6 +786,42 @@ mod tests {
         assert_eq!(x, input);
     }
 
+    /// The audio driver hands over packets of whatever size it likes, so the same voice must
+    /// come out the same however the stream is cut up.
+    #[test]
+    fn block_size_does_not_change_the_output() {
+        let input = speech(1.0);
+        let recipes = [
+            Recipe::DRY,
+            Recipe { pitch: 7.0, ..Recipe::DRY },
+            Recipe { pitch: -5.0, formant: 1.2, echo_ms: 180.0, echo_feedback: 0.3, echo_mix: 0.3, ..Recipe::DRY },
+            Recipe {
+                pitch: 3.0,
+                harmony: [-4.0, 7.0],
+                harmony_mix: 0.5,
+                reverb_size: 0.4,
+                reverb_damp: 0.5,
+                reverb_mix: 0.2,
+                ..Recipe::DRY
+            },
+        ];
+        let render = |recipe: &Recipe, block: usize| {
+            let mut v = Voice::new(SR);
+            v.set(recipe, 0.0, 1.0);
+            let mut out = input.clone();
+            for part in out.chunks_mut(block) {
+                v.process(part);
+            }
+            out
+        };
+        for recipe in &recipes {
+            let whole = render(recipe, input.len());
+            for block in [1, 7, 64, 480, 1000] {
+                assert!(render(recipe, block) == whole, "pitch {} with blocks of {block}", recipe.pitch);
+            }
+        }
+    }
+
     const SR: u32 = 48_000;
 
     fn sine(freq: f32, secs: f32) -> Vec<f32> {
