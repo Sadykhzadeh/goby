@@ -36,8 +36,8 @@ cargo test --release engine_periods -- --ignored --nocapture    # what each devi
 
 ### Size, and why LTO is off
 
-The voices live in their own crate, `crates/dsp`, with every per-sample loop in
-`stream.rs`. The release profile builds that crate at `opt-level = 3` and everything else
+The voices live in their own crate, `crates/dsp`, whose per-sample loops are in `dsp.rs`,
+`fx.rs`, `formant.rs` and `stream.rs`. The release profile builds that crate at `opt-level = 3` and everything else
 (the window, setup, updates) at `"z"`. LTO is off on purpose: with fat or thin LTO, LLVM
 optimises the whole program again at the app's level, which does not vectorise, and the
 pitched-up voices ran about 1.8 times slower even with goby-dsp asking for 3. Without it,
