@@ -196,8 +196,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     // The numbers.
     (
         "facts",
-        "About <b>28 ms</b> from your mouth to the other program. Under <b>0.4 %</b> of one core for the heaviest voice.",
-        "Около <b>28 мс</b> от вашего рта до другой программы. Меньше <b>0,4 %</b> одного ядра на самый тяжёлый голос.",
+        "About <b>28 ms</b> from your mouth to the other program. Under <b>1 %</b> of one core, even for the heaviest voice.",
+        "Около <b>28 мс</b> от вашего рта до другой программы. Меньше <b>1 %</b> одного ядра, даже на самый тяжёлый голос.",
     ),
     // Day to day.
     ("playing.title", "Stays out of the way.", "Не мешает."),
