@@ -140,7 +140,10 @@ impl PitchShifter {
     fn tap(&self, delay: f32) -> f32 {
         // Cubic Hermite read `delay` samples behind the write head.
         let pos = self.write as f32 - delay;
-        let i = pos.floor();
+        // floor(pos) without the libm call (floorf is a function call on the baseline x86-64
+        // target): truncate, then step down once for a negative fraction.
+        let whole = pos as isize;
+        let i = whole as f32 - if whole as f32 > pos { 1.0 } else { 0.0 };
         let t = pos - i;
         let i = i as isize;
         let (y0, y1, y2, y3) = (self.at(i - 1), self.at(i), self.at(i + 1), self.at(i + 2));
