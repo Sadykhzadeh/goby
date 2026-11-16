@@ -71,6 +71,12 @@ impl Wander {
     }
 }
 
+/// Nonzero but below the normal range: the values a float spends its time on when it decays.
+#[inline]
+fn subnormal(x: f32) -> bool {
+    x != 0.0 && x.abs() < f32::MIN_POSITIVE
+}
+
 /// RBJ biquad, transposed direct form II.
 #[derive(Clone, Copy, Default)]
 pub struct Biquad {
@@ -166,6 +172,15 @@ impl Biquad {
         let y = self.b0 * x + self.z1;
         self.z1 = self.b1 * x - self.a1 * y + self.z2;
         self.z2 = self.b2 * x - self.a2 * y;
+        // A state that rang down into the denormal range can settle on a tiny nonzero value
+        // and stay there for minutes, at denormal speed. Only subnormal states are dropped, so
+        // signals that never get that small come out bit for bit as before.
+        if subnormal(self.z1) {
+            self.z1 = 0.0;
+        }
+        if subnormal(self.z2) {
+            self.z2 = 0.0;
+        }
         y
     }
 
@@ -1022,6 +1037,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_filter_that_rang_down_into_denormals_falls_silent() {
+        let mut hp = Biquad::new(Shape::High, SR, 450.0, 0.707);
+        let mut lp = Biquad::new(Shape::Low, SR, 2800.0, 0.707);
+        let mut noise = Noise::default();
+        for _ in 0..SR as usize {
+            lp.process(hp.process(0.9 * noise.next()));
+        }
+        for _ in 0..SR as usize {
+            lp.process(hp.process(0.0));
+        }
+        let tail: Vec<f32> = (0..1000).map(|_| lp.process(hp.process(0.0))).collect();
+        assert!(tail.iter().all(|&y| y == 0.0), "still ringing at {:e}", tail[0]);
     }
 
     #[test]
