@@ -6,14 +6,17 @@ Goby installs per user into `%LOCALAPPDATA%\Programs\Goby`, with a Start menu sh
 and an entry under **Settings > Apps**. Running a newer download updates it in place.
 Uninstall it from Settings > Apps: it closes Goby, hands the programs you chose back to
 the default microphone, gives the cable its VB-Audio names back, and removes its
-shortcuts, settings and folder.
+shortcuts, settings and folder. A chosen program that is not running then keeps hearing
+the cable until you pick its microphone in the Volume mixer; the uninstall dialog lists
+those programs.
 
 For scripts and package managers:
 
 ```
-goby-0.5.0-windows-x64.exe --install [--desktop]   # silent install, optional desktop shortcut
-goby.exe --uninstall --quiet                        # silent uninstall
-goby-0.5.0-windows-x64.exe --portable               # run without installing or asking
+goby-0.5.0-windows-x64.exe --install [--desktop] [--run]  # silent install, optional desktop shortcut and start
+goby.exe --uninstall --quiet                              # silent uninstall
+goby-0.5.0-windows-x64.exe --portable                     # run without installing or asking
+goby.exe --tray                                           # start into the tray, no window (installed or --portable)
 ```
 
 ## Updates
