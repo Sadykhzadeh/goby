@@ -21,7 +21,7 @@ goby.exe --tray                                           # start into the tray,
 
 ## Updates
 
-Once a day, a little after it starts, Goby asks GitHub and a mirror on the author's own server for the manifest of
+At most once a day, a little after it starts, Goby asks GitHub and a mirror on the author's own server for the manifest of
 their latest release: a few lines naming the version, the size and SHA-256 of the
 executable, and where to download it. Every release is published to both, and the
 newest version either one offers wins, so Goby keeps updating while one of them is down.
@@ -35,8 +35,11 @@ signed manifest names, it is checked again after it is written, and it stays loc
 against writes until it starts. A manifest for an older version than the running one is
 ignored, so an old release cannot be replayed. Signatures and hashes go through Windows'
 own CNG and the downloads through WinHTTP over HTTPS: no extra code to trust and almost
-nothing added to the executable. Nothing else is sent, and **Check for updates** under
-Settings turns it off.
+nothing added to the executable. The check is a plain HTTPS GET of the manifest and its
+signature from each host, with Goby's version in the User-Agent header. It sends no
+account, no identifier and nothing from the audio, though each host sees the IP address
+like any download. Installing an update fetches the executable the same way. Nothing else
+is sent, and **Check for updates** under Settings turns the check off.
 
 ## Building
 

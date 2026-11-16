@@ -24,7 +24,7 @@
 - **Small and quick.** One 374 KB executable, about 28 ms from your mouth to the other program, under 1 % of one CPU core.
 - **Only where you want it.** Pick Discord, OBS or a call app on the *Programs* page and only they hear the voice. Everything else keeps your real microphone.
 - **Stays out of the way.** Hotkeys that work even in fullscreen apps, favorites, your own tuned voices, and it keeps running in the tray.
-- **Nothing to sign up for.** No account, no ads, nothing sent anywhere. Updates come only from releases signed by the author.
+- **Nothing to sign up for.** No account, no ads, no telemetry. Goby's only request on its own is the update check: when it starts, at most once a day, it fetches the signed release manifest from GitHub and got.az. The request carries only Goby's version in its User-Agent, nothing about you or your audio, though the servers see your IP address as with any download. **Check for updates** in Settings turns it off. Updates come only from releases signed by the author.
 
 ## Get started
 
