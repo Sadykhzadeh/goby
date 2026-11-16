@@ -28,6 +28,8 @@ pub struct PitchShifter {
     min_lag: usize,
     max_lag: usize,
     fade_len: usize,
+    /// Length of the fades at the current ratio: `fade_len`, or shorter when shifting down.
+    fade_span: usize,
     corr_len: usize,
     /// Lag of the previous jump: a good guess at the current pitch period.
     last_lag: usize,
@@ -61,6 +63,7 @@ impl PitchShifter {
             min_lag,
             max_lag,
             fade_len,
+            fade_span: fade_len,
             corr_len,
             last_lag: max_lag,
             wait: 0,
@@ -72,6 +75,12 @@ impl PitchShifter {
 
     pub fn set_ratio(&mut self, ratio: f32) {
         self.ratio = ratio.clamp(0.25, 4.0);
+        let drift = 1.0 - self.ratio;
+        self.fade_span = if drift < 0.0 {
+            self.fade_len.min((0.8 * self.min_lag as f32 / -drift) as usize).max(32)
+        } else {
+            self.fade_len
+        };
     }
 
     /// Records without playing, for a shifter the current voice does not use. Otherwise it
@@ -175,11 +184,7 @@ impl PitchShifter {
             // covered more than a whole period, the next jump was due before this one
             // ended, and the tap ran off into stale audio (Minion at +12 st, about +20
             // in all). A shorter fade keeps each one inside part of a period.
-            let len = if drift < 0.0 {
-                self.fade_len.min((0.8 * self.min_lag as f32 / -drift) as usize).max(32)
-            } else {
-                self.fade_len
-            };
+            let len = self.fade_span;
             let room = len as f32 * drift.abs() + 1.0;
             if drift > 0.0 {
                 // Shifting down the tap falls behind. Jump forward as soon as one period
