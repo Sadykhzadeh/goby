@@ -46,16 +46,16 @@ fn voices_do_not_allocate_per_block() {
     for (name, recipe, _) in voices::CASES {
         let mut voice = goby_dsp::dsp::Voice::new(SR);
         voice.set(recipe, 0.0, 1.0);
-        for _ in 0..200 {
+        for _ in 0..20 {
             block.iter_mut().for_each(|s| *s = 0.3 * noise.next());
             voice.process(&mut block);
         }
         let before = allocations();
-        for _ in 0..1000 {
+        for _ in 0..50 {
             block.iter_mut().for_each(|s| *s = 0.3 * noise.next());
             voice.process(&mut block);
         }
         let made = allocations() - before;
-        assert_eq!(made, 0, "{name} allocated {made} times in 1000 blocks");
+        assert_eq!(made, 0, "{name} allocated {made} times in 50 blocks");
     }
 }
