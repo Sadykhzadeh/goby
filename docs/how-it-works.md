@@ -42,7 +42,7 @@ The voices live in their own crate, `crates/dsp`, whose per-sample loops are in 
 optimises the whole program again at the app's level, which does not vectorise, and the
 pitched-up voices ran about 1.8 times slower even with goby-dsp asking for 3. Without it,
 each crate keeps the code its own level made. The DSP cost above is the same as with
-fat LTO at `opt-level = 3` throughout (the sum over all 61 voices came out 1.5 % lower).
+fat LTO at `opt-level = 3` throughout (on the 0.4.0 build, when the app had 61 voices, the sum over all of them came out 1.5 % lower).
 
 The rest of the size comes from leaving out what std would bring along unasked: no
 float printing or parsing (settings.rs has a small reader and writer that round-trip
