@@ -74,7 +74,8 @@ impl Wander {
 /// Nonzero but below the normal range: the values a float spends its time on when it decays.
 #[inline]
 fn subnormal(x: f32) -> bool {
-    x != 0.0 && x.abs() < f32::MIN_POSITIVE
+    // Magnitude bits in 1..=0x7fffff: zero wraps around to the top of the range and fails.
+    (x.to_bits() & 0x7fff_ffff).wrapping_sub(1) < 0x007f_ffff
 }
 
 /// RBJ biquad, transposed direct form II.
@@ -175,12 +176,8 @@ impl Biquad {
         // A state that rang down into the denormal range can settle on a tiny nonzero value
         // and stay there for minutes, at denormal speed. Only subnormal states are dropped, so
         // signals that never get that small come out bit for bit as before.
-        if subnormal(self.z1) {
-            self.z1 = 0.0;
-        }
-        if subnormal(self.z2) {
-            self.z2 = 0.0;
-        }
+        self.z1 = if subnormal(self.z1) { 0.0 } else { self.z1 };
+        self.z2 = if subnormal(self.z2) { 0.0 } else { self.z2 };
         y
     }
 
