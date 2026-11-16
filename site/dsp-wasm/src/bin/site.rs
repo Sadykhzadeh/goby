@@ -124,6 +124,11 @@ const TEXTS: &[(&str, &str, &str)] = &[
         "Try the real app right here. Nothing to install.",
         "Попробуйте приложение вживую. Скачивать не нужно.",
     ),
+    (
+        "live.nojs",
+        "The live part needs JavaScript. The download above works without it.",
+        "Живая часть работает только с JavaScript. Загрузка выше работает и без него.",
+    ),
     ("js.try.off", "Try it with your microphone", "Попробовать с микрофоном"),
     ("js.try.on", "Stop listening", "Выключить микрофон"),
     ("js.sample.play", "Play a sample", "Послушать пример"),
@@ -282,6 +287,7 @@ const PAGE: &str = r##"<!doctype html>
 <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=pally@500,700&display=swap">
 <link rel="stylesheet" href="{{root}}site.css">
 <script src="{{root}}site.js" defer></script>
+<noscript><style>#voices .try, #win { display: none; }</style></noscript>
 </head>
 <body>
 <script type="application/json" id="hero-voices">{hero}</script>
@@ -322,6 +328,7 @@ const PAGE: &str = r##"<!doctype html>
   <section id="voices" class="live">
     <div class="live-head">
       <h2>{{live.title}}</h2>
+      <noscript><p>{{live.nojs}}</p></noscript>
       <div class="try">
         <div class="try-row">
           <button class="try-btn" id="try" type="button" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.8" y="1.5" width="4.4" height="8" rx="2.2"/><path d="M3.3 7.6a4.7 4.7 0 0 0 9.4 0M8 12.3v2.2"/></svg><span id="try-label">{{js.try.off}}</span></button>
