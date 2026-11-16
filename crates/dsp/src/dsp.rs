@@ -857,6 +857,34 @@ mod tests {
         dominant_freq(&out[SR as usize / 4..])
     }
 
+    /// The same octave at the device rates WASAPI hands out, not only the 48 kHz above.
+    #[test]
+    fn shifts_up_an_octave_at_every_device_rate() {
+        for rate in [44_100u32, 96_000, 192_000] {
+            let mut p = PitchShifter::new(rate);
+            p.set_ratio(2.0);
+            let input: Vec<f32> =
+                (0..rate as usize).map(|i| (2.0 * PI * 220.0 * i as f32 / rate as f32).sin() * 0.5).collect();
+            let out: Vec<f32> = input.iter().map(|&s| p.process(s)).collect();
+            let tail = &out[rate as usize / 4..];
+            let (mut best, mut best_f) = (0.0f32, 0.0f32);
+            for f in (400..=480).step_by(2) {
+                let w = 2.0 * PI * f as f32 / rate as f32;
+                let (mut re, mut im) = (0.0f32, 0.0f32);
+                for (i, s) in tail.iter().enumerate() {
+                    let (sn, cs) = (w * i as f32).sin_cos();
+                    re += s * cs;
+                    im += s * sn;
+                }
+                if re * re + im * im > best {
+                    best = re * re + im * im;
+                    best_f = f as f32;
+                }
+            }
+            assert!((best_f - 440.0).abs() <= 4.0, "{rate} Hz: got {best_f}");
+        }
+    }
+
     #[test]
     fn shifts_up_an_octave() {
         let f = shifted(220.0, 12.0);
