@@ -1,11 +1,10 @@
 //! Checks on every voice, rendered from one fixed input.
 //!
 //! The golden table holds the exact bits each voice produced when the table was made. The
-//! voices call libm (`sin`, `tanh`, `powf`), whose last bits differ between platforms, so
-//! the table is compared only on the platform it was generated on: Linux, x86-64, glibc,
-//! which is the container CI runs. Everywhere else, the checks below still run: every
-//! sample is finite and inside full scale, two runs agree bit for bit, and the output does
-//! not depend on the block size.
+//! voices call libm (`sin`, `tanh`, `powf`), whose last bits differ between platforms and
+//! libm versions, so the table is compared only on request (see the ignored test below).
+//! The checks that run by default: every sample is finite and inside full scale, two runs
+//! agree bit for bit, and the output does not depend on the block size.
 
 use goby_dsp::dsp::{Recipe, Voice};
 use goby_dsp::fx::Noise;
@@ -50,10 +49,22 @@ fn render(recipe: &Recipe, input: &[f32], block: usize) -> Vec<f32> {
     x
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+/// Compares every voice with its golden hash. The hashes are tied to the libm they were made
+/// with, so this is ignored by default. To check an optimisation, run it on the same machine
+/// before and after the change:
+/// `cargo test -p goby-dsp --test voices_golden -- --ignored`. To regenerate the table, run
+/// `GOBY_GOLDEN_PRINT=1 cargo test -p goby-dsp --test voices_golden -- --ignored --nocapture`
+/// and paste the printed hashes into `support/voices.rs`.
 #[test]
+#[ignore = "golden hashes depend on the libm they were made with; run with --ignored"]
 fn every_voice_renders_the_golden_bits() {
     let x = input(2);
+    if std::env::var_os("GOBY_GOLDEN_PRINT").is_some() {
+        for (name, recipe, _) in CASES {
+            println!("{name} {:016x}", fnv1a(&render(recipe, &x, BLOCK)));
+        }
+        return;
+    }
     let mut changed = Vec::new();
     for (name, recipe, want) in CASES {
         let got = fnv1a(&render(recipe, &x, BLOCK));
