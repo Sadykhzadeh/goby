@@ -41,6 +41,14 @@ jobs:
       - name: Test the voices
         run: cargo test -p goby-dsp
 
+      # The pages are written by the generator; the committed copies must be what it writes now.
+      # The sitemap is left out: its lastmod comes from git history, so it changes with the day.
+      - name: Site pages match their generator
+        working-directory: site/dsp-wasm
+        run: |
+          cargo run --release --locked --bin site
+          git diff --exit-code -- ../../docs/index.html ../../docs/ru/index.html ../../docs/robots.txt
+
       # Plain Node, the one the checkout action already runs on; no packages to install.
       - name: Website checks
         run: |
