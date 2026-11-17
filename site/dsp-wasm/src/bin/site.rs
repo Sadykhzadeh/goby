@@ -57,11 +57,17 @@ fn render(at: usize, version: &str) -> String {
         assert!(key.starts_with("js.") || page.contains(&token), "{key} is in the table but not on the page");
         page = page.replace(&token, [en, ru][at]);
     }
+    let total = voices::ALL.len();
+    let noun = match at {
+        0 => "voices",
+        _ => russian_voices(total),
+    };
     let page = page
         .replace("{{i18n}}", &script_texts(at))
         .replace("{first}", voices::ALL[first].name())
         .replace("{at}", &(first + 1).to_string())
-        .replace("{total}", &voices::ALL.len().to_string())
+        .replace("{voices.noun}", noun)
+        .replace("{total}", &total.to_string())
         .replace("{version}", version)
         .replace("{hero}", &hero());
     assert!(!page.contains("{{"), "a key the table does not have");
@@ -95,13 +101,13 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("title", "Goby: a tiny voice changer for Windows", "Goby: маленькая программа для смены голоса в Windows"),
     (
         "description",
-        "Real-time voice changer for Windows: 74 voices for the programs you pick, from Discord and OBS to calls and recordings. One 374 KB app, free and open source, no account.",
-        "Меняет голос в Windows в реальном времени: 74 голоса для программ, которые вы выберете, от Discord и OBS до звонков и записи. Одно приложение на 374 КБ, бесплатное, с открытым кодом, без аккаунта.",
+        "Real-time voice changer for Windows: {total} voices for the programs you pick, from Discord and OBS to calls and recordings. One 374 KB app, free and open source, no account.",
+        "Меняет голос в Windows в реальном времени: {total} {voices.noun} для программ, которые вы выберете, от Discord и OBS до звонков и записи. Одно приложение на 374 КБ, бесплатное, с открытым кодом, без аккаунта.",
     ),
     (
         "og.description",
-        "74 voices for the programs you pick. One 374 KB Windows app, free and open source.",
-        "74 голоса для программ, которые вы выберете. Одно приложение для Windows на 374 КБ, бесплатное, с открытым кодом.",
+        "{total} voices for the programs you pick. One 374 KB Windows app, free and open source.",
+        "{total} {voices.noun} для программ, которые вы выберете. Одно приложение для Windows на 374 КБ, бесплатное, с открытым кодом.",
     ),
     // The navigation.
     ("nav.voices", "Voices", "Голоса"),
@@ -113,8 +119,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("hero.next", "next", "дальше"),
     (
         "hero.text",
-        "<b>74 voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>374 KB</b> Windows app. Free, open source, no account.",
-        "<b>74 голоса</b> для программ, которые вы выберете: от Discord и OBS до звонков и записи. Всё в одном приложении для Windows на <b>374 КБ</b>. Бесплатно, с открытым кодом, без аккаунта.",
+        "<b>{total} voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>374 KB</b> Windows app. Free, open source, no account.",
+        "<b>{total} {voices.noun}</b> для программ, которые вы выберете: от Discord и OBS до звонков и записи. Всё в одном приложении для Windows на <b>374 КБ</b>. Бесплатно, с открытым кодом, без аккаунта.",
     ),
     ("hero.download", "Download Goby", "Скачать Goby"),
     ("hero.windows", "Windows 10 and 11", "Windows 10 и 11"),
@@ -260,8 +266,22 @@ const TEXTS: &[(&str, &str, &str)] = &[
         "Нет. Goby построен на звуке и интерфейсе Windows, и во многом поэтому он такой маленький и быстрый.",
     ),
     // The footer.
+    (
+        "footer.credit",
+        "done with <span aria-hidden=\"true\" class=\"heart\">♥</span> by azer.one",
+        "done with <span aria-hidden=\"true\" class=\"heart\">♥</span> by azer.one",
+    ),
     ("footer.releases", "All releases", "Все релизы"),
 ];
+
+/// The noun after the voice count, in Russian as the count takes it: 1 голос, 2 голоса, 5 голосов.
+fn russian_voices(n: usize) -> &'static str {
+    match (n % 10, n % 100) {
+        (1, m) if m != 11 => "голос",
+        (2..=4, m) if !(12..=14).contains(&m) => "голоса",
+        _ => "голосов",
+    }
+}
 
 const PAGE: &str = r##"<!doctype html>
 <html lang="{{lang}}">
@@ -415,7 +435,7 @@ const PAGE: &str = r##"<!doctype html>
     <span>Goby {version} · GPL-3.0</span>
     <a href="https://github.com/Sadykhzadeh/goby">GitHub</a>
     <a href="https://github.com/Sadykhzadeh/goby/releases">{{footer.releases}}</a>
-    <a class="credit" href="https://azer.one">done with <span aria-hidden="true" class="heart">♥</span> by azer.one</a>
+    <a class="credit" href="https://azer.one">{{footer.credit}}</a>
   </div>
   <span class="word" aria-hidden="true">goby</span>
 </footer>

@@ -2,7 +2,7 @@
 // expects the check to name it. Run with `node --test site/`.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -108,4 +108,38 @@ for (const [name, edit, expected] of cases) {
 test("the built site in docs/ passes", () => {
   const found = checkSite(fileURLToPath(new URL("../docs", import.meta.url)));
   assert.deepEqual(found, []);
+});
+
+// The two pages are one template in two languages: they must carry the same figures in the same
+// order, and every figure with a unit must also be in the README, which the numbers come from.
+const docs = fileURLToPath(new URL("../docs", import.meta.url));
+const visibleText = html => {
+  const root = parse(html);
+  const out = [];
+  const walk = node => {
+    for (const c of node.children) {
+      if (typeof c === "string") out.push(c);
+      else if (c.tag !== "script" && c.tag !== "style") {
+        if (c.tag === "meta" && c.attrs.name === "description") out.push(c.attrs.content);
+        if (c.tag === "img" && c.attrs.alt) out.push(c.attrs.alt);
+        walk(c);
+      }
+    }
+  };
+  walk(root);
+  return out.join(" ");
+};
+
+test("the English and Russian pages carry the same figures in the same order", () => {
+  const en = visibleText(readFileSync(join(docs, "index.html"), "utf8")).match(/\d+(?:[.,]\d+)?/g);
+  const ru = visibleText(readFileSync(join(docs, "ru", "index.html"), "utf8")).match(/\d+(?:[.,]\d+)?/g);
+  assert.ok(en.length > 0);
+  assert.deepEqual(ru, en);
+});
+
+test("every figure with a unit on the English page is also in the README", () => {
+  const readme = readFileSync(join(docs, "..", "README.md"), "utf8");
+  const figures = visibleText(readFileSync(join(docs, "index.html"), "utf8")).match(/\d[\d.,]*\s?(?:%|ms|KB|voices)/g);
+  assert.ok(figures.length > 0);
+  for (const f of new Set(figures)) assert.ok(readme.includes(f), `${f} is not in the README`);
 });
