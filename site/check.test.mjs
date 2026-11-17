@@ -276,3 +276,21 @@ test("the structured data names the app, its version and licence as the Cargo.to
     assert.equal(ld.inLanguage, lang, file);
   }
 });
+
+test("the social tags agree with the page and describe the image that exists", () => {
+  const png = readFileSync(join(docs, "images", "social.png"));
+  const [width, height] = [png.readUInt32BE(16), png.readUInt32BE(20)];
+  const meta = (html, prop) => html.match(new RegExp(`<meta property="${prop}" content="([^"]*)"`))?.[1];
+  for (const [file, other] of [["index.html", "ru_RU"], ["ru/index.html", "en_US"]]) {
+    const html = readFileSync(join(docs, file), "utf8");
+    const canonical = html.match(/<link rel="canonical" href="([^"]+)"/)[1];
+    assert.equal(meta(html, "og:url"), canonical, file);
+    assert.equal(meta(html, "og:title"), html.match(/<title>(.*?)<\/title>/)[1], file);
+    assert.equal(meta(html, "og:type"), "website", file);
+    assert.equal(meta(html, "og:site_name"), "Goby", file);
+    assert.equal(meta(html, "og:locale:alternate"), other, file);
+    assert.equal(meta(html, "og:image:width"), String(width), file);
+    assert.equal(meta(html, "og:image:height"), String(height), file);
+    assert.equal(meta(html, "og:image"), "https://goby.azer.one/images/social.png", file);
+  }
+});

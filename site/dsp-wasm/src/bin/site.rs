@@ -139,6 +139,7 @@ const TEXTS: &[(&str, &str, &str)] = &[
     // Where this page is, and where its twin is.
     ("lang", "en", "ru"),
     ("locale", "en_US", "ru_RU"),
+    ("locale.other", "ru_RU", "en_US"),
     ("root", "", "../"),
     ("url", "https://goby.azer.one/", "https://goby.azer.one/ru/"),
     ("switch.href", "ru/", "../"),
@@ -345,9 +346,14 @@ const PAGE: &str = r##"<!doctype html>
 <link rel="alternate" hreflang="x-default" href="https://goby.azer.one/">
 <meta property="og:title" content="{{title}}">
 <meta property="og:description" content="{{og.description}}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Goby">
 <meta property="og:image" content="https://goby.azer.one/images/social.png">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="640">
 <meta property="og:url" content="{{url}}">
 <meta property="og:locale" content="{{locale}}">
+<meta property="og:locale:alternate" content="{{locale.other}}">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="{{root}}images/logo.svg" type="image/svg+xml">
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Goby","description":"{{description}}","url":"{{url}}","inLanguage":"{{lang}}","operatingSystem":"Windows 10, Windows 11","applicationCategory":"MultimediaApplication","softwareVersion":"{version}","fileSize":"{kb} KB","license":"https://spdx.org/licenses/{license}.html","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
