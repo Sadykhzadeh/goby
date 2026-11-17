@@ -109,6 +109,11 @@ impl PitchShifter {
         // (the audio behind `from`) and at `y(lag) + n`.
         let start = if sign > 0 { base - (longest + n) as isize + 1 } else { base - n as isize + 1 };
         let span = n + longest;
+        // A stretch of pure silence scores exactly zero at every lag, and the search below
+        // would settle on the shortest one, so it is answered here without the dot products.
+        if (0..span).all(|k| self.at(start + k as isize) == 0.0) {
+            return (self.min_lag, 0.0);
+        }
         let mut sum = 0.0f64;
         self.energy[0] = 0.0;
         for k in 0..span {
@@ -952,6 +957,18 @@ mod tests {
             let (lag, score) = p.best_lag(from, sign, longest);
             let (want, best) = plain(&p, from, sign, longest);
             assert!(lag == want && (score - best).abs() < 1e-4, "{lag} {score} vs {want} {best}");
+        }
+    }
+
+    /// Silence has no waveform to line up, so every lag scores zero and the shortest one wins.
+    #[test]
+    fn best_lag_of_silence_is_the_shortest_lag_with_no_score() {
+        let mut p = PitchShifter::new(SR);
+        for _ in 0..SR as usize / 10 {
+            p.listen(0.0);
+        }
+        for (from, sign, longest) in [(10.0, 1, 1000), (700.0, -1, 650), (0.0, 1, 500)] {
+            assert_eq!(p.best_lag(from, sign, longest), (p.min_lag, 0.0));
         }
     }
 
