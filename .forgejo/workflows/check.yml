@@ -41,6 +41,12 @@ jobs:
       - name: Test the voices
         run: cargo test -p goby-dsp
 
+      # Plain Node, the one the checkout action already runs on; no packages to install.
+      - name: Website checks
+        run: |
+          node --test site/check.test.mjs
+          node site/check.mjs
+
       # Checking for the Windows target needs no linker, so the app's code is read
       # here although it cannot be built. Warnings fail the step, except the four
       # chunks_exact ones src/apps.rs has today; drop the -A once those are gone.
