@@ -122,6 +122,8 @@ const fn texts(file: &[u8], en: &[u8], out: &mut [u8]) -> usize {
             while i < to {
                 let next = if i + 1 < to { file[i + 1] } else { 0 };
                 let (b, len) = match (file[i], next) {
+                    // A NUL would end its text early and shift every text after it.
+                    (0, _) => panic!("a NUL byte in a text"),
                     (b'\\', b'n') => (b'\n', 2),
                     (0xD0, 0x90..=0xBF) => (next - 0x10, 2), // А to п
                     (0xD1, 0x80..=0x8F) => (next + 0x30, 2), // р to я
@@ -313,6 +315,11 @@ mod tests {
                     panic!("{code}: {key} is not in en.lang");
                 };
                 assert_eq!(placeholders(text), placeholders(en), "{code}: {key}");
+                assert_eq!(
+                    text.matches("\\n").count(),
+                    en.matches("\\n").count(),
+                    "{code}: {key} breaks lines differently"
+                );
                 assert!(!text.is_empty(), "{code}: {key} is empty");
             }
             for (i, (key, _)) in english.iter().enumerate() {
@@ -404,5 +411,74 @@ mod tests {
         let tables = Box::leak(Box::new([parse(&packed(en, en)), parse(&packed("b = Б\n", en))]));
         assert_eq!(look(tables, 1, 0), "A");
         assert_eq!(look(tables, 1, 1), "Б");
+    }
+
+    /// Packs `file` against `en` the way `file!` does, from bytes, since a file on disk need not be UTF-8.
+    fn pack(file: &[u8], en: &[u8]) -> Vec<u8> {
+        let mut out = vec![0; texts(file, en, &mut [])];
+        texts(file, en, &mut out);
+        out
+    }
+
+    #[test]
+    fn malformed_files_are_packed_and_parsed_without_a_panic() {
+        let en = include_bytes!("../lang/en.lang");
+        let keys = lines(include_str!("../lang/en.lang")).len();
+        let long = format!("a = {}\nb = B\n", "x".repeat(100_000));
+        let odd: [&[u8]; 12] = [
+            b"",
+            b"\xEF\xBB\xBFa = A\r\nb = B\r\n",
+            b"a\nb = B\n",
+            b"= nothing\nb = B\n",
+            b"a =\nb =\n",
+            b"a = A\n\n\n\t \r\n# b = B\n",
+            b"\xD0\nb = \xD0\xD1\xFF\n",
+            b"a = \xFF\xFE\xC0\x80\xF8\nb = B\n",
+            b"a = \xD0\x90\xD0\x91\xD1\x8F\nb = \xD0\x81\n",
+            b"a = A\\n\\n\\\nb = B\\\n",
+            b"a = A\rB\r\nb = B\r\n\r\n",
+            long.as_bytes(),
+        ];
+        for file in odd {
+            let packed = pack(file, en);
+            let table = parse(&packed);
+            assert!(table.is_empty() || table.len() == keys, "{} texts from {:?}", table.len(), file);
+        }
+    }
+
+    #[test]
+    #[should_panic = "a NUL byte in a text"]
+    fn a_nul_byte_in_a_text_stops_the_build() {
+        pack(b"a = A\x00\nb = B\n", b"a = x\nb = y\n");
+    }
+
+    #[test]
+    fn random_damage_to_the_english_file_never_panics() {
+        // Deterministic: a fixed seed, so a failure reproduces on any machine.
+        let en = include_bytes!("../lang/en.lang");
+        let keys = lines(include_str!("../lang/en.lang")).len();
+        let pieces: &[u8] = b"=\n\r#\\n{}0\xD0\x90\xBF\xD1\x80\xFF \t";
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..2_000 {
+            let mut file = en.to_vec();
+            for _ in 0..1 + next() % 8 {
+                let at = next() as usize % file.len();
+                match next() % 3 {
+                    0 => file[at] = pieces[next() as usize % pieces.len()],
+                    1 => file.insert(at, pieces[next() as usize % pieces.len()]),
+                    _ => {
+                        file.remove(at);
+                    }
+                }
+            }
+            let table = parse(&pack(&file, en));
+            assert!(table.is_empty() || table.len() == keys, "{} texts from a damaged file", table.len());
+        }
     }
 }
