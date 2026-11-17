@@ -1068,4 +1068,130 @@ mod tests {
             }
         }
     }
+
+    const RATE: f64 = 48_000.0;
+
+    fn tone(hz: f64, n: usize) -> Vec<f32> {
+        (0..n).map(|i| (std::f64::consts::TAU * hz * i as f64 / RATE).sin() as f32).collect()
+    }
+
+    /// Amplitude of the `hz` component of `x`, which must hold a whole number of its cycles.
+    fn amplitude_at(x: &[f32], hz: f64) -> f64 {
+        let w = std::f64::consts::TAU * hz / RATE;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, s) in x.iter().enumerate() {
+            let (sn, cs) = (w * i as f64).sin_cos();
+            re += *s as f64 * cs;
+            im += *s as f64 * sn;
+        }
+        2.0 * (re * re + im * im).sqrt() / x.len() as f64
+    }
+
+    /// |H| on the unit circle at `hz` for a biquad with numerator `b` and denominator `a`.
+    fn textbook_gain(b: [f64; 3], a: [f64; 3], hz: f64) -> f64 {
+        let w = std::f64::consts::TAU * hz / RATE;
+        let (c1, s1) = (w.cos(), -w.sin());
+        let (c2, s2) = ((2.0 * w).cos(), -(2.0 * w).sin());
+        let num = (b[0] + b[1] * c1 + b[2] * c2).hypot(b[1] * s1 + b[2] * s2);
+        let den = (a[0] + a[1] * c1 + a[2] * c2).hypot(a[1] * s1 + a[2] * s2);
+        num / den
+    }
+
+    /// RBJ cookbook coefficients at `hz` and `q`, before normalising by a0.
+    fn rbj(shape: &str, hz: f64, q: f64) -> ([f64; 3], [f64; 3]) {
+        let w = std::f64::consts::TAU * hz / RATE;
+        let (s, c) = (w.sin(), w.cos());
+        let alpha = s / (2.0 * q);
+        let den = [1.0 + alpha, -2.0 * c, 1.0 - alpha];
+        match shape {
+            "low" => ([(1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0], den),
+            "high" => ([(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0], den),
+            _ => ([alpha, 0.0, -alpha], den),
+        }
+    }
+
+    fn cutoff_filter(shape: &str, hz: f32, q: f32) -> Biquad {
+        let shape = match shape {
+            "low" => Shape::Low,
+            "high" => Shape::High,
+            _ => Shape::Band,
+        };
+        Biquad::new(shape, RATE as f32, hz, q)
+    }
+
+    #[test]
+    fn biquads_match_the_textbook_response() {
+        for shape in ["low", "high", "band"] {
+            for q in [0.707, 2.0] {
+                let (b, a) = rbj(shape, 1000.0, q);
+                for hz in [250.0, 1000.0, 2000.0, 6000.0] {
+                    let mut f = cutoff_filter(shape, 1000.0, q as f32);
+                    let out: Vec<f32> = tone(hz, 2 * RATE as usize).into_iter().map(|x| f.process(x)).collect();
+                    let measured = amplitude_at(&out[RATE as usize..], hz);
+                    let want = textbook_gain(b, a, hz);
+                    assert!((measured - want).abs() <= 0.005 * want, "{shape} q {q} at {hz} Hz: {measured} vs {want}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peaking_eq_matches_the_textbook_response() {
+        let (hz, q, db) = (1500.0f64, 1.0f64, 6.0f64);
+        let a = 10f64.powf(db / 40.0);
+        let (s, c) = ((std::f64::consts::TAU * hz / RATE).sin(), (std::f64::consts::TAU * hz / RATE).cos());
+        let alpha = s / (2.0 * q);
+        let b = [1.0 + alpha * a, -2.0 * c, 1.0 - alpha * a];
+        let den = [1.0 + alpha / a, -2.0 * c, 1.0 - alpha / a];
+        for probe in [150.0, 1500.0, 12_000.0] {
+            let mut f = Biquad::peak(RATE as f32, hz as f32, q as f32, db as f32);
+            let out: Vec<f32> = tone(probe, 2 * RATE as usize).into_iter().map(|x| f.process(x)).collect();
+            let measured = amplitude_at(&out[RATE as usize..], probe);
+            let want = textbook_gain(b, den, probe);
+            assert!((measured - want).abs() <= 0.005 * want, "{probe} Hz: {measured} vs {want}");
+        }
+    }
+
+    #[test]
+    fn delay_reads_exact_samples_across_the_wrap() {
+        let mut d = Delay::new(100);
+        let samples: Vec<f32> = (0..1000).map(|i| i as f32).collect();
+        for (n, &x) in samples.iter().enumerate() {
+            d.push(x);
+            for k in 0..=100usize.min(n) {
+                assert_eq!(d.read(k as f32), samples[n - k], "after {} pushes, {k} back", n + 1);
+            }
+        }
+    }
+
+    #[test]
+    fn lfo_repeats_every_period_and_spans_its_range() {
+        for hz in [1.0f32, 5.0, 37.5] {
+            let period = (RATE as f32 / hz) as usize;
+            let mut l = Lfo::default();
+            let out: Vec<f32> = (0..3 * period).map(|_| l.next(hz, RATE as f32)).collect();
+            // The phase is an f32 running sum: at 1 Hz one period can differ from the next by
+            // about 4e-3 of the output, inaudible for an LFO, so the bound is loose on purpose.
+            let drift = (0..2 * period).map(|i| (out[i] - out[i + period]).abs()).fold(0.0f32, f32::max);
+            assert!(drift < 1e-2, "{hz} Hz: one period on the output differs by {drift}");
+            let peak = out.iter().fold(f32::MIN, |m, &s| m.max(s));
+            let trough = out.iter().fold(f32::MAX, |m, &s| m.min(s));
+            assert!(peak > 0.999 && trough < -0.999, "{hz} Hz: range {trough}..{peak}");
+        }
+    }
+
+    #[test]
+    fn envelope_follows_its_attack_and_release_coefficients() {
+        let mut e = Envelope::default();
+        for n in 1..=10 {
+            let level = e.next(1.0, 0.1, 0.01);
+            assert!((level - (1.0 - 0.9f32.powi(n))).abs() < 1e-5, "attack after {n}: {level}");
+        }
+        let mut e = Envelope::default();
+        assert_eq!(e.next(1.0, 1.0, 0.01), 1.0);
+        for n in 1..=100 {
+            let level = e.next(0.0, 1.0, 0.01);
+            assert!((level - 0.99f32.powi(n)).abs() < 1e-5, "release after {n}: {level}");
+        }
+    }
 }

@@ -260,4 +260,28 @@ mod tests {
             assert!(fill.abs_diff(target) < target / 2, "drift {drift}: fill {fill}, target {target}");
         }
     }
+
+    /// The reader's interpolation weights always sum to one, so a steady level stays steady
+    /// through the clock nudge (DC gain of exactly one), and it never dips while a stream
+    /// runs faster than the output.
+    #[test]
+    fn a_steady_level_comes_out_steady_while_the_clocks_drift() {
+        let (mut prod, cons) = ring(RATE as usize);
+        let mut r = Reader::new(cons, RATE);
+        let mut fed = 0.0f64;
+        for ms in 0..2000 {
+            fed += RATE as f64 * 1.003 / 1000.0;
+            while fed >= 1.0 {
+                prod.push(0.25);
+                fed -= 1.0;
+            }
+            for _ in 0..RATE / 1000 {
+                let y = r.next();
+                // Silent until the ring holds its start-up cushion, about 12 ms.
+                if ms >= 20 {
+                    assert!((y - 0.25).abs() < 1e-6, "{y} at {ms} ms");
+                }
+            }
+        }
+    }
 }

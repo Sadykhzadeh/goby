@@ -1002,6 +1002,57 @@ mod tests {
         let peak = out[SR as usize / 10..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!((peak - 0.5).abs() < 0.02, "peak {peak}");
     }
+
+    /// Amplitude of the `hz` component of `x`, which must hold a whole number of its cycles.
+    fn amplitude_at(x: &[f32], hz: f64) -> f64 {
+        let w = 2.0 * std::f64::consts::PI * hz / SR as f64;
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (i, s) in x.iter().enumerate() {
+            let (sn, cs) = (w * i as f64).sin_cos();
+            re += *s as f64 * cs;
+            im += *s as f64 * sn;
+        }
+        2.0 * (re * re + im * im).sqrt() / x.len() as f64
+    }
+
+    /// A 440 Hz sine up twelve semitones: the spectrum of one second after the shifter has
+    /// settled peaks at 880 Hz to within a bin (1 Hz for a one-second window).
+    #[test]
+    fn a_440_hz_sine_up_an_octave_peaks_at_880_within_one_bin() {
+        let mut p = PitchShifter::new(SR);
+        p.set_ratio(2.0);
+        let out: Vec<f32> = sine(440.0, 2.0).into_iter().map(|s| p.process(s)).collect();
+        let window = &out[SR as usize / 4..SR as usize / 4 + SR as usize];
+        let (mut best, mut best_f) = (0.0, 0.0);
+        for k in 1600..=1920 {
+            let f = k as f64 / 2.0;
+            let a = amplitude_at(window, f);
+            if a > best {
+                (best, best_f) = (a, f);
+            }
+        }
+        assert!((best_f - 880.0).abs() <= 1.0, "peak at {best_f} Hz");
+    }
+
+    /// Ring modulation multiplies by a sine: a 1 kHz tone through a 100 Hz carrier leaves at
+    /// 900 Hz and 1100 Hz, half the carrier product each, and nothing at 1 kHz.
+    #[test]
+    fn ring_modulator_makes_sidebands_at_the_sum_and_difference() {
+        let mut v = Voice::new(SR);
+        v.set(&Recipe { ring_hz: 100.0, ring_mix: 1.0, ..Recipe::DRY }, 0.0, 1.0);
+        let mut x: Vec<f32> = (0..2 * SR as usize)
+            .map(|i| ((2.0 * std::f64::consts::PI * 1000.0 * i as f64 / SR as f64).sin() * 0.1) as f32)
+            .collect();
+        v.process(&mut x);
+        let window = &x[SR as usize / 10..SR as usize / 10 + SR as usize];
+        let want = 0.1 * 1.4 * 0.5;
+        for hz in [900.0, 1100.0] {
+            let a = amplitude_at(window, hz);
+            assert!((a - want).abs() < 0.01 * want, "{hz} Hz sideband at {a}, want {want}");
+        }
+        let carrier = amplitude_at(window, 1000.0);
+        assert!(carrier < 0.01 * want, "1 kHz leaks at {carrier}");
+    }
 }
 
 #[cfg(test)]
