@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { checkSite, parse } from "./check.mjs";
 
@@ -153,4 +154,82 @@ test("the hero's waveforms are 74 voices of 60 points, in whole hundredths", () 
     assert.equal(points.length, 60, name);
     for (const p of points) assert.ok(Number.isInteger(p) && p >= -100 && p <= 100, `${name}: ${p}`);
   }
+});
+
+// The page's script, run against a stub of the few DOM calls it makes at load. It shows the hero's
+// voices and easing, and that the window (goby.wasm) is asked for only when it nears the screen.
+function runSiteScript(html, { reduced = false } = {}) {
+  const doc = fileURLToPath(new URL("../docs/index.html", import.meta.url));
+  const page = readFileSync(doc, "utf8");
+  const el = id => ({ id, textContent: "", setAttribute() {}, addEventListener() {}, querySelector: () => el("x") });
+  const elements = {
+    texts: { textContent: page.match(/id="texts">([\s\S]*?)<\/script>/)[1] },
+    "hero-voices": { textContent: page.match(/id="hero-voices">([\s\S]*?)<\/script>/)[1] },
+    name: Object.assign(el("name"), { textContent: "Minion" }),
+  };
+  const observed = [];
+  const fetches = [];
+  const intervals = [];
+  const ctx = {
+    document: {
+      currentScript: { src: "https://goby.azer.one/site.js" },
+      getElementById: id => elements[id] ?? el(id),
+      querySelector: () => el("hero"),
+    },
+    matchMedia: () => ({ matches: reduced }),
+    IntersectionObserver: class {
+      constructor(cb) {
+        this.cb = cb;
+      }
+      observe(target) {
+        observed.push({ target, cb: this.cb, io: this });
+      }
+      disconnect() {}
+    },
+    requestAnimationFrame: () => 0,
+    setInterval: () => intervals.push(1),
+    performance: { now: () => 0 },
+    fetch: url => {
+      fetches.push(String(url));
+      return Promise.resolve({ ok: false, status: 404 });
+    },
+    URL,
+    console,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(html, ctx, { filename: "site.js" });
+  return { ctx, observed, fetches, intervals };
+}
+
+test("the page's script shows the 74 voices in hundredths decoded and eases between them", () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  const { ctx } = runSiteScript(siteJs);
+  const voices = vm.runInContext("VOICES", ctx);
+  assert.equal(voices.length, 74);
+  assert.equal(voices[1].name, "Minion");
+  assert.equal(voices[1].pts[0], -0.68);
+  assert.equal(vm.runInContext("ease(0)", ctx), 0);
+  assert.equal(vm.runInContext("ease(1)", ctx), 1);
+  assert.equal(vm.runInContext("ease(0.5)", ctx), 0.875);
+  assert.equal(vm.runInContext("ease(2)", ctx), 1);
+  assert.equal(vm.runInContext("smooth([0, 0], 100, 50, 10)", ctx), "M0 25.0C50.0 25.0 50.0 25.0 100.0 25.0");
+});
+
+test("the window and its wasm are not requested until the window nears the screen", () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  const { observed, fetches } = runSiteScript(siteJs);
+  assert.equal(fetches.length, 0);
+  const win = observed.find(o => o.target.id === "win");
+  assert.ok(win, "the window is observed");
+  win.cb([{ isIntersecting: false }], win.io);
+  assert.equal(fetches.length, 0);
+  win.cb([{ isIntersecting: true }], win.io);
+  assert.equal(fetches.length, 1);
+  assert.match(fetches[0], /goby\.wasm$/);
+});
+
+test("with reduced motion the hero does not cycle on its own", () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  assert.equal(runSiteScript(siteJs).intervals.length, 1);
+  assert.equal(runSiteScript(siteJs, { reduced: true }).intervals.length, 0);
 });
