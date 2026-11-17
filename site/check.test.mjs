@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
-import { checkSite, parse } from "./check.mjs";
+import { anchorsOf, cargoCommandsIn, checkMarkdown, checkSite, linksIn, namesIn, parse, proseLines, repoPathsIn, slug } from "./check.mjs";
 
 const page = ({ lang = "en", body = "", head = "" } = {}) => {
   const root = lang === "ru" ? "../" : "";
@@ -293,4 +293,103 @@ test("the social tags agree with the page and describe the image that exists", (
     assert.equal(meta(html, "og:image:height"), String(height), file);
     assert.equal(meta(html, "og:image"), "https://goby.azer.one/images/social.png", file);
   }
+});
+
+// ---- The Markdown checks ----
+
+test("heading anchors are made the way GitHub makes them", () => {
+  assert.equal(slug("How it works"), "how-it-works");
+  assert.equal(slug("Size, and why LTO is off"), "size-and-why-lto-is-off");
+  assert.equal(slug("The `grain` shifter"), "the-grain-shifter");
+  assert.equal(slug("Read [the docs](x.md)"), "read-the-docs");
+  assert.equal(slug("Ctrl+Alt+G"), "ctrlaltg");
+  assert.equal(slug("A - B"), "a---b");
+  assert.equal(slug("Café *now*"), "café-now");
+});
+
+test("a repeated heading gets -1, -2 like GitHub, and code blocks have no headings", () => {
+  const md = "# Numbers\n## Numbers\n```\n# not a heading\n```\n### Numbers\n<a id=\"x\"></a>";
+  const anchors = anchorsOf(md);
+  assert.deepEqual([...anchors].sort(), ["numbers", "numbers-1", "numbers-2", "x"]);
+});
+
+test("prose lines know which ones sit inside a fence", () => {
+  const lines = proseLines("a\n```sh\ncargo test\n```\nb");
+  assert.deepEqual(lines.map(l => l.code), [false, true, true, true, false]);
+});
+
+test("links and images are found, and links inside code spans are not", () => {
+  assert.deepEqual(linksIn("[a](docs/x.md#y) ![b](images/z.webp \"t\") `[c](no.md)`"), ["docs/x.md#y", "images/z.webp"]);
+  assert.deepEqual(linksIn('<img src="docs/a.png"> <a href="LICENSE">'), ["docs/a.png", "LICENSE"]);
+  assert.deepEqual(linksIn("[ref]: https://example.com/"), ["https://example.com/"]);
+});
+
+test("the path extractor takes slashed paths and source files, not artefacts or prose", () => {
+  assert.deepEqual(
+    repoPathsIn("in `src/voices.rs`, `dsp.rs`, `lang/en.lang`, `crates/dsp/` and `.cargo/config.toml`"),
+    ["src/voices.rs", "dsp.rs", "lang/en.lang", "crates/dsp/", ".cargo/config.toml"],
+  );
+  assert.deepEqual(repoPathsIn("`goby.exe`, `SHA256SUMS.txt`, `lang=auto`, `cargo test` and `1.88+`"), []);
+});
+
+test("cargo lines name their packages, targets and test filters", () => {
+  assert.deepEqual(namesIn("cargo test --release -p goby-dsp formant_cost -- --ignored --nocapture"), {
+    packages: ["goby-dsp"], tests: [], bins: [], filters: ["formant_cost"],
+  });
+  assert.deepEqual(namesIn("cargo test --test resources --package=goby"), {
+    packages: ["goby"], tests: ["resources"], bins: [], filters: [],
+  });
+  assert.deepEqual(namesIn("cargo build --release"), { packages: [], tests: [], bins: [], filters: [] });
+  assert.deepEqual(cargoCommandsIn("```\ncargo test x # a comment\n```\nand `cargo build`"), ["cargo test x", "cargo build"]);
+});
+
+// A small repository: a Cargo package with one test, a README and a docs folder.
+function repo(files) {
+  const dir = mkdtempSync(join(tmpdir(), "goby-md-check-"));
+  const base = {
+    "Cargo.toml": 'name = "goby"\nversion = "1.0.0"\n',
+    "src/main.rs": "fn main() {}\n#[test]\nfn sample_check() {}\n",
+    "tests/resources.rs": "",
+    "docs/guide.md": "# Guide\n## Part one\n",
+    "images/a.webp": "",
+    "README.md": "# Goby\n",
+  };
+  try {
+    for (const [name, text] of Object.entries({ ...base, ...files })) {
+      mkdirSync(dirname(join(dir, name)), { recursive: true });
+      writeFileSync(join(dir, name), text);
+    }
+    return checkMarkdown(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("a clean repository's documents pass", () => {
+  assert.deepEqual(
+    repo({ "README.md": "# Goby\nSee [the guide](docs/guide.md#part-one), `src/main.rs`, `goby.exe` and ![a](images/a.webp).\n\n```\ncargo test -p goby --test resources sample_check -- --ignored\n```\n" }),
+    [],
+  );
+});
+
+const docProblems = [
+  ["a link to a missing file", "See [x](docs/nope.md).", /link docs\/nope\.md names a missing file/],
+  ["an anchor that is not a heading", "See [x](docs/guide.md#nowhere).", /not a heading/],
+  ["an image that is missing", '<img src="images/none.webp">', /images\/none\.webp names a missing file/],
+  ["a repository path that is missing", "Edit `src/gone.rs`.", /path src\/gone\.rs is not in the repository/],
+  ["a package that is not in the workspace", "```\ncargo test -p nope\n```", /names package nope/],
+  ["a test target that does not exist", "```\ncargo test --test missing\n```", /names test target missing/],
+  ["a test filter that is no test", "```\ncargo test not_a_test\n```", /filters on not_a_test/],
+  ["an external link that is not a URL", "See [x](https://[bad).", /is not a valid URL/],
+];
+
+for (const [name, text, expected] of docProblems) {
+  test(`the Markdown check names ${name}`, () => {
+    const found = repo({ "README.md": `# Goby\n${text}\n` });
+    assert.ok(found.some(f => expected.test(f)), `expected ${expected}, got:\n${found.join("\n")}`);
+  });
+}
+
+test("the project's own Markdown passes", () => {
+  assert.deepEqual(checkMarkdown(fileURLToPath(new URL("..", import.meta.url))), []);
 });

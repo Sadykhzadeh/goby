@@ -273,13 +273,224 @@ function labelledBy(n) {
   return n.attrs["aria-labelledby"] ? n.attrs["aria-labelledby"] : "";
 }
 
+// ---- The Markdown the project publishes: README.md and docs/*.md ----
+
+// A GitHub heading anchor: lower case, punctuation dropped, each space a hyphen.
+export function slug(heading) {
+  return heading
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/[`*~]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\p{M} _-]/gu, "")
+    .replace(/ /g, "-");
+}
+
+// The lines of a Markdown text, each with whether it is inside a fenced code block.
+export function proseLines(md) {
+  let fence = null;
+  return md.split("\n").map(line => {
+    const open = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) {
+      if (open && open[1][0] === fence[0] && open[1].length >= fence.length) fence = null;
+      return { text: line, code: true };
+    }
+    if (open) {
+      fence = open[1];
+      return { text: line, code: true };
+    }
+    return { text: line, code: false };
+  });
+}
+
+// The anchors a Markdown file offers: its headings as GitHub makes them (a repeated heading
+// gets -1, -2, ...) and any id or name attribute.
+export function anchorsOf(md) {
+  const seen = new Map();
+  const out = new Set();
+  for (const { text, code } of proseLines(md)) {
+    if (code) continue;
+    const heading = text.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
+    if (heading) {
+      const base = slug(heading[1]);
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      out.add(n ? `${base}-${n}` : base);
+    }
+    for (const m of text.matchAll(/\s(?:id|name)="([^"]+)"/g)) out.add(m[1]);
+  }
+  return out;
+}
+
+// Link targets on a line of prose: Markdown links and images, src or href attributes, and
+// reference definitions.
+export function linksIn(line) {
+  const prose = line.replace(/`[^`\n]*`/g, "");
+  const out = [];
+  for (const m of prose.matchAll(/!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g)) out.push(m[1]);
+  for (const m of prose.matchAll(/\b(?:src|href)="([^"]+)"/g)) out.push(m[1]);
+  const def = prose.match(/^\s*\[[^\]]+\]:\s*(\S+)/);
+  if (def) out.push(def[1]);
+  return out;
+}
+
+const PATH_EXTENSIONS = /\.(rs|md|toml|lang|yml|yaml|sig|bin|webp|svg|png|mp3|html|js|mjs|css|ps1|sh|wasm|lock|ico)$/;
+
+// Backtick spans that name a file or folder of the repository: anything with a slash, or a bare
+// file name with a source or asset extension. Release artefacts (.exe, .txt) are not in the
+// repository and are not taken for paths.
+export function repoPathsIn(line) {
+  return [...line.matchAll(/`([^`\n]+)`/g)]
+    .map(m => m[1])
+    .filter(s => /^[\w.~/-]+$/.test(s) && (s.includes("/") || PATH_EXTENSIONS.test(s)));
+}
+
+// The cargo command lines of a text: whole lines in fenced blocks, and backtick spans.
+export function cargoCommandsIn(md) {
+  const out = [];
+  for (const { text, code } of proseLines(md)) {
+    if (code) {
+      const cmd = text.trim();
+      if (cmd.startsWith("cargo ")) out.push(cmd);
+    } else {
+      for (const m of text.matchAll(/`(cargo [^`\n]+)`/g)) out.push(m[1]);
+    }
+  }
+  return out.map(cmd => cmd.replace(/\s#.*$/, "").trim());
+}
+
+// Flags that take a value, so the word after them is not a test name.
+const VALUE_FLAGS = new Set([
+  "-p", "--package", "--test", "--bin", "--example", "--features", "-F", "--target", "--profile",
+  "--manifest-path", "-j", "--jobs", "--exclude", "--color", "--message-format",
+]);
+
+// What a cargo command line names: packages, targets, and test filters.
+export function namesIn(cmd) {
+  const tokens = cmd.split(/\s+/).slice(1);
+  const sub = tokens[0];
+  const out = { packages: [], tests: [], bins: [], filters: [] };
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--") break;
+    if (t.startsWith("--") && t.includes("=")) {
+      const [flag, value] = t.split("=", 2);
+      if (flag === "--package") out.packages.push(value);
+      if (flag === "--test") out.tests.push(value);
+      if (flag === "--bin") out.bins.push(value);
+      continue;
+    }
+    if (t === "-p" || t === "--package") out.packages.push(tokens[++i]);
+    else if (t === "--test") out.tests.push(tokens[++i]);
+    else if (t === "--bin") out.bins.push(tokens[++i]);
+    else if (VALUE_FLAGS.has(t)) i++;
+    else if (!t.startsWith("-") && sub === "test") out.filters.push(t);
+  }
+  return out;
+}
+
+// Every file of the repository, relative to it with forward slashes, without build output.
+function repoListing(root) {
+  const out = [];
+  const walk = dir => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "target" || e.name === ".git" || e.name === "node_modules") continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(relative(root, p).split(sep).join("/"));
+    }
+  };
+  walk(root);
+  return out;
+}
+
+export function checkMarkdown(repoArg) {
+  const root = resolve(repoArg);
+  const findings = [];
+  const listing = repoListing(root);
+  const known = new Set(listing);
+  const exists = p => known.has(p) || listing.some(f => f.startsWith(p + "/"));
+  const basenames = new Set(listing.map(f => f.split("/").pop()));
+  const docs = readdirSync(join(root, "docs")).filter(f => f.endsWith(".md")).map(f => `docs/${f}`);
+  const files = ["README.md", ...docs];
+  const texts = new Map(files.map(f => [f, readFileSync(join(root, f), "utf8")]));
+  const anchors = new Map([...texts].map(([f, t]) => [f, anchorsOf(t)]));
+
+  // The package names, binary targets and test targets of the workspace.
+  const packages = new Set();
+  const bins = new Set();
+  const tests = new Set();
+  for (const f of listing.filter(x => x.endsWith("Cargo.toml"))) {
+    const toml = readFileSync(join(root, f), "utf8");
+    const name = toml.match(/^name = "([^"]+)"/m)?.[1];
+    if (!name) continue;
+    packages.add(name);
+    const dir = f.includes("/") ? f.slice(0, f.lastIndexOf("/") + 1) : "";
+    if (known.has(`${dir}src/main.rs`)) bins.add(name);
+  }
+  for (const f of listing) {
+    if (/(^|\/)src\/bin\/[^/]+\.rs$/.test(f)) bins.add(f.split("/").pop().replace(/\.rs$/, ""));
+    if (/(^|\/)tests\/[^/]+\.rs$/.test(f)) tests.add(f.split("/").pop().replace(/\.rs$/, ""));
+    if (/(^|\/)tests\/[^/]+\/main\.rs$/.test(f)) tests.add(f.split("/").slice(-2)[0]);
+  }
+  const testFns = new Set();
+  for (const f of listing.filter(x => x.endsWith(".rs"))) {
+    for (const m of readFileSync(join(root, f), "utf8").matchAll(/\bfn\s+(\w+)/g)) testFns.add(m[1]);
+  }
+
+  const bad = (file, msg) => findings.push(`${file}: ${msg}`);
+
+  const checkTarget = (file, target) => {
+    if (/^https?:\/\//i.test(target)) {
+      try {
+        new URL(target);
+      } catch {
+        bad(file, `link ${target} is not a valid URL`);
+      }
+      return;
+    }
+    if (/^mailto:/i.test(target)) return;
+    const hash = target.indexOf("#");
+    const pathPart = decodeURI(hash < 0 ? target : target.slice(0, hash));
+    const frag = hash < 0 ? undefined : decodeURI(target.slice(hash + 1));
+    const resolved = pathPart === "" ? file : join(dirname(file), pathPart).split(sep).join("/");
+    if (resolved.startsWith("..")) return bad(file, `link ${target} leaves the repository`);
+    if (!exists(resolved)) return bad(file, `link ${target} names a missing file`);
+    if (frag && resolved.endsWith(".md") && !anchors.get(resolved)?.has(frag)) {
+      bad(file, `link ${target} names an anchor that is not a heading of ${resolved}`);
+    }
+  };
+
+  for (const file of files) {
+    for (const { text, code } of proseLines(texts.get(file))) {
+      if (code) continue;
+      for (const target of linksIn(text)) checkTarget(file, target);
+      for (const p of repoPathsIn(text)) {
+        // Build output, which a build creates; it is not a file the repository holds.
+        if (p.startsWith("target/")) continue;
+        const there = p.includes("/") ? exists(p.replace(/\/$/, "")) : basenames.has(p);
+        if (!there) bad(file, `path ${p} is not in the repository`);
+      }
+    }
+    for (const cmd of cargoCommandsIn(texts.get(file))) {
+      const names = namesIn(cmd);
+      for (const p of names.packages) if (!packages.has(p)) bad(file, `\`${cmd}\` names package ${p}, which is not in the workspace`);
+      for (const t of names.tests) if (!tests.has(t)) bad(file, `\`${cmd}\` names test target ${t}, which does not exist`);
+      for (const b of names.bins) if (!bins.has(b)) bad(file, `\`${cmd}\` names binary ${b}, which does not exist`);
+      for (const f of names.filters) if (!testFns.has(f)) bad(file, `\`${cmd}\` filters on ${f}, which is no test function`);
+    }
+  }
+  return findings;
+}
+
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const dir = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "docs");
-  const findings = checkSite(dir);
+  const findings = [...checkSite(dir), ...checkMarkdown(join(resolve(dir), ".."))];
   if (findings.length) {
     for (const f of findings) console.error(f);
-    console.error(`${findings.length} problem(s) in the site`);
+    console.error(`${findings.length} problem(s) in the site and its documents`);
     process.exit(1);
   }
-  console.log(`site check: ok (${dir})`);
+  console.log(`site check: ok (${dir}, README.md and docs/*.md)`);
 }
