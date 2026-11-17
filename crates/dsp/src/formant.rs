@@ -525,7 +525,7 @@ mod tests {
         for step in 0..=108 {
             let hz = 300.0 + 25.0 * step as f32;
             let mut power = 0.0f64;
-            for frame in x[..16_384].chunks_exact(FRAME) {
+            for frame in x[..16_384].as_chunks::<FRAME>().0 {
                 let (mut re, mut im) = (0.0f32, 0.0f32);
                 for (i, v) in frame.iter().enumerate() {
                     let hann = 0.5 - 0.5 * (i as f32 * TAU / FRAME as f32).cos();
