@@ -25,6 +25,9 @@ mod voices;
 /// and where the page is written, relative to docs/.
 const PAGES: [(&str, &str); 2] = [("en", "index.html"), ("ru", "ru/index.html")];
 
+/// The size of the Windows release, in KB, as the README and both pages give it.
+const SIZE_KB: &str = "374";
+
 /// The hero eases between the voices' waveforms: [[name, [points]], ...], 60 points each, in
 /// hundredths (the page divides by 100 again, so -0.44 is written -44).
 fn hero() -> String {
@@ -69,6 +72,8 @@ fn render(at: usize, version: &str) -> String {
         .replace("{at}", &(first + 1).to_string())
         .replace("{voices.noun}", noun)
         .replace("{total}", &total.to_string())
+        .replace("{kb}", SIZE_KB)
+        .replace("{license}", env!("GOBY_LICENSE"))
         .replace("{version}", version)
         .replace("{hero}", &hero());
     assert!(!page.contains("{{"), "a key the table does not have");
@@ -144,13 +149,13 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("title", "Goby: a tiny voice changer for Windows", "Goby: маленькая программа для смены голоса в Windows"),
     (
         "description",
-        "Real-time voice changer for Windows: {total} voices for the programs you pick, from Discord and OBS to calls and recordings. One 374 KB app, free and open source, no account.",
-        "Меняет голос в Windows в реальном времени: {total} {voices.noun} для программ, которые вы выберете, от Discord и OBS до звонков и записи. Одно приложение на 374 КБ, бесплатное, с открытым кодом, без аккаунта.",
+        "Real-time voice changer for Windows: {total} voices for the programs you pick, from Discord and OBS to calls and recordings. One {kb} KB app, free and open source, no account.",
+        "Меняет голос в Windows в реальном времени: {total} {voices.noun} для программ, которые вы выберете, от Discord и OBS до звонков и записи. Одно приложение на {kb} КБ, бесплатное, с открытым кодом, без аккаунта.",
     ),
     (
         "og.description",
-        "{total} voices for the programs you pick. One 374 KB Windows app, free and open source.",
-        "{total} {voices.noun} для программ, которые вы выберете. Одно приложение для Windows на 374 КБ, бесплатное, с открытым кодом.",
+        "{total} voices for the programs you pick. One {kb} KB Windows app, free and open source.",
+        "{total} {voices.noun} для программ, которые вы выберете. Одно приложение для Windows на {kb} КБ, бесплатное, с открытым кодом.",
     ),
     // The navigation.
     ("nav.voices", "Voices", "Голоса"),
@@ -162,8 +167,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("hero.next", "next", "дальше"),
     (
         "hero.text",
-        "<b>{total} voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>374 KB</b> Windows app. Free, open source, no account.",
-        "<b>{total} {voices.noun}</b> для программ, которые вы выберете: от Discord и OBS до звонков и записи. Всё в одном приложении для Windows на <b>374 КБ</b>. Бесплатно, с открытым кодом, без аккаунта.",
+        "<b>{total} voices</b> for the programs you pick, from Discord and OBS to calls and recordings, in one <b>{kb} KB</b> Windows app. Free, open source, no account.",
+        "<b>{total} {voices.noun}</b> для программ, которые вы выберете: от Discord и OBS до звонков и записи. Всё в одном приложении для Windows на <b>{kb} КБ</b>. Бесплатно, с открытым кодом, без аккаунта.",
     ),
     ("hero.download", "Download Goby", "Скачать Goby"),
     ("hero.windows", "Windows 10 and 11", "Windows 10 и 11"),
@@ -345,6 +350,7 @@ const PAGE: &str = r##"<!doctype html>
 <meta property="og:locale" content="{{locale}}">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="{{root}}images/logo.svg" type="image/svg+xml">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Goby","description":"{{description}}","url":"{{url}}","inLanguage":"{{lang}}","operatingSystem":"Windows 10, Windows 11","applicationCategory":"MultimediaApplication","softwareVersion":"{version}","fileSize":"{kb} KB","license":"https://spdx.org/licenses/{license}.html","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}</script>
 <link rel="preconnect" href="https://api.fontshare.com">
 <link rel="preconnect" href="https://cdn.fontshare.com" crossorigin>
 <link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=pally@500,700&display=swap">

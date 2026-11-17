@@ -259,3 +259,20 @@ test("robots.txt allows everything and points at the sitemap", () => {
   assert.match(robots, /^User-agent: \*$/m);
   assert.match(robots, /^Sitemap: https:\/\/goby\.azer\.one\/sitemap\.xml$/m);
 });
+
+test("the structured data names the app, its version and licence as the Cargo.toml and the page do", () => {
+  const cargo = readFileSync(join(docs, "..", "Cargo.toml"), "utf8");
+  const version = cargo.match(/^version = "(.*)"$/m)[1];
+  const license = cargo.match(/^license = "(.*)"$/m)[1];
+  for (const [file, lang] of [["index.html", "en"], ["ru/index.html", "ru"]]) {
+    const html = readFileSync(join(docs, file), "utf8");
+    const ld = JSON.parse(html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/)[1]);
+    const description = html.match(/<meta name="description" content="([^"]*)"/)[1];
+    assert.equal(ld["@type"], "SoftwareApplication", file);
+    assert.equal(ld.softwareVersion, version, file);
+    assert.equal(ld.license, `https://spdx.org/licenses/${license}.html`, file);
+    assert.equal(ld.fileSize, "374 KB", file);
+    assert.equal(ld.description, description, file);
+    assert.equal(ld.inLanguage, lang, file);
+  }
+});
