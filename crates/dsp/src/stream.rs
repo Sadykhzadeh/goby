@@ -261,6 +261,120 @@ mod tests {
         }
     }
 
+    /// Asking for more than the capture delivered: the reader plays silence and counts the
+    /// underrun.
+    #[test]
+    fn underrun_plays_silence_and_counts_it() {
+        let (mut prod, cons) = ring(RATE as usize);
+        let mut r = Reader::new(cons, RATE);
+        for _ in 0..2000 {
+            prod.push(0.3);
+        }
+        let out: Vec<f32> = (0..4000).map(|_| r.next()).collect();
+        assert!(r.underruns() >= 1, "no underrun counted");
+        assert!(out[3500..].iter().all(|&s| s == 0.0), "output after the data ran out is not silence");
+        assert!(out[..200].iter().all(|&s| (0.0..=0.3).contains(&s)), "data before the underrun was altered");
+    }
+
+    /// Capture that runs ahead of the reader fills the ring, then the newest samples are
+    /// dropped. Once the reader runs again it trims its backlog back to its cushion.
+    #[test]
+    fn overrun_drops_the_newest_samples_and_the_reader_catches_up() {
+        let (mut prod, cons) = ring(4096);
+        let mut r = Reader::new(cons, RATE);
+        let accepted = (0..5000).filter(|_| prod.push(0.1)).count();
+        assert_eq!(accepted, 4096, "the ring took more than its capacity");
+        assert_eq!(r.queued(), 4096);
+        r.next();
+        let cushion = r.target;
+        assert!((r.queued() as f64 - cushion).abs() <= 2.0, "backlog {} after one frame", r.queued());
+    }
+
+    /// A 0.5 % faster capture for a minute: the cushion moves a little but does not keep
+    /// growing or shrinking, and a 1 kHz sine comes out with no step larger than the sine's
+    /// own steepest slope (up to 2 % more for the clock nudge).
+    #[test]
+    fn half_a_percent_clock_mismatch_for_a_minute_does_not_click_or_drift() {
+        let (mut prod, cons) = ring(RATE as usize);
+        let mut r = Reader::new(cons, RATE);
+        let slope = 0.5 * std::f64::consts::TAU * 1000.0 / RATE as f64;
+        let (mut fed, mut n, mut prev, mut worst_step) = (0.0f64, 0usize, 0.0f32, 0.0f32);
+        let mut fills = Vec::new();
+        for ms in 0..60_000usize {
+            fed += RATE as f64 * 1.005 / 1000.0;
+            while fed >= 1.0 {
+                let x = (0.5 * (std::f64::consts::TAU * 1000.0 * n as f64 / RATE as f64).sin()) as f32;
+                prod.push(x);
+                n += 1;
+                fed -= 1.0;
+            }
+            for _ in 0..RATE / 1000 {
+                let y = r.next();
+                if ms >= 100 {
+                    worst_step = worst_step.max((y - prev).abs());
+                }
+                prev = y;
+            }
+            if ms % 10_000 == 9_999 {
+                fills.push(r.queued());
+            }
+        }
+        assert_eq!(r.underruns(), 0, "the mismatch ran the ring dry");
+        assert!(fills.iter().all(|&f| (f as f64) < r.target * 4.0), "fill {fills:?}");
+        assert!(
+            worst_step as f64 <= slope * 1.02 + 1e-4,
+            "largest step {worst_step} against a sine slope of {slope}"
+        );
+    }
+
+    /// A 200 ms stall of the capture: the reader plays silence during it, counts one
+    /// underrun, and once data arrives again it is back on its cushion within half a second
+    /// with no further underrun.
+    #[test]
+    fn recovers_after_a_200_ms_stall() {
+        let (mut prod, cons) = ring(RATE as usize);
+        let mut r = Reader::new(cons, RATE);
+        let sine = |n: usize| (0.5 * (std::f64::consts::TAU * 1000.0 * n as f64 / RATE as f64).sin()) as f32;
+        // One second in step: 48 samples captured and 48 frames played each millisecond.
+        let mut n = 0usize;
+        for _ in 0..1000 {
+            for _ in 0..48 {
+                prod.push(sine(n));
+                n += 1;
+            }
+            for _ in 0..48 {
+                r.next();
+            }
+        }
+        assert_eq!(r.underruns(), 0);
+        // Nothing is captured for 200 ms while the reader keeps asking for audio.
+        let mut silent = 0usize;
+        for _ in 0..9_600 {
+            if r.next() == 0.0 {
+                silent += 1;
+            }
+        }
+        assert!(silent >= 8_500, "only {silent} silent frames during the stall");
+        assert!(r.underruns() >= 1, "the stall did not count as an underrun");
+        // Capture comes back in a burst of 20 ms, then carries on in step with the reader.
+        let burst = r.underruns();
+        for _ in 0..960 {
+            prod.push(sine(n));
+            n += 1;
+        }
+        for _ in 0..500 {
+            for _ in 0..48 {
+                prod.push(sine(n));
+                n += 1;
+            }
+            for _ in 0..48 {
+                r.next();
+            }
+        }
+        assert_eq!(r.underruns(), burst, "the reader ran dry again after recovering");
+        assert!((r.queued() as f64 - r.target).abs() < r.target, "fill {} after recovery", r.queued());
+    }
+
     /// The reader's interpolation weights always sum to one, so a steady level stays steady
     /// through the clock nudge (DC gain of exactly one), and it never dips while a stream
     /// runs faster than the output.
