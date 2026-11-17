@@ -233,3 +233,29 @@ test("with reduced motion the hero does not cycle on its own", () => {
   assert.equal(runSiteScript(siteJs).intervals.length, 1);
   assert.equal(runSiteScript(siteJs, { reduced: true }).intervals.length, 0);
 });
+
+test("the sitemap lists each page once, with its alternates and the day git last changed it", () => {
+  const xml = readFileSync(join(docs, "sitemap.xml"), "utf8");
+  const urls = [...xml.matchAll(/<url>([\s\S]*?)<\/url>/g)].map(([, body]) => ({
+    loc: body.match(/<loc>(.*?)<\/loc>/)[1],
+    lastmod: body.match(/<lastmod>(.*?)<\/lastmod>/)?.[1],
+    alternates: [...body.matchAll(/hreflang="([^"]+)" href="([^"]+)"/g)].map(([, lang, href]) => `${lang} ${href}`).sort(),
+  }));
+  const pages = ["index.html", "ru/index.html"].map(p => readFileSync(join(docs, p), "utf8"));
+  const canonicals = pages.map(p => p.match(/<link rel="canonical" href="([^"]+)"/)[1]).sort();
+  assert.deepEqual(urls.map(u => u.loc).sort(), canonicals);
+  for (const u of urls) {
+    assert.match(u.lastmod ?? "", /^\d{4}-\d{2}-\d{2}$/, u.loc);
+    assert.deepEqual(u.alternates, [
+      "en https://goby.azer.one/",
+      "ru https://goby.azer.one/ru/",
+      "x-default https://goby.azer.one/",
+    ]);
+  }
+});
+
+test("robots.txt allows everything and points at the sitemap", () => {
+  const robots = readFileSync(join(docs, "robots.txt"), "utf8");
+  assert.match(robots, /^User-agent: \*$/m);
+  assert.match(robots, /^Sitemap: https:\/\/goby\.azer\.one\/sitemap\.xml$/m);
+});

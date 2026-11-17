@@ -77,13 +77,55 @@ fn render(at: usize, version: &str) -> String {
 
 fn main() {
     let version = env!("GOBY_VERSION");
-    for (at, (_, path)) in PAGES.iter().enumerate() {
-        let page = render(at, version);
+    let mut files: Vec<(String, String)> =
+        PAGES.iter().enumerate().map(|(at, (_, path))| (path.to_string(), render(at, version))).collect();
+    files.push(("sitemap.xml".to_string(), sitemap()));
+    files.push(("robots.txt".to_string(), ROBOTS.to_string()));
+    for (path, text) in files {
         let out = format!("{}/../../docs/{path}", env!("CARGO_MANIFEST_DIR"));
         std::fs::create_dir_all(std::path::Path::new(&out).parent().expect("a folder")).expect("docs folder");
-        std::fs::write(&out, &page).unwrap_or_else(|e| panic!("docs/{path}: {e}"));
-        println!("wrote docs/{path}, {} bytes", page.len());
+        std::fs::write(&out, &text).unwrap_or_else(|e| panic!("docs/{path}: {e}"));
+        println!("wrote docs/{path}, {} bytes", text.len());
     }
+}
+
+const ROBOTS: &str = "User-agent: *\nAllow: /\n\nSitemap: https://goby.azer.one/sitemap.xml\n";
+
+/// The text row `key` in the language at `at`.
+fn text_of(key: &str, at: usize) -> &'static str {
+    let row = TEXTS.iter().find(|row| row.0 == key).expect("a text row");
+    [row.1, row.2][at]
+}
+
+/// Both pages with their alternates, and the day git last changed each page's file.
+fn sitemap() -> String {
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\" xmlns:xhtml=\"http://www.w3.org/1999/xhtml\">\n",
+    );
+    for (at, (_, path)) in PAGES.iter().enumerate() {
+        let lastmod = std::process::Command::new("git")
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+            .args(["log", "-1", "--format=%cs", "--", &format!("docs/{path}")])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|day| !day.is_empty());
+        out += "  <url>\n";
+        out += &format!("    <loc>{}</loc>\n", text_of("url", at));
+        if let Some(day) = lastmod {
+            out += &format!("    <lastmod>{day}</lastmod>\n");
+        }
+        for (alternate, (code, _)) in PAGES.iter().enumerate() {
+            out += &format!(
+                "    <xhtml:link rel=\"alternate\" hreflang=\"{code}\" href=\"{}\"/>\n",
+                text_of("url", alternate)
+            );
+        }
+        out += &format!("    <xhtml:link rel=\"alternate\" hreflang=\"x-default\" href=\"{}\"/>\n", text_of("url", 0));
+        out += "  </url>\n";
+    }
+    out += "</urlset>\n";
+    out
 }
 
 /// Every text of the page: its key, then the English and the Russian. A `js.` key is also
