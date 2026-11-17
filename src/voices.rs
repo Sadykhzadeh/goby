@@ -346,6 +346,20 @@ mod tests {
     }
 
     #[test]
+    fn every_voice_has_its_own_short_plain_name_in_each_language() {
+        for code in ["en", "ru"] {
+            crate::lang::choose(code, "en");
+            let names: Vec<&str> = ALL.iter().map(|v| v.name()).collect();
+            for (i, name) in names.iter().enumerate() {
+                assert!(name.chars().count() <= 30 && name.trim() == *name, "{code}: {name:?}");
+                assert!(name.chars().all(|c| c.is_alphanumeric() || " -'".contains(c)), "{code}: {name:?}");
+                assert!(!names[..i].contains(name), "{code}: {name:?} is there twice");
+            }
+        }
+        crate::lang::choose("en", "en");
+    }
+
+    #[test]
     fn ids_are_plain() {
         for v in ALL {
             assert!(v.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'), "id {}", v.id);
