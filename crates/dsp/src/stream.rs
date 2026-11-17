@@ -321,10 +321,7 @@ mod tests {
         }
         assert_eq!(r.underruns(), 0, "the mismatch ran the ring dry");
         assert!(fills.iter().all(|&f| (f as f64) < r.target * 4.0), "fill {fills:?}");
-        assert!(
-            worst_step as f64 <= slope * 1.02 + 1e-4,
-            "largest step {worst_step} against a sine slope of {slope}"
-        );
+        assert!(worst_step as f64 <= slope * 1.02 + 1e-4, "largest step {worst_step} against a sine slope of {slope}");
     }
 
     /// A 200 ms stall of the capture: the reader plays silence during it, counts one
