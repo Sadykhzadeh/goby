@@ -234,6 +234,12 @@ pub fn parse_decimal(s: &str) -> Option<f32> {
     v.is_finite().then_some(v)
 }
 
+/// A text value written on one line: a line break in it would end the line early, and the
+/// rest of it would be read as a setting of its own.
+fn one_line(v: &str) -> String {
+    v.replace('\n', " ")
+}
+
 /// Replaces a text value in place.
 #[inline(never)]
 fn set(dst: &mut String, v: &str) {
@@ -365,9 +371,9 @@ impl Settings {
     pub fn render(&self) -> String {
         format!(
             "input={}\noutput={}\nvoice={}\nsemitones={}\nvolume={}\nmonitor={}\nenabled={}\nmic_gain_db={}\ngate={}\ngate_db={}\ndry_mix={}\nexclusive_mic={}\nrouted={}\nunroute={}\ncable_named_tried={}\ntray={}\ntray_told={}\nhotkeys={}\nfavorites={}\npresets={}\nupdates={}\nupdate_checked={}\nlang={}\nwindow={}\n",
-            self.input,
-            self.output,
-            self.voice,
+            one_line(&self.input),
+            one_line(&self.output),
+            one_line(&self.voice),
             write_decimal(self.semitones),
             write_decimal(self.volume),
             self.monitor as u8,
@@ -779,5 +785,134 @@ mod tests {
             assert_eq!(write_decimal(v), format!("{v}"), "bits {bits:#x}");
             bits += 1;
         }
+    }
+
+    /// Every field set to a value that is not the default, as a file that was saved in full.
+    fn full_sample() -> Settings {
+        Settings {
+            input: "{0.0.1.00000000}.{abc}".into(),
+            output: "{0.0.0.00000000}.{def}".into(),
+            voice: "demon".into(),
+            semitones: -6.0,
+            volume: 1.25,
+            monitor: true,
+            enabled: false,
+            mic_gain_db: 6.0,
+            gate: true,
+            gate_db: -45.0,
+            dry_mix: 0.25,
+            exclusive: true,
+            routed: vec!["cs2.exe".into(), "discord.exe".into()],
+            unroute: vec!["obs64.exe".into()],
+            cable_named_tried: true,
+            tray: false,
+            tray_told: true,
+            hotkeys: false,
+            favorites: vec!["demon".into(), "robot".into()],
+            presets: vec![Preset { voice: "robot".into(), semitones: -2.5, dry_mix: 0.0, volume: 1.25 }],
+            updates: false,
+            update_checked: 1_794_000_000,
+            lang: "ru".into(),
+            window: Some(Placement { x: -1500, y: 40, w: 1000, h: 720, maximized: true }),
+        }
+    }
+
+    #[test]
+    fn hostile_files_never_panic_and_a_saved_file_reads_back_the_same() {
+        // Deterministic: fixed seed, 100k rounds of 1 to 4 random edits to a saved file, each
+        // read back into range; one round in ten is also saved and read again, and what that
+        // second read keeps must come back unchanged after one more save.
+        let sample = full_sample().render();
+        let pool: Vec<char> = "=;:,\n\r\u{feff}\0e-+.9Nna{}[] \t_\u{1F3B5}é".chars().collect();
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut text: Vec<char> = sample.chars().collect();
+        for round in 0..100_000 {
+            // Most rounds start from the sample again; the rest keep the damage of the last.
+            if round % 8 == 0 {
+                text = sample.chars().collect();
+            }
+            for _ in 0..1 + next() % 4 {
+                let at = next() as usize % text.len();
+                match next() % 3 {
+                    0 => text[at] = pool[next() as usize % pool.len()],
+                    1 => text.insert(at, pool[next() as usize % pool.len()]),
+                    _ => {
+                        text.remove(at);
+                    }
+                }
+            }
+            let file: String = text.iter().collect();
+            let read = Settings::parse(&file);
+            if round % 10 == 0 {
+                let once = Settings::parse(&read.render());
+                assert_eq!(Settings::parse(&once.render()), once, "{file:?}");
+            }
+            assert!((-12.0..=12.0).contains(&read.semitones) && (0.0..=2.0).contains(&read.volume), "{file:?}");
+            assert!((-12.0..=24.0).contains(&read.mic_gain_db) && (0.0..=1.0).contains(&read.dry_mix), "{file:?}");
+            assert!((-80.0..=-10.0).contains(&read.gate_db), "{file:?}");
+            assert!(read.window.is_none_or(|w| w.w > 0 && w.h > 0), "{file:?}");
+        }
+    }
+
+    #[test]
+    fn a_megabyte_line_costs_its_own_key_and_nothing_after_it() {
+        let digits = "9".repeat(1 << 20);
+        let s = Settings::parse(&format!("volume={digits}\nvoice=demon\nsemitones=3\n"));
+        assert_eq!(s.volume, Settings::default().volume, "an absurd number is a default, not a clamp");
+        assert_eq!((s.voice.as_str(), s.semitones), ("demon", 3.0));
+        let s = Settings::parse(&format!("presets={}\nlang=ru\n", "ghost:1:0:1;".repeat(90_000)));
+        assert_eq!(s.presets.len(), 90_000);
+        assert_eq!(s.lang, "ru");
+    }
+
+    #[test]
+    fn nul_bytes_and_repeated_keys_keep_one_value_per_key() {
+        // A NUL is not a digit, so a number with one falls back; a name keeps it as it is.
+        let s = Settings::parse("volume=1\u{0}5\nvoice=demon\0x\ngate_db=-4\0\n");
+        assert_eq!(s.volume, Settings::default().volume);
+        assert_eq!(s.voice, "demon\0x");
+        assert_eq!(s.gate_db, Settings::default().gate_db);
+        // Repeated keys: the last line wins, as in any ini reader that keeps going.
+        let s = Settings::parse("volume=0.5\nvolume=1.5\nvoice=robot\nvoice=\nupdates=0\nupdates=1\n");
+        assert_eq!((s.volume, s.voice.as_str(), s.updates), (1.5, "", true));
+    }
+
+    #[test]
+    fn saved_voices_keep_their_odd_names_and_all_of_them() {
+        // Names with `=` and `[` and emoji, a 300-character one, and the count of a long list.
+        let mut presets = vec![
+            Preset { voice: "a=b".into(), semitones: 1.0, dry_mix: 0.0, volume: 1.0 },
+            Preset { voice: "[odd]".into(), semitones: 0.0, dry_mix: 0.5, volume: 1.0 },
+            Preset { voice: "\u{1F3B5}\u{e9}".into(), semitones: 0.0, dry_mix: 0.0, volume: 0.5 },
+            Preset { voice: "x".repeat(300), semitones: 0.0, dry_mix: 0.0, volume: 1.0 },
+        ];
+        presets.extend((0..5_000).map(|i| Preset {
+            voice: format!("voice{i}"),
+            semitones: (i % 25) as f32 - 12.0,
+            dry_mix: 0.0,
+            volume: 1.0,
+        }));
+        let s = Settings { presets, favorites: vec!["demon".into(), "a=b".into()], ..Settings::default() };
+        let back = Settings::parse(&s.render());
+        assert_eq!(back.presets, s.presets);
+        assert_eq!(back.favorites, ["demon", "a=b"]);
+        assert_eq!(back.voice, s.voice);
+    }
+
+    #[test]
+    fn a_voice_name_with_a_line_break_must_not_eat_the_next_setting() {
+        // Parsing never produces a line break in a name, but a name set by hand could carry one,
+        // and written as it is it would start a line of its own.
+        // `input` is written before `voice`, so a line it starts would be read after the real one.
+        let s = Settings { voice: "demon\ninput=evil".into(), ..Settings::default() };
+        let back = Settings::parse(&s.render());
+        assert_eq!(back.input, "");
+        assert_eq!(back.voice, "demon input=evil");
     }
 }
