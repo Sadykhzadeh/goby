@@ -143,3 +143,14 @@ test("every figure with a unit on the English page is also in the README", () =>
   assert.ok(figures.length > 0);
   for (const f of new Set(figures)) assert.ok(readme.includes(f), `${f} is not in the README`);
 });
+
+test("the hero's waveforms are 74 voices of 60 points, in whole hundredths", () => {
+  const html = readFileSync(join(docs, "index.html"), "utf8");
+  const voices = JSON.parse(html.match(/id="hero-voices">([\s\S]*?)<\/script>/)[1]);
+  assert.equal(voices.length, 74);
+  for (const [name, points] of voices) {
+    assert.ok(name);
+    assert.equal(points.length, 60, name);
+    for (const p of points) assert.ok(Number.isInteger(p) && p >= -100 && p <= 100, `${name}: ${p}`);
+  }
+});

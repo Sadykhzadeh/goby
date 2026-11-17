@@ -8,7 +8,7 @@ const TEXT = JSON.parse($("texts").textContent);
 const HERE = document.currentScript.src;
 
 // Every voice's name and waveform, as the app draws it on its tile.
-const VOICES = JSON.parse($("hero-voices").textContent).map(([name, pts]) => ({ name, pts }));
+const VOICES = JSON.parse($("hero-voices").textContent).map(([name, pts]) => ({ name, pts: pts.map(v => v / 100) }));
 
 function smooth(p, w, h, amp) {
   const step = w / (p.length - 1), y = v => (h / 2 - v * amp).toFixed(1);

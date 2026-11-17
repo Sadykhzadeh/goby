@@ -25,13 +25,14 @@ mod voices;
 /// and where the page is written, relative to docs/.
 const PAGES: [(&str, &str); 2] = [("en", "index.html"), ("ru", "ru/index.html")];
 
-/// The hero eases between the voices' waveforms: [[name, [points]], ...], 60 points each.
+/// The hero eases between the voices' waveforms: [[name, [points]], ...], 60 points each, in
+/// hundredths (the page divides by 100 again, so -0.44 is written -44).
 fn hero() -> String {
     let rows: Vec<String> = voices::ALL
         .iter()
         .zip(voices::glyphs(60))
         .map(|(v, g)| {
-            let points: Vec<String> = g.iter().map(|x| format!("{}", (x * 100.0).round() / 100.0 + 0.0)).collect();
+            let points: Vec<String> = g.iter().map(|x| format!("{}", (x * 100.0).round() as i64)).collect();
             format!("[\"{}\",[{}]]", v.name(), points.join(","))
         })
         .collect();
