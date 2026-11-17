@@ -393,3 +393,97 @@ for (const [name, text, expected] of docProblems) {
 test("the project's own Markdown passes", () => {
   assert.deepEqual(checkMarkdown(fileURLToPath(new URL("..", import.meta.url))), []);
 });
+
+// ---- The figures the documents repeat: each must be the same wherever it is written ----
+// The generated pages take the voice count from the code, so they stand for the code where the
+// figure comes from the build. Each test lists the places a figure is written and fails when any
+// of them disagree.
+
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const read = rel => readFileSync(join(repoRoot, rel), "utf8");
+const figures = (text, re) => [...text.matchAll(re)].map(m => m[1]);
+const same = (name, values) => {
+  assert.ok(values.length > 0, `${name}: no figure found`);
+  assert.equal(new Set(values).size, 1, `${name} disagrees: ${JSON.stringify(values)}`);
+};
+
+test("the voice count is the same in the README, the pages and the how-it-works page", () => {
+  // how-it-works gives the count of the 0.4.0 build as history, which is not the current count.
+  const howItWorks = read("docs/how-it-works.md").replace(/when the app had \d+ voices/, "");
+  same("voices", [
+    ...figures(read("README.md"), /(\d+) voices/g),
+    ...figures(howItWorks, /(\d+) voices/g),
+    ...figures(read("docs/index.html"), /(\d+) voices/g),
+    ...figures(read("docs/ru/index.html"), /(\d+) голоса/g),
+  ]);
+});
+
+test("the release size is the same in the README, how-it-works, both pages and the generator", () => {
+  const bytes = Number(figures(read("docs/how-it-works.md"), /\((\d{1,3}(?:,\d{3})+) bytes\)/g)[0].replace(/,/g, ""));
+  same("exe size in KB", [
+    ...figures(read("README.md"), /(\d+) KB/g),
+    ...figures(read("docs/how-it-works.md"), /\| Executable \| (\d+) KB/g),
+    ...figures(read("docs/index.html"), /(\d+) KB/g),
+    ...figures(read("docs/ru/index.html"), /(\d+) КБ/g),
+    ...figures(read("site/dsp-wasm/src/bin/site.rs"), /SIZE_KB: &str = "(\d+)"/g),
+    String(Math.round(bytes / 1024)),
+  ]);
+});
+
+test("the latency figures agree: the mean, the low-latency mode and the 11 ms it saves", () => {
+  const mean = [
+    ...figures(read("README.md"), /about (\d+) ms from your mouth/g),
+    ...figures(read("docs/how-it-works.md"), /(\d+) ms on average/g),
+    ...figures(read("docs/index.html"), /About <b>(\d+) ms<\/b>/g),
+    ...figures(read("docs/ru/index.html"), /Около <b>(\d+) мс<\/b>/g),
+  ];
+  same("mean latency", mean);
+  const low = Number(figures(read("docs/how-it-works.md"), /(\d+) ms with \*Low latency\*/g)[0]);
+  const saved = [
+    ...figures(read("README.md"), /about (\d+) ms less delay/g),
+    ...figures(read("docs/index.html"), /about (\d+) ms less delay/g),
+    ...figures(read("docs/ru/index.html"), /примерно на (\d+) мс/g),
+    String(Number(mean[0]) - low),
+  ];
+  same("latency saved by Low latency", saved);
+});
+
+test("the CPU share is under 1 % wherever the pages claim it, and every measured share is below it", () => {
+  same("CPU bound", [
+    ...figures(read("README.md"), /under (\d+) % of one CPU core/g),
+    ...figures(read("docs/index.html"), /Under <b>(\d+) %<\/b> of one core/g),
+    ...figures(read("docs/ru/index.html"), /Меньше <b>(\d+) %<\/b> одного ядра/g),
+  ]);
+  const measured = figures(read("docs/how-it-works.md"), /(\d+\.\d+) % of one core/g).map(Number);
+  assert.ok(measured.length > 0);
+  assert.ok(Math.max(...measured) < 1, `a measured share is not under 1 %: ${Math.max(...measured)}`);
+});
+
+test("the update check runs once a day in the README, install.md and the code", () => {
+  assert.match(read("README.md"), /at most once a day/);
+  assert.match(read("docs/install.md"), /At most once a day/);
+  assert.match(read("src/settings.rs"), /once a day/);
+});
+
+test("the signature algorithm is the same in install.md and the updater", () => {
+  assert.match(read("docs/install.md"), /ECDSA P-256/);
+  assert.match(read("src/update.rs"), /ECDSA P-256/);
+  assert.match(read("src/update.rs"), /BCRYPT_ECDSA_P256_ALGORITHM/);
+});
+
+test("the version in the download names is the crate's version", () => {
+  const version = read("Cargo.toml").match(/^version = "(.*)"$/m)[1];
+  same("release file version", [
+    ...figures(read("README.md"), /goby-(\d+\.\d+\.\d+)-windows-x64/g),
+    ...figures(read("docs/install.md"), /goby-(\d+\.\d+\.\d+)-windows-x64/g),
+    ...figures(read("docs/install.md"), /goby-(\d+\.\d+\.\d+)-windows-x64\.exe --install/g),
+    version,
+  ]);
+});
+
+test("the Rust version needed to build is the same in the README and install.md", () => {
+  same("Rust version", [
+    ...figures(read("README.md"), /Rust (\d+\.\d+)/g),
+    ...figures(read("docs/install.md"), /Rust (\d+\.\d+)/g),
+  ]);
+});
