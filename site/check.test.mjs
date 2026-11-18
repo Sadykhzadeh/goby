@@ -268,6 +268,20 @@ test("the live status is announced, and the try button names its state once", ()
   assert.match(readFileSync(join(docs, "site.css"), "utf8"), /\.try-btn\.on \{/);
 });
 
+test("every rule that removes an outline has a visible focus ring on the same element", () => {
+  const css = readFileSync(join(docs, "site.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => ({ selector, body }));
+  const element = selector => selector.replace(/:[a-z-]+(\([^)]*\))?/g, "").trim();
+  const ringed = new Set(
+    rules
+      .filter(r => /outline:\s*(?!none|0\b)/.test(r.body))
+      .flatMap(r => r.selector.split(",").filter(s => s.includes(":focus-visible")).map(element)),
+  );
+  const removed = rules.filter(r => /outline:\s*(none|0)\b/.test(r.body)).flatMap(r => r.selector.split(",").map(element));
+  assert.ok(removed.length > 0);
+  for (const name of removed) assert.ok(ringed.has(name), `${name} removes its outline with no :focus-visible ring`);
+});
+
 test("with reduced motion the hero does not cycle on its own", () => {
   const siteJs = readFileSync(join(docs, "site.js"), "utf8");
   assert.equal(runSiteScript(siteJs).intervals.length, 1);
