@@ -331,6 +331,7 @@ test("the social tags agree with the page and describe the image that exists", (
     assert.equal(meta(html, "og:locale:alternate"), other, file);
     assert.equal(meta(html, "og:image:width"), String(width), file);
     assert.equal(meta(html, "og:image:height"), String(height), file);
+    assert.ok(meta(html, "og:image:alt"), file);
     assert.equal(meta(html, "og:image"), "https://goby.azer.one/images/social.png", file);
   }
 });

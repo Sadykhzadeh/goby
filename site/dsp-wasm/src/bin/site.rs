@@ -158,6 +158,11 @@ const TEXTS: &[(&str, &str, &str)] = &[
         "{total} voices for the programs you pick. One {kb} KB Windows app, free and open source.",
         "{total} {voices.noun} для программ, которые вы выберете. Одно приложение для Windows на {kb} КБ, бесплатное, с открытым кодом.",
     ),
+    (
+        "og.image_alt",
+        "Goby: talk like anyone else. A free, open-source voice changer for Windows.",
+        "Goby: говорите чужим голосом. Бесплатный голосовой меняла для Windows с открытым кодом.",
+    ),
     // The navigation.
     ("nav.voices", "Voices", "Голоса"),
     ("nav.setup", "Setup", "Настройка"),
@@ -351,6 +356,7 @@ const PAGE: &str = r##"<!doctype html>
 <meta property="og:image" content="https://goby.azer.one/images/social.png">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="{{og.image_alt}}">
 <meta property="og:url" content="{{url}}">
 <meta property="og:locale" content="{{locale}}">
 <meta property="og:locale:alternate" content="{{locale.other}}">
