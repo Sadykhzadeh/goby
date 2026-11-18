@@ -35,6 +35,12 @@ fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// Whether a check is due. A last check that lies in the future, as after the clock was set
+/// back, is due at once: a check then records the real time, so the wait starts over.
+fn due(now: u64, last: u64) -> bool {
+    now < last || now - last >= EVERY
+}
+
 /// Runs `work` on a thread of its own and wakes the window with `msg` when it is done.
 fn in_background(hwnd: HWND, msg: u32, work: Box<dyn FnOnce() + Send>) {
     let raw = hwnd.0 as isize;
@@ -48,7 +54,7 @@ fn in_background(hwnd: HWND, msg: u32, work: Box<dyn FnOnce() + Send>) {
 
 /// Starts the daily check, a little after start-up so it never competes with the audio.
 pub(super) fn check(host: &mut Desktop, settings: &Settings, delay: Duration) {
-    if !settings.updates || now().saturating_sub(settings.update_checked) < EVERY {
+    if !settings.updates || !due(now(), settings.update_checked) {
         return;
     }
     let inbox = host.inbox.clone();
@@ -119,4 +125,21 @@ impl Win {
 
 pub(super) fn inbox() -> Arc<Mutex<Inbox>> {
     Arc::new(Mutex::new(Inbox::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_check_waits_a_day_and_is_due_again_when_the_clock_went_back() {
+        let last = 1_800_000_000;
+        assert!(!due(last, last));
+        assert!(!due(last + EVERY - 1, last));
+        assert!(due(last + EVERY, last));
+        assert!(due(last - 1, last));
+        assert!(due(last - 365 * 24 * 60 * 60, last));
+        assert!(due(0, u64::MAX));
+        assert!(!due(u64::MAX, u64::MAX - EVERY + 1));
+    }
 }
