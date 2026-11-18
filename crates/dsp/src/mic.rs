@@ -1,9 +1,24 @@
-//! What happens to the microphone before the voice: gain and a noise gate.
+//! What happens to the microphone before the voice: gain, a soft limit and a noise gate.
 
 use crate::fx::{Envelope, db};
 
-/// Input stage: make-up gain, then a gate that closes on keyboard clicks, fans and
-/// breathing between phrases.
+/// Up to this level the microphone passes unchanged; above it, peaks are eased towards full
+/// scale. A boost can push speech past 1.0, and an unlimited sample reaches the program
+/// that receives the cable, which clips it hard.
+const KNEE: f32 = 0.8;
+
+/// Identity up to `KNEE`, then a curve that meets it with the same slope and levels off at
+/// 1.0. `x` is finite.
+fn limit(x: f32) -> f32 {
+    let a = x.abs();
+    if a <= KNEE {
+        return x;
+    }
+    (KNEE + (1.0 - KNEE) * ((a - KNEE) / (1.0 - KNEE)).tanh()).copysign(x)
+}
+
+/// Input stage: make-up gain, a soft limit, then a gate that closes on keyboard clicks, fans
+/// and breathing between phrases.
 pub struct Mic {
     sample_rate: f32,
     envelope: Envelope,
@@ -29,7 +44,7 @@ impl Mic {
         for s in block.iter_mut() {
             let x = *s * gain;
             // A NaN or infinity from the driver would never leave the envelope or the voice's filters.
-            let x = if x.is_finite() { x } else { 0.0 };
+            let x = if x.is_finite() { limit(x) } else { 0.0 };
             let level = self.envelope.next(x, 0.2, 0.0015);
             let target = match threshold {
                 None => 1.0,
@@ -66,6 +81,27 @@ mod tests {
         let mut block = vec![0.1f32; 100];
         m.process(&mut block, 6.0, None);
         assert!((block[99] - 0.1995).abs() < 1e-3, "{}", block[99]);
+    }
+
+    #[test]
+    fn a_boost_past_full_scale_is_eased_in_under_it() {
+        assert_eq!(limit(0.79), 0.79);
+        assert_eq!(limit(-0.8), -0.8);
+        assert!((limit(0.8 + 1e-4) - (0.8 + 1e-4)).abs() < 1e-6);
+        let mut last = 0.8f32;
+        for step in 1..=500 {
+            let y = limit(0.8 + step as f32 * 0.001);
+            assert!(y > last && y < 1.0, "{step}: {y}");
+            last = y;
+        }
+        assert_eq!(limit(-f32::MAX), -limit(f32::MAX));
+        assert!(limit(f32::MAX) <= 1.0);
+
+        let mut m = Mic::new(SR);
+        let mut loud: Vec<f32> = (0..SR as usize).map(|i| sine(200.0, i, SR as f32) * 0.5).collect();
+        m.process(&mut loud, 24.0, None);
+        assert!(level(&loud) <= 1.0, "boosted speech goes past full scale: {}", level(&loud));
+        assert!(level(&loud[SR as usize / 2..]) > 0.9, "boosted speech is too quiet");
     }
 
     #[test]
