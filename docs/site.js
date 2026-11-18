@@ -66,7 +66,9 @@ const load = () => loading ??= fetch(new URL("goby.wasm", HERE))
     const w = await import(new URL("window.js", HERE));
     await w.open(bytes);
     return w;
-  });
+  })
+  // A failed load is forgotten, so the next click or visit asks for the files again.
+  .catch(err => { loading = undefined; throw err; });
 new IntersectionObserver((seen, io) => {
   if (seen.some(e => e.isIntersecting)) { io.disconnect(); load().catch(() => {}); }
 }, { rootMargin: "600px" }).observe($("win"));

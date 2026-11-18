@@ -161,7 +161,14 @@ test("the hero's waveforms are 74 voices of 60 points, in whole hundredths", () 
 function runSiteScript(html, { reduced = false } = {}) {
   const doc = fileURLToPath(new URL("../docs/index.html", import.meta.url));
   const page = readFileSync(doc, "utf8");
-  const el = id => ({ id, textContent: "", setAttribute() {}, addEventListener() {}, querySelector: () => el("x") });
+  const listeners = {};
+  const el = id => ({
+    id,
+    textContent: "",
+    setAttribute() {},
+    addEventListener: (type, fn) => (listeners[`${id} ${type}`] ??= []).push(fn),
+    querySelector: () => el("x"),
+  });
   const elements = {
     texts: { textContent: page.match(/id="texts">([\s\S]*?)<\/script>/)[1] },
     "hero-voices": { textContent: page.match(/id="hero-voices">([\s\S]*?)<\/script>/)[1] },
@@ -198,7 +205,7 @@ function runSiteScript(html, { reduced = false } = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(html, ctx, { filename: "site.js" });
-  return { ctx, observed, fetches, intervals };
+  return { ctx, observed, fetches, intervals, listeners };
 }
 
 test("the page's script shows the 74 voices in hundredths decoded and eases between them", () => {
@@ -226,6 +233,17 @@ test("the window and its wasm are not requested until the window nears the scree
   win.cb([{ isIntersecting: true }], win.io);
   assert.equal(fetches.length, 1);
   assert.match(fetches[0], /goby\.wasm$/);
+});
+
+test("a window that failed to load is asked for again on the next try", async () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  const { observed, fetches, listeners } = runSiteScript(siteJs);
+  const win = observed.find(o => o.target.id === "win");
+  win.cb([{ isIntersecting: true }], win.io);
+  await new Promise(done => setImmediate(done));
+  assert.equal(fetches.length, 1);
+  for (const fn of listeners["try click"]) fn();
+  assert.equal(fetches.length, 2, "the failed load stays cached and the click never asks again");
 });
 
 test("with reduced motion the hero does not cycle on its own", () => {
