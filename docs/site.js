@@ -52,7 +52,7 @@ const ease = k => 1 - Math.pow(1 - Math.min(1, k), 3);
   draw(1);
   if (!still) {
     setInterval(() => {
-      if (visible && !document.hidden && performance.now() - lastClick > 6000) show(at + 1);
+      if (visible && !document.hidden && !hero.matches(":hover, :focus-within") && performance.now() - lastClick > 6000) show(at + 1);
     }, 2600);
   }
 }

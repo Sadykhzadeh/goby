@@ -168,7 +168,7 @@ footer .credit:hover { color: var(--ink); text-decoration: underline; text-under
 }
 .try-btn:hover { background: #2e2619; }
 .try-btn .ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
-.try-btn[aria-pressed="true"] { background: var(--amber); color: #1a140a; }
+.try-btn.on { background: var(--amber); color: #1a140a; }
 .try p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.45; }
 .try p b { color: var(--ink); font-weight: 600; }
 

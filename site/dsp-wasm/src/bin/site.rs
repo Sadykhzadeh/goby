@@ -406,10 +406,10 @@ const PAGE: &str = r##"<!doctype html>
       <noscript><p>{{live.nojs}}</p></noscript>
       <div class="try">
         <div class="try-row">
-          <button class="try-btn" id="try" type="button" aria-pressed="false"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.8" y="1.5" width="4.4" height="8" rx="2.2"/><path d="M3.3 7.6a4.7 4.7 0 0 0 9.4 0M8 12.3v2.2"/></svg><span id="try-label">{{js.try.off}}</span></button>
+          <button class="try-btn" id="try" type="button"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.8" y="1.5" width="4.4" height="8" rx="2.2"/><path d="M3.3 7.6a4.7 4.7 0 0 0 9.4 0M8 12.3v2.2"/></svg><span id="try-label">{{js.try.off}}</span></button>
           <button class="sample" id="sample" type="button"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true"><path class="play" d="M4.5 2.8v10.4L13 8z"/><rect class="stop" x="3.5" y="3.5" width="9" height="9" rx="1.6"/></svg><span id="sample-label">{{js.sample.play}}</span></button>
         </div>
-        <p id="try-note">{{live.note}}</p>
+        <p id="try-note" aria-live="polite">{{live.note}}</p>
       </div>
     </div>
 

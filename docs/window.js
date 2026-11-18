@@ -203,7 +203,7 @@ let source = "mic", pending = null, run = 0;
 
 function ui() {
   const mic = wantsLive && source === "mic", playing = wantsLive && source === "sample";
-  tryBtn.setAttribute("aria-pressed", mic);
+  tryBtn.classList.toggle("on", mic);
   tryLabel.textContent = mic ? T["try.on"] : T["try.off"];
   sampleBtn.classList.toggle("on", playing);
   if (!sampleBtn.disabled) sampleLabel.textContent = playing ? T["sample.stop"] : T["sample.play"];

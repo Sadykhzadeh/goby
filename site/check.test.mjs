@@ -158,7 +158,7 @@ test("the hero's waveforms are 74 voices of 60 points, in whole hundredths", () 
 
 // The page's script, run against a stub of the few DOM calls it makes at load. It shows the hero's
 // voices and easing, and that the window (goby.wasm) is asked for only when it nears the screen.
-function runSiteScript(html, { reduced = false } = {}) {
+function runSiteScript(html, { reduced = false, hovered = false, clock = 0 } = {}) {
   const doc = fileURLToPath(new URL("../docs/index.html", import.meta.url));
   const page = readFileSync(doc, "utf8");
   const listeners = {};
@@ -168,6 +168,7 @@ function runSiteScript(html, { reduced = false } = {}) {
     setAttribute() {},
     addEventListener: (type, fn) => (listeners[`${id} ${type}`] ??= []).push(fn),
     querySelector: () => el("x"),
+    matches: () => false,
   });
   const elements = {
     texts: { textContent: page.match(/id="texts">([\s\S]*?)<\/script>/)[1] },
@@ -181,7 +182,7 @@ function runSiteScript(html, { reduced = false } = {}) {
     document: {
       currentScript: { src: "https://goby.azer.one/site.js" },
       getElementById: id => elements[id] ?? el(id),
-      querySelector: () => el("hero"),
+      querySelector: () => Object.assign(el("hero"), { matches: sel => hovered && sel === ":hover, :focus-within" }),
     },
     matchMedia: () => ({ matches: reduced }),
     IntersectionObserver: class {
@@ -194,8 +195,8 @@ function runSiteScript(html, { reduced = false } = {}) {
       disconnect() {}
     },
     requestAnimationFrame: () => 0,
-    setInterval: () => intervals.push(1),
-    performance: { now: () => 0 },
+    setInterval: fn => intervals.push(fn),
+    performance: { now: () => clock },
     fetch: url => {
       fetches.push(String(url));
       return Promise.resolve({ ok: false, status: 404 });
@@ -205,7 +206,7 @@ function runSiteScript(html, { reduced = false } = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(html, ctx, { filename: "site.js" });
-  return { ctx, observed, fetches, intervals, listeners };
+  return { ctx, observed, fetches, intervals, listeners, elements };
 }
 
 test("the page's script shows the 74 voices in hundredths decoded and eases between them", () => {
@@ -244,6 +245,27 @@ test("a window that failed to load is asked for again on the next try", async ()
   assert.equal(fetches.length, 1);
   for (const fn of listeners["try click"]) fn();
   assert.equal(fetches.length, 2, "the failed load stays cached and the click never asks again");
+});
+
+test("the hero cycles on its own, and holds still while the pointer or the keyboard is on it", () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  const next = { name: vm.runInContext("VOICES", runSiteScript(siteJs).ctx)[2].name };
+  const idle = runSiteScript(siteJs, { clock: 10_000 });
+  idle.intervals[0]();
+  assert.equal(idle.elements.name.textContent, next.name);
+  const on = runSiteScript(siteJs, { clock: 10_000, hovered: true });
+  on.intervals[0]();
+  assert.equal(on.elements.name.textContent, "Minion");
+});
+
+test("the live status is announced, and the try button names its state once", () => {
+  for (const page of ["index.html", "ru/index.html"]) {
+    const html = readFileSync(join(docs, page), "utf8");
+    assert.match(html, /<p id="try-note" aria-live="polite">/, page);
+    assert.doesNotMatch(html, /aria-pressed/, page);
+  }
+  assert.doesNotMatch(readFileSync(join(docs, "window.js"), "utf8"), /aria-pressed/);
+  assert.match(readFileSync(join(docs, "site.css"), "utf8"), /\.try-btn\.on \{/);
 });
 
 test("with reduced motion the hero does not cycle on its own", () => {
