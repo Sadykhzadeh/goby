@@ -5,6 +5,7 @@
 //   node site/check.mjs [docs]
 //
 // Exits 1 and lists every problem it finds.
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -170,6 +171,19 @@ export function checkSite(dirArg) {
         return (key === "user-scalable" && (value === "no" || value === "0")) || (key === "maximum-scale" && Number(value) < 2);
       });
       if (zoomOff) bad(page, `the viewport stops pinch zoom: "${v.attrs.content}"`);
+    }
+
+    const policy = all.find(n => n.tag === "meta" && n.attrs["http-equiv"]?.toLowerCase() === "content-security-policy");
+    if (!policy) bad(page, "no Content-Security-Policy meta");
+    else {
+      const rules = policy.attrs.content ?? "";
+      if (/'unsafe-(inline|eval)'/.test(rules)) bad(page, "the Content-Security-Policy allows unsafe inline script or style");
+      const allowed = new Set(rules.match(/'sha256-[^']+'/g) ?? []);
+      for (const n of all.filter(x => x.tag === "style")) {
+        const text = n.children.filter(c => typeof c === "string").join("");
+        const hash = `'sha256-${createHash("sha256").update(text).digest("base64")}'`;
+        if (!allowed.has(hash)) bad(page, `an inline <style> is not allowed by the Content-Security-Policy: ${hash}`);
+      }
     }
 
     const h1s = all.filter(n => n.tag === "h1");

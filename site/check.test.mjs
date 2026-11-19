@@ -15,6 +15,7 @@ const page = ({ lang = "en", body = "", head = "" } = {}) => {
 <html lang="${lang}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'">
 <title>Goby</title>
 <meta name="description" content="A voice changer.">
 <link rel="canonical" href="https://goby.azer.one/${lang === "ru" ? "ru/" : ""}">
@@ -96,6 +97,9 @@ const cases = [
   ["an input without a label", f => { f["index.html"] = page({ body: '<input id="q" type="text">' }); }, /has no label/],
   ["a viewport that caps zoom", f => { f["index.html"] = page({ head: '<meta name="viewport" content="width=device-width, maximum-scale=1">' }); }, /viewport stops pinch zoom/],
   ["a viewport that turns zoom off", f => { f["index.html"] = page({ head: '<meta name="viewport" content="width=device-width, user-scalable=no">' }); }, /viewport stops pinch zoom/],
+  ["no Content-Security-Policy", f => { f["index.html"] = page().replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/, ""); }, /no Content-Security-Policy meta/],
+  ["a policy that allows inline script", f => { f["index.html"] = page().replace("default-src 'none'", "default-src 'none'; script-src 'self' 'unsafe-inline'"); }, /allows unsafe inline/],
+  ["an inline style the policy does not hash", f => { f["index.html"] = page({ head: "<style>p{color:red}</style>" }); }, /inline <style> is not allowed/],
   ["a blank-target link without noopener", f => { f["index.html"] = page({ body: '<a href="https://example.com/" target="_blank">x</a>' }); }, /lacks rel="noopener"/],
 ];
 

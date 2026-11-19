@@ -341,6 +341,7 @@ const PAGE: &str = r##"<!doctype html>
 <html lang="{{lang}}">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' https://api.fontshare.com 'sha256-HWWQ6cOCnZFLKJ0LyI/+rcessfFL/BFkPuY2Ml/6AXc='; font-src https://cdn.fontshare.com; img-src 'self' data:; connect-src 'self'; media-src 'self'; base-uri 'none'; object-src 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{title}}</title>
 <meta name="description" content="{{description}}">
