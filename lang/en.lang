@@ -30,9 +30,9 @@ unit.db = {value} dB
 status.no_mic = No microphone found
 status.no_output = No output devices
 status.lost = Device lost, reconnecting…
-error.no_answer = The audio device did not respond
-error.in_use = Another program holds the device exclusively
-error.unplugged = The device was unplugged
+error.no_answer = The audio device did not respond. Check its connection, then choose it again under Settings > Microphone > Device
+error.in_use = Another program holds the device exclusively. Close it and try again
+error.unplugged = The device was unplugged. Plug it back in, then choose it again under Settings > Microphone > Device
 error.audio = Audio error: {message}
 
 # The programs page
