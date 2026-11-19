@@ -134,7 +134,7 @@ footer .credit { font-size: 13px; }
 footer .credit .heart { color: var(--amber); }
 footer .credit:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 .word {
-  display: block; margin: 0 0 -0.2em; text-align: center; white-space: nowrap;
+  display: block; margin: 0 0 -0.2em; text-align: center; white-space: nowrap; pointer-events: none;
   font: 700 clamp(120px, 27vw, 380px)/1 var(--display);
   letter-spacing: 0.02em; color: #221b11;
 }
