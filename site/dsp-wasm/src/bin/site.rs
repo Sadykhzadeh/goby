@@ -191,6 +191,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ),
     ("js.try.off", "Try it with your microphone", "Попробовать с микрофоном"),
     ("js.try.on", "Stop listening", "Выключить микрофон"),
+    ("js.rotate.pause", "Pause the voices", "Остановить смену голосов"),
+    ("js.rotate.resume", "Resume the voices", "Продолжить смену голосов"),
     ("js.sample.play", "Play a sample", "Послушать пример"),
     ("js.sample.stop", "Stop the sample", "Остановить пример"),
     ("js.sample.none", "Sample unavailable", "Пример недоступен"),
@@ -394,6 +396,7 @@ const PAGE: &str = r##"<!doctype html>
       <button class="voice" id="voice" type="button" title="{{hero.next.title}}">
         <small id="count">{at} / {total}</small><span id="name">{first}</span><span class="next">{{hero.next}}</span>
       </button>
+      <button class="rotate" id="rotate" type="button" hidden>{{js.rotate.pause}}</button>
     </div>
     <div class="foot">
       <p>{{hero.text}}</p>

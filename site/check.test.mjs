@@ -180,6 +180,7 @@ function runSiteScript(html, { reduced = false, hovered = false, clock = 0 } = {
     texts: { textContent: page.match(/id="texts">([\s\S]*?)<\/script>/)[1] },
     "hero-voices": { textContent: page.match(/id="hero-voices">([\s\S]*?)<\/script>/)[1] },
     name: Object.assign(el("name"), { textContent: "Minion" }),
+    rotate: Object.assign(el("rotate"), { hidden: false }),
   };
   const observed = [];
   const fetches = [];
@@ -251,6 +252,25 @@ test("a window that failed to load is asked for again on the next try", async ()
   assert.equal(fetches.length, 1);
   for (const fn of listeners["try click"]) fn();
   assert.equal(fetches.length, 2, "the failed load stays cached and the click never asks again");
+});
+
+test("the hero's pause control holds the voices, and a second press turns them again", () => {
+  const siteJs = readFileSync(join(docs, "site.js"), "utf8");
+  const run = runSiteScript(siteJs, { clock: 10_000 });
+  const name = () => run.elements.name.textContent;
+  const press = () => run.listeners["rotate click"][0]();
+  assert.equal(run.elements.rotate.hidden, false);
+  press();
+  assert.equal(run.elements.rotate.textContent, "Resume the voices");
+  const held = name();
+  run.intervals[0]();
+  assert.equal(name(), held, "a paused hero does not turn over");
+  press();
+  assert.equal(run.elements.rotate.textContent, "Pause the voices");
+  run.intervals[0]();
+  assert.notEqual(name(), held, "a resumed hero turns over again");
+  const still = runSiteScript(siteJs, { reduced: true });
+  assert.equal(still.elements.rotate.hidden, true, "with reduced motion there is nothing to pause");
 });
 
 test("the hero cycles on its own, and holds still while the pointer or the keyboard is on it", () => {

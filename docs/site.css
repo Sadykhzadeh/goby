@@ -68,6 +68,14 @@ h1 span { color: var(--amber-ink); }
 .voice small { font: 14px var(--body); color: var(--muted); font-variant-numeric: tabular-nums; }
 .voice .next { font: 400 15px var(--body); color: var(--muted); transition: transform .2s, color .2s; }
 .voice:hover .next { transform: translateX(4px); color: var(--ink); }
+/* Pauses the voices turning over; a text control like the sample's, on the other side of the name. */
+.rotate {
+  position: absolute; left: 20px; bottom: 100%; padding: 6px 0;
+  background: none; border: 0; cursor: pointer; color: var(--muted);
+  font: 400 15px var(--body); transition: color .2s;
+}
+.rotate:hover { color: var(--ink); }
+.rotate[hidden] { display: none; }
 .foot { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 28px; padding-bottom: 42px; }
 .foot p { margin: 0; max-width: 46ch; color: var(--muted); font-size: 18px; }
 .foot p b { color: var(--ink); font-weight: 600; }
@@ -135,6 +143,7 @@ footer .credit:hover { color: var(--ink); text-decoration: underline; text-under
   .setup, .playing { grid-template-columns: 1fr; gap: 30px; }
   .get { justify-items: start; }
   .voice { position: static; margin: 0 20px; }
+  .rotate { position: static; margin: 0 20px; }
   nav.top { gap: 14px; }
   nav.top a.link:nth-of-type(4) { display: none; }
 }

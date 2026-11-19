@@ -46,13 +46,19 @@ const ease = k => 1 - Math.pow(1 - Math.min(1, k), 3);
     if (still) return draw(1);
     if (!running) { running = true; requestAnimationFrame(frame); }
   };
-  let lastClick = 0, visible = true;
+  let lastClick = 0, visible = true, paused = false;
   $("voice").addEventListener("click", () => { lastClick = performance.now(); show(at + 1); });
+  const rotate = $("rotate");
+  rotate.hidden = still;
+  rotate.addEventListener("click", () => {
+    paused = !paused;
+    rotate.textContent = TEXT[paused ? "rotate.resume" : "rotate.pause"];
+  });
   new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(hero);
   draw(1);
   if (!still) {
     setInterval(() => {
-      if (visible && !document.hidden && !hero.matches(":hover, :focus-within") && performance.now() - lastClick > 6000) show(at + 1);
+      if (!paused && visible && !document.hidden && !hero.matches(":hover, :focus-within") && performance.now() - lastClick > 6000) show(at + 1);
     }, 2600);
   }
 }
