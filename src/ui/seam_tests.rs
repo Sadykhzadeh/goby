@@ -187,3 +187,22 @@ fn s_stars_and_unstars_the_chosen_voice_from_the_keyboard() {
     app.down((app.lay.nav_programs.l + 5.0, app.lay.nav_programs.t + 5.0), false);
     assert!(!app.key(Key::Star), "the star belongs to the voices page");
 }
+
+#[test]
+fn a_voice_starred_twice_in_the_settings_file_is_listed_and_stepped_once() {
+    let s = Settings {
+        voice: "demon".into(),
+        favorites: ["demon", "robot", "demon", "helium"].map(String::from).to_vec(),
+        ..demo::settings()
+    };
+    let (mut app, _) = window(s, false, WIDTH);
+    let demon = Fav::Voice(voices::index_of("demon").unwrap());
+    assert_eq!(app.favorites().iter().filter(|f| **f == demon).count(), 1);
+    let order: Vec<usize> = (0..3)
+        .map(|_| {
+            app.hotkey(Hotkey::Next);
+            app.voice
+        })
+        .collect();
+    assert_eq!(order, ["robot", "helium", "demon"].map(|id| voices::index_of(id).unwrap()));
+}

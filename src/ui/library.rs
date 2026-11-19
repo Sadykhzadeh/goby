@@ -3,13 +3,19 @@
 use super::*;
 
 impl<H: Host> App<H> {
-    /// Saved voices first, then the starred ones, each in the order it was added.
+    /// Saved voices first, then the starred ones, each in the order it was added. A voice
+    /// listed twice in settings.ini shows once, so stepping never lands back on the same tile.
     pub(super) fn favorites(&self) -> Vec<Fav> {
         let saved = (0..self.settings.presets.len())
             .filter(|p| voices::index_of(&self.settings.presets[*p].voice).is_some())
             .map(Fav::Preset);
-        let starred = self.settings.favorites.iter().filter_map(|id| voices::index_of(id)).map(Fav::Voice);
-        saved.chain(starred).collect()
+        let mut starred: Vec<usize> = Vec::new();
+        for i in self.settings.favorites.iter().filter_map(|id| voices::index_of(id)) {
+            if !starred.contains(&i) {
+                starred.push(i);
+            }
+        }
+        saved.chain(starred.into_iter().map(Fav::Voice)).collect()
     }
 
     /// The saved voice that is set exactly as it is playing now, if any.
