@@ -155,9 +155,18 @@ impl Default for Settings {
     }
 }
 
-/// Comma-separated executable names, lower-cased, empty entries dropped.
+/// Comma-separated executable names, lower-cased, empty entries dropped. A file name can hold
+/// a comma or a percent sign, so `join` writes each as `%2C` or `%25` and this reads them back.
 fn list(dst: &mut Vec<String>, v: &str) {
-    *dst = v.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| !s.is_empty()).collect();
+    *dst = v
+        .split(',')
+        .map(|s| s.trim().replace("%2C", ",").replace("%25", "%").to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+}
+
+fn join(items: &[String]) -> String {
+    items.iter().map(|s| s.replace('%', "%25").replace(',', "%2C")).collect::<Vec<_>>().join(",")
 }
 
 /// A knob's value, or `default` when it is not a finite number. "NaN" parses as a float
@@ -383,13 +392,13 @@ impl Settings {
             write_decimal(self.gate_db),
             write_decimal(self.dry_mix),
             self.exclusive as u8,
-            self.routed.join(","),
-            self.unroute.join(","),
+            join(&self.routed),
+            join(&self.unroute),
             self.cable_named_tried as u8,
             self.tray as u8,
             self.tray_told as u8,
             self.hotkeys as u8,
-            self.favorites.join(","),
+            join(&self.favorites),
             self.presets
                 .iter()
                 .map(|p| format!(
@@ -464,6 +473,18 @@ mod tests {
             window: Some(Placement { x: -1500, y: 40, w: 1000, h: 720, maximized: true }),
         };
         assert_eq!(Settings::parse(&s.render()), s);
+    }
+
+    #[test]
+    fn program_names_with_a_comma_or_percent_sign_come_back_whole() {
+        let s = Settings {
+            routed: vec!["my, app.exe".into(), "100%.exe".into(), "%2c.exe".into()],
+            unroute: vec!["a,b,c.exe".into()],
+            ..Settings::default()
+        };
+        let text = s.render();
+        assert!(text.contains("\nrouted=my%2C app.exe,100%25.exe,%252c.exe\n"), "{text}");
+        assert_eq!(Settings::parse(&text), s);
     }
 
     #[test]
