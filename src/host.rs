@@ -79,6 +79,7 @@ pub enum Key {
     End,
     Escape,
     Back,
+    Star,
 }
 
 pub trait Host {

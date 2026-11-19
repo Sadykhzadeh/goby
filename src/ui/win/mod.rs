@@ -334,6 +334,7 @@ fn key_of(vk: u16) -> Option<Key> {
         VK_END => Key::End,
         VK_ESCAPE => Key::Escape,
         VK_BACK => Key::Back,
+        VK_S => Key::Star,
         _ => return None,
     })
 }

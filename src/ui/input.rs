@@ -377,6 +377,11 @@ impl<H: Host> App<H> {
             }
             return false;
         }
+        // The chosen voice's star, as its tile's star button or a right click gives it.
+        if key == Key::Star {
+            self.toggle_favorite(self.voice);
+            return true;
+        }
         let list = self.filtered();
         if list.is_empty() {
             return false;

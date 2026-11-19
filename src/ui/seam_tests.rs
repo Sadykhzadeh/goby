@@ -175,3 +175,15 @@ fn slider_readouts_read_as_they_did_with_float_formatting() {
         }
     }
 }
+
+#[test]
+fn s_stars_and_unstars_the_chosen_voice_from_the_keyboard() {
+    let (mut app, _) = window(demo::settings(), false, WIDTH);
+    let was = app.is_favorite(app.voice);
+    assert!(app.key(Key::Star));
+    assert_eq!(app.is_favorite(app.voice), !was);
+    assert!(app.key(Key::Star));
+    assert_eq!(app.is_favorite(app.voice), was);
+    app.down((app.lay.nav_programs.l + 5.0, app.lay.nav_programs.t + 5.0), false);
+    assert!(!app.key(Key::Star), "the star belongs to the voices page");
+}
