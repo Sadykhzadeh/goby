@@ -45,7 +45,7 @@ nav.top {
   font-size: 15px;
 }
 nav.top .mark { display: flex; align-items: center; gap: 9px; text-decoration: none; font: 700 19px var(--display); }
-nav.top a.link { text-decoration: none; color: var(--muted); transition: color .15s; }
+nav.top a.link { text-decoration: none; color: var(--muted); transition: color .15s; padding: 1px 2px; }
 nav.top a.link:hover { color: var(--ink); }
 
 .hero { min-height: calc(100svh - 70px); display: grid; grid-template-rows: auto 1fr auto; padding-top: 7vh; }
@@ -128,7 +128,7 @@ code { font-size: 0.92em; color: var(--ink); }
 
 footer { position: relative; overflow: hidden; padding-top: 30px; }
 footer .links { display: flex; flex-wrap: wrap; gap: 10px 26px; color: var(--muted); font-size: 15px; padding-bottom: 18px; }
-footer .links a { text-decoration: none; }
+footer .links a { text-decoration: none; padding-block: 2px; }
 footer .links a:hover { color: var(--ink); }
 footer .credit { font-size: 13px; }
 footer .credit .heart { color: var(--amber); }
