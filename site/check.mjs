@@ -164,6 +164,13 @@ export function checkSite(dirArg) {
     if (descriptions.length !== 1 || !descriptions[0].attrs.content?.trim()) {
       bad(page, `expected one non-empty meta description, found ${descriptions.length}`);
     }
+    for (const v of all.filter(n => n.tag === "meta" && n.attrs.name === "viewport")) {
+      const zoomOff = (v.attrs.content ?? "").split(/[,;]/).some(part => {
+        const [key, value = ""] = part.split("=").map(x => x.trim().toLowerCase());
+        return (key === "user-scalable" && (value === "no" || value === "0")) || (key === "maximum-scale" && Number(value) < 2);
+      });
+      if (zoomOff) bad(page, `the viewport stops pinch zoom: "${v.attrs.content}"`);
+    }
 
     const h1s = all.filter(n => n.tag === "h1");
     if (h1s.length !== 1) bad(page, `expected one <h1>, found ${h1s.length}`);

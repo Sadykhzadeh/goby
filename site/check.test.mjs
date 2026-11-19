@@ -94,6 +94,8 @@ const cases = [
   ["an alternate that names a page in the wrong language", f => { f["index.html"] = page().replace('hreflang="ru" href="https://goby.azer.one/ru/"', 'hreflang="ru" href="https://goby.azer.one/"'); }, /names a page in lang="en"/],
   ["a button without a name", f => { f["index.html"] = page({ body: '<button type="button"><svg></svg></button>' }); }, /has no accessible name/],
   ["an input without a label", f => { f["index.html"] = page({ body: '<input id="q" type="text">' }); }, /has no label/],
+  ["a viewport that caps zoom", f => { f["index.html"] = page({ head: '<meta name="viewport" content="width=device-width, maximum-scale=1">' }); }, /viewport stops pinch zoom/],
+  ["a viewport that turns zoom off", f => { f["index.html"] = page({ head: '<meta name="viewport" content="width=device-width, user-scalable=no">' }); }, /viewport stops pinch zoom/],
   ["a blank-target link without noopener", f => { f["index.html"] = page({ body: '<a href="https://example.com/" target="_blank">x</a>' }); }, /lacks rel="noopener"/],
 ];
 
