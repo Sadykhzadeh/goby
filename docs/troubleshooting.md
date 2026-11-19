@@ -27,9 +27,10 @@ and the Programs page say most of this in words; the steps below follow the same
 - **Your own voice comes back through the microphone.** *Hear myself* plays your voice into
   your headphones. Through speakers, the microphone picks it up again and the other side hears
   an echo. Turn *Hear myself* off, or wear headphones.
-- **The voice has an echo or a room in it.** Some voices add one on purpose: Canyon, Stadium,
-  Karaoke and Announcer have an echo; Cave, Cathedral, Bathroom and Stadium have a room. Pick a
-  voice without either, such as Minion, Kid, Robot or Radio, to hear without it.
+- **The voice has an echo or a room in it.** Some voices add one on purpose. Seven have an echo:
+  Tipsy, Announcer, Sports commentator, Hologram, Stadium, Canyon and Karaoke. Twenty-four have
+  a room (reverb), from Giant and Pirate to Cave, Cathedral and Opera. Pick a voice without
+  either, such as Minion, Kid, Robot or Radio, to hear without it.
 
 ## Delay
 
