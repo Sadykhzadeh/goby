@@ -51,7 +51,7 @@ Every voice is a one-line recipe in [`src/voices.rs`](src/voices.rs), built from
 ## Everyday use
 
 - **Ctrl+Alt+G**, or a middle click on the tray icon, switches the effect on and off; **Ctrl+Alt+Page Down / Page Up** step through the voices, even in a fullscreen app.
-- **Star** a voice (or right-click it, or press **S** while it is chosen) for the Favorites tab. Hotkeys and the tray menu then cycle only your favorites.
+- **Star** a voice (or right-click it, or press **S** while it is chosen) for the Favorites tab. The hotkeys then cycle only your favorites, and the tray menu lists just them.
 - Tune pitch, volume or how much of your own voice to mix in, then **Save as my voice**.
 - Closing the window keeps Goby in the tray, and it opens again where you left it; *Start with Windows* is there, off until you turn it on.
 

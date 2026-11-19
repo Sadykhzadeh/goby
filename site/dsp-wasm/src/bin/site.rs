@@ -275,8 +275,8 @@ const TEXTS: &[(&str, &str, &str)] = &[
     ("playing.next", "next voice", "следующий голос"),
     (
         "playing.text",
-        "Star the voices you use and the hotkeys and the tray menu cycle only those. Close the window and Goby keeps going in the tray; it starts with Windows only if you ask it to.",
-        "Отметьте звёздочкой голоса, которыми пользуетесь, и горячие клавиши с меню в трее будут листать только их. Закройте окно, и Goby продолжит работать в трее; вместе с Windows он запускается, только если вы попросите.",
+        "Star the voices you use and the hotkeys cycle only those, while the tray menu lists them. Close the window and Goby keeps going in the tray; it starts with Windows only if you ask it to.",
+        "Отметьте звёздочкой голоса, которыми пользуетесь, и горячие клавиши будут листать только их, а меню в трее покажет только их. Закройте окно, и Goby продолжит работать в трее; вместе с Windows он запускается, только если вы попросите.",
     ),
     (
         "playing.shot",
