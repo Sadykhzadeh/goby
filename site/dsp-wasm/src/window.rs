@@ -205,10 +205,10 @@ pub extern "C" fn ui_draggable(x: f32, y: f32) -> bool {
     app().draggable_at((x, y))
 }
 
-/// Arrows, Home, End, Escape and Backspace, numbered in that order.
+/// Arrows, Home, End, Escape, Backspace and S, numbered in that order.
 #[unsafe(no_mangle)]
 pub extern "C" fn ui_key(k: u32) -> bool {
-    let keys = [Key::Left, Key::Right, Key::Up, Key::Down, Key::Home, Key::End, Key::Escape, Key::Back];
+    let keys = [Key::Left, Key::Right, Key::Up, Key::Down, Key::Home, Key::End, Key::Escape, Key::Back, Key::Star];
     keys.get(k as usize).is_some_and(|k| app().key(*k))
 }
 

@@ -3,7 +3,7 @@
 const TEXT = '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif';
 const DISPLAY = '"Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, sans-serif';
 const FONTS = [`12px ${TEXT}`, `14px ${TEXT}`, `600 14px ${TEXT}`, `600 20px ${DISPLAY}`, `600 28px ${DISPLAY}`];
-const KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Escape", "Backspace"];
+const KEYS = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "Escape", "Backspace", "s"];
 const HOTKEYS = { KeyG: 0, PageDown: 1, PageUp: 2 };
 const LINKS = [, "https://azer.one", "https://vb-audio.com/Cable/"];
 const BG = "#201e1b"; // Mica over a warm wallpaper, as near as a flat colour gets
@@ -405,7 +405,7 @@ export async function open(wasm) {
     }
   }, { passive: false });
   canvas.addEventListener("keydown", e => {
-    const i = KEYS.indexOf(e.key);
+    const i = KEYS.indexOf(e.key.length === 1 ? e.key.toLowerCase() : e.key);
     if (i >= 0 && !e.ctrlKey && !e.altKey && x.ui_key(i)) {
       e.preventDefault();
       after();
