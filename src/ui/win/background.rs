@@ -93,7 +93,7 @@ impl Win {
         let mut menu = vec![item(tr!("tray.open"), false, TrayAct::Open), line()];
         let favorites = self.favorites();
         let current = self.current();
-        for &f in favorites.iter().take(12) {
+        for &f in favorites.iter() {
             let on = f == current && self.settings.enabled;
             menu.push(item(&self.label(f), on, TrayAct::Pick(f)));
         }
