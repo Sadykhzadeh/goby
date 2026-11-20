@@ -7,14 +7,18 @@ use crate::fx::{Envelope, db};
 /// that receives the cable, which clips it hard.
 const KNEE: f32 = 0.8;
 
-/// Identity up to `KNEE`, then a curve that meets it with the same slope and levels off at
+/// Identity up to `knee`, then a curve that meets it with the same slope and levels off at
 /// 1.0. `x` is finite.
-fn limit(x: f32) -> f32 {
+pub fn limit_at(x: f32, knee: f32) -> f32 {
     let a = x.abs();
-    if a <= KNEE {
+    if a <= knee {
         return x;
     }
-    (KNEE + (1.0 - KNEE) * ((a - KNEE) / (1.0 - KNEE)).tanh()).copysign(x)
+    (knee + (1.0 - knee) * ((a - knee) / (1.0 - knee)).tanh()).copysign(x)
+}
+
+fn limit(x: f32) -> f32 {
+    limit_at(x, KNEE)
 }
 
 /// Input stage: make-up gain, a soft limit, then a gate that closes on keyboard clicks, fans

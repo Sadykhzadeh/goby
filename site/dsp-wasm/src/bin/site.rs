@@ -16,6 +16,8 @@ mod dsp;
 mod formant;
 #[path = "../../../../crates/dsp/src/fx.rs"]
 mod fx;
+#[path = "../../../../crates/dsp/src/mic.rs"]
+mod mic;
 #[path = "../../../../src/lang.rs"]
 mod lang;
 #[path = "../../../../src/voices.rs"]

@@ -8,6 +8,7 @@ use crate::fx::{
     Biquad, Compressor, Crusher, Delay, Dropout, Echo, Envelope, Lfo, Modulated, Noise, Reverb, Roger, Shape, Vocoder,
     Wander, ratio, saturate,
 };
+use crate::mic::limit_at;
 
 /// Delay-line pitch shifter with correlation-aligned jumps (WSOLA in a ring).
 ///
@@ -385,6 +386,9 @@ fn snap(note: f32, scale: u32) -> f32 {
 /// Length of each half of the dip between two voices: 5 ms at 48 kHz.
 const FADE: u32 = 240;
 
+/// Where the passthrough's soft limit starts: a sample below it leaves unchanged.
+const PASSTHROUGH_KNEE: f32 = 0.99;
+
 /// Runs one recipe. Every stage is allocated up front, so switching voices in the audio
 /// thread never allocates; stages a recipe does not use cost nothing.
 pub struct Voice {
@@ -568,10 +572,13 @@ impl Voice {
         let r = self.recipe;
         let sr = self.sample_rate;
         if r == Recipe::DRY && self.tone == 0.0 {
+            // The passthrough is the one path with no soft limit of its own, so its output is
+            // eased above 0.99, as the voices' tanh eases theirs; below that it is the input
+            // times the level.
             for s in block.iter_mut() {
                 self.shifters.iter_mut().for_each(|p| p.listen(*s));
                 self.former.listen(*s);
-                *s *= self.volume;
+                *s = limit_at(*s * self.volume, PASSTHROUGH_KNEE);
             }
             return;
         }

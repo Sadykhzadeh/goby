@@ -107,3 +107,27 @@ fn every_voice_is_finite_and_bounded_at_the_device_rates() {
         }
     }
 }
+
+/// Off has no voice of its own, so a volume above unity is the only thing that can take it past
+/// full scale. Its output is eased above 0.99 at every volume, as the voices' tanh eases theirs:
+/// at unity only the peaks above that knee move, and by less than 0.005.
+#[test]
+fn off_at_a_boost_stays_within_full_scale_and_is_near_exact_at_unity() {
+    let mut heard = voiced(SR, 1.0);
+    Mic::new(SR).process(&mut heard, 24.0, None);
+    assert!(peak(&heard) <= 1.0 && peak(&heard) > 0.9, "the microphone stage: {}", peak(&heard));
+
+    let mut unity = Voice::new(SR);
+    unity.set(&Recipe::DRY, 0.0, 1.0);
+    let mut exact = heard.clone();
+    unity.process(&mut exact);
+    let moved = exact.iter().zip(&heard).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(moved < 0.005, "at unity the passthrough moves a sample by {moved}");
+
+    let mut boost = Voice::new(SR);
+    boost.set(&Recipe::DRY, 0.0, 2.0);
+    let mut out = heard.clone();
+    boost.process(&mut out);
+    assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 1.0), "a boosted Off reaches {}", peak(&out));
+    assert!(peak(&out) > 0.95, "the boost is not heard: {}", peak(&out));
+}
