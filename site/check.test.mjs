@@ -1,5 +1,6 @@
 // Tests for site/check.mjs: each case breaks one rule on a small two-language site and
 // expects the check to name it. Run with `node --test site/`.
+import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -473,6 +474,22 @@ for (const [name, text, expected] of docProblems) {
 
 test("the project's own Markdown passes", () => {
   assert.deepEqual(checkMarkdown(fileURLToPath(new URL("..", import.meta.url))), []);
+});
+
+test("the command line says what it expects instead of a stack trace", () => {
+  const script = fileURLToPath(new URL("./check.mjs", import.meta.url));
+  const bare = mkdtempSync(join(tmpdir(), "site-check-"));
+  mkdirSync(join(bare, "site"));
+  try {
+    for (const arg of ["/no/such/folder", "--help", join(bare, "site")]) {
+      const run = spawnSync(process.execPath, [script, arg], { encoding: "utf8" });
+      assert.equal(run.status, 1, arg);
+      assert.match(run.stderr, /is not the docs folder of a repository/, arg);
+      assert.doesNotMatch(run.stderr, /\n\s+at /, arg);
+    }
+  } finally {
+    rmSync(bare, { recursive: true, force: true });
+  }
 });
 
 // ---- The figures the documents repeat: each must be the same wherever it is written ----

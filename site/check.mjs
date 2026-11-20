@@ -507,6 +507,11 @@ export function checkMarkdown(repoArg) {
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const dir = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "docs");
+  const isDir = p => existsSync(p) && statSync(p).isDirectory();
+  if (!isDir(dir) || !isDir(join(resolve(dir), "..", "docs")) || !isFile(join(resolve(dir), "..", "README.md"))) {
+    console.error(`site check: ${dir} is not the docs folder of a repository with a README.md (usage: node site/check.mjs [docs])`);
+    process.exit(1);
+  }
   const findings = [...checkSite(dir), ...checkMarkdown(join(resolve(dir), ".."))];
   if (findings.length) {
     for (const f of findings) console.error(f);
