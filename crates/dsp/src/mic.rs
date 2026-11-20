@@ -30,23 +30,28 @@ pub struct Mic {
     open: f32,
     /// Samples left before a gate that fell below the threshold starts closing.
     hold: u32,
+    /// The make-up gain as it is now: it follows the setting with a 10 ms time constant, so a gain
+    /// changed between two packets does not jump the waveform.
+    gain: f32,
 }
 
 impl Mic {
     pub fn new(sample_rate: u32) -> Self {
-        Self { sample_rate: sample_rate as f32, envelope: Envelope::default(), open: 1.0, hold: 0 }
+        Self { sample_rate: sample_rate as f32, envelope: Envelope::default(), open: 1.0, hold: 0, gain: 1.0 }
     }
 
     /// `gate_db` is the threshold in dBFS; `None` leaves the gate open.
     pub fn process(&mut self, block: &mut [f32], gain_db: f32, gate_db: Option<f32>) {
-        let gain = db(gain_db);
+        let wanted = db(gain_db);
         let threshold = gate_db.map(db);
         // Fast attack so the first syllable is not cut, slow release so words do not chop.
         let (attack, release) =
             (1.0 - (-1.0 / (0.001 * self.sample_rate)).exp(), 1.0 - (-1.0 / (0.08 * self.sample_rate)).exp());
+        let ramp = 1.0 - (-1.0 / (0.01 * self.sample_rate)).exp();
         let hold = (0.15 * self.sample_rate) as u32;
         for s in block.iter_mut() {
-            let x = *s * gain;
+            self.gain += (wanted - self.gain) * ramp;
+            let x = *s * self.gain;
             // A NaN or infinity from the driver would never leave the envelope or the voice's filters.
             let x = if x.is_finite() { limit(x) } else { 0.0 };
             let level = self.envelope.next(x, 0.2, 0.0015);
@@ -82,9 +87,29 @@ mod tests {
     #[test]
     fn gain_is_in_decibels() {
         let mut m = Mic::new(SR);
-        let mut block = vec![0.1f32; 100];
+        let mut block = vec![0.1f32; SR as usize / 10];
         m.process(&mut block, 6.0, None);
-        assert!((block[99] - 0.1995).abs() < 1e-3, "{}", block[99]);
+        assert!((block[block.len() - 1] - 0.1995).abs() < 1e-3, "{}", block[block.len() - 1]);
+    }
+
+    /// A gain change is ramped with a 10 ms time constant, so a knob turned while sound plays
+    /// does not jump the waveform: around the change no step is more than the louder of the two
+    /// levels allows.
+    #[test]
+    fn a_gain_change_is_ramped_not_stepped() {
+        let tone: Vec<f32> = (0..SR as usize / 5).map(|i| sine(220.0, i, SR as f32) * 0.3).collect();
+        let largest = |x: &[f32]| (4850..4900).map(|n| (x[n] - x[n - 1]).abs()).fold(0.0f32, f32::max);
+        let steady = |gain: f32| {
+            let mut x = tone.clone();
+            Mic::new(SR).process(&mut x, gain, None);
+            largest(&x)
+        };
+        let mut x = tone.clone();
+        let mut m = Mic::new(SR);
+        m.process(&mut x[..4855], 0.0, None);
+        m.process(&mut x[4855..], 6.0, None);
+        let bound = 1.1 * steady(0.0).max(steady(6.0)) + 0.002;
+        assert!(largest(&x) <= bound, "a gain change steps the output to {}, over {bound}", largest(&x));
     }
 
     #[test]
