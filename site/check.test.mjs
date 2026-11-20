@@ -255,6 +255,46 @@ test("a window that failed to load is asked for again on the next try", async ()
   assert.equal(fetches.length, 2, "the failed load stays cached and the click never asks again");
 });
 
+// The window's script is a module; its exports are stripped so it runs as a plain script against
+// stubs of the few elements it reads when it loads.
+test("a sample that failed to load is asked for again on the next press", async () => {
+  const source = readFileSync(join(docs, "window.js"), "utf8")
+    .replace(/^export /gm, "")
+    .replaceAll("import.meta.url", '"https://goby.azer.one/window.js"');
+  const fetches = [];
+  const element = id => ({
+    id,
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    classList: { toggle() {} },
+    setAttribute() {},
+    addEventListener() {},
+  });
+  const elements = { texts: { textContent: '{"sample.none":"Sample unavailable"}' } };
+  const ctx = {
+    document: { getElementById: id => (elements[id] ??= element(id)), documentElement: { lang: "en" } },
+    fetch: url => {
+      fetches.push(String(url));
+      return Promise.resolve({ ok: false, status: 503 });
+    },
+    URL,
+    TextDecoder,
+    TextEncoder,
+    console,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, { filename: "window.js" });
+  await vm.runInContext("sample()", ctx);
+  assert.equal(fetches.length, 1);
+  assert.equal(elements["sample"].disabled, false, "a failed press leaves the button enabled");
+  assert.equal(elements["sample-label"].textContent, "Sample unavailable");
+  await vm.runInContext("sample()", ctx);
+  assert.equal(fetches.length, 2, "the next press asks for the sample again");
+  assert.match(fetches[1], /sample\.mp3$/);
+  assert.equal(elements["sample"].disabled, false);
+});
+
 test("the hero's pause control holds the voices, and a second press turns them again", () => {
   const siteJs = readFileSync(join(docs, "site.js"), "utf8");
   const run = runSiteScript(siteJs, { clock: 10_000 });

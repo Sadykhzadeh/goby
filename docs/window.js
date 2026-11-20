@@ -289,18 +289,17 @@ function loadSample() {
         d[speech.length - 1 - i] *= i / fade;
       }
       return sampleBuf = buf;
-    });
+    })
+    // A failed load is forgotten, so the next press asks again.
+    .catch(err => { sampleReady = undefined; throw err; });
 }
-function checkSample() {
-  loadSample().catch(() => {
-    sampleBtn.disabled = true;
-    sampleLabel.textContent = T["sample.none"];
-  });
+function sampleUnavailable() {
+  sampleLabel.textContent = T["sample.none"];
 }
 
 export async function sample() {
   if (!sampleBuf) {
-    try { await loadSample(); } catch { return; }
+    try { await loadSample(); } catch { sampleUnavailable(); return; }
   }
   if (!wantsLive) {
     pending = "sample";
@@ -333,7 +332,8 @@ export async function open(wasm) {
   size();
   new ResizeObserver(size).observe(frameEl);
   visualViewport?.addEventListener("resize", size);
-  checkSample();
+  // The sample is fetched ahead; if that fails the button says so, and a press asks again.
+  loadSample().catch(sampleUnavailable);
   // A context a browser left suspended starts with the next touch.
   document.addEventListener("pointerdown", () => audio?.resume(), true);
 
