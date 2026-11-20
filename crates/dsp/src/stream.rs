@@ -48,10 +48,24 @@ pub fn tap(scope: &[AtomicU32], start: usize, block: &[f32]) {
     }
 }
 
-/// Mixes `share` of the untouched `dry` signal back into the voiced `block`.
-pub fn blend(block: &mut [f32], dry: &[f32], share: f32) {
-    for (s, d) in block.iter_mut().zip(dry) {
-        *s = *s * (1.0 - share) + d * share;
+/// Mixes a share of the untouched `dry` signal back into the voiced block. The share follows
+/// its setting with a 10 ms time constant, so a knob turned while sound plays does not jump the
+/// waveform.
+pub struct Blend {
+    share: f32,
+    ramp: f32,
+}
+
+impl Blend {
+    pub fn new(sample_rate: u32) -> Self {
+        Self { share: 0.0, ramp: 1.0 - (-1.0 / (0.01 * sample_rate as f32)).exp() }
+    }
+
+    pub fn process(&mut self, block: &mut [f32], dry: &[f32], share: f32) {
+        for (s, d) in block.iter_mut().zip(dry) {
+            self.share += (share - self.share) * self.ramp;
+            *s = *s * (1.0 - self.share) + d * self.share;
+        }
     }
 }
 
@@ -168,6 +182,24 @@ mod tests {
         tap(&scope, 3, &[1.0, 2.0, 3.0]);
         let got: Vec<f32> = scope.iter().map(|s| f32::from_bits(s.load(Relaxed))).collect();
         assert_eq!(got, [2.0, 3.0, 0.0, 1.0]);
+    }
+
+    /// The share follows its setting with a 10 ms time constant, so a mix changed between two
+    /// packets leaves the output no step larger than one sample of the ramp, and no mix at all
+    /// is the voice unchanged.
+    #[test]
+    fn a_mix_change_is_ramped_not_stepped() {
+        let mut blend = Blend::new(RATE);
+        let (voice, dry) = (vec![0.5f32; 4800], vec![-0.5f32; 4800]);
+        let mut out = voice.clone();
+        blend.process(&mut out, &dry, 0.0);
+        assert_eq!(out, voice);
+        let mut next = voice.clone();
+        blend.process(&mut next, &dry, 1.0);
+        let joined: Vec<f32> = std::iter::once(voice[0]).chain(next.iter().copied()).collect();
+        let largest = joined.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(largest < 0.005, "a mix change steps the output by {largest}");
+        assert!((next[4799] + 0.5).abs() < 1e-3, "the full mix is not reached: {}", next[4799]);
     }
 
     #[test]

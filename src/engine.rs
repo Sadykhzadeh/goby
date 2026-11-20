@@ -25,7 +25,7 @@ use crate::host::{Endpoint, SCOPE_LEN};
 use crate::lang::{tr, trf};
 use crate::mic::Mic;
 use crate::ring::{Producer, ring};
-use crate::stream::{Reader, Sample, blend, tap, to_mono};
+use crate::stream::{Blend, Reader, Sample, tap, to_mono};
 use crate::voices;
 
 pub const RATE: u32 = 48_000;
@@ -525,6 +525,7 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
         // The full recipe of the voice in use, rebuilt from its changes only when it switches.
         let mut recipe = (usize::MAX, Recipe::DRY);
         let mut mic = Mic::new(RATE);
+        let mut blend = Blend::new(RATE);
         let mut block = vec![0.0f32; MAX_BLOCK];
         let mut dry = vec![0.0f32; MAX_BLOCK];
         s.client.Start()?;
@@ -565,15 +566,11 @@ fn capture(id: &str, exclusive: bool, mut outs: Vec<Producer>, stop: &AtomicBool
                     done += len;
 
                     mic.process(chunk, mic_gain, gate);
-                    if mix > 0.0 {
-                        dry[..len].copy_from_slice(chunk);
-                    }
+                    dry[..len].copy_from_slice(chunk);
                     let start = shared.scope_pos.load(Relaxed);
                     tap(&shared.scope_in, start, chunk);
                     voice.process(chunk);
-                    if mix > 0.0 {
-                        blend(chunk, &dry[..len], mix);
-                    }
+                    blend.process(chunk, &dry[..len], mix);
                     tap(&shared.scope_out, start, chunk);
                     shared.scope_pos.store((start + len) % SCOPE_LEN, Relaxed);
 

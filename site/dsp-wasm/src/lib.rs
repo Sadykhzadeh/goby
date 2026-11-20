@@ -22,6 +22,10 @@ mod formant;
 mod fx;
 #[path = "../../../crates/dsp/src/mic.rs"]
 mod mic;
+#[path = "../../../crates/dsp/src/ring.rs"]
+mod ring;
+#[path = "../../../crates/dsp/src/stream.rs"]
+mod stream;
 #[path = "../../../src/voices.rs"]
 mod voices;
 
@@ -43,6 +47,7 @@ mod window;
 
 use dsp::Voice;
 use mic::Mic;
+use stream::Blend;
 
 /// Largest block `process` takes; an AudioWorklet render quantum is 128 frames.
 const MAX_BLOCK: usize = 1024;
@@ -50,6 +55,7 @@ const MAX_BLOCK: usize = 1024;
 struct Engine {
     voice: Voice,
     mic: Mic,
+    blend: Blend,
     block: [f32; MAX_BLOCK],
     dry: [f32; MAX_BLOCK],
     chosen: usize,
@@ -75,6 +81,7 @@ pub extern "C" fn init(sample_rate: u32) -> *mut f32 {
     let e = Engine {
         voice: Voice::new(sample_rate),
         mic: Mic::new(sample_rate),
+        blend: Blend::new(sample_rate),
         block: [0.0; MAX_BLOCK],
         dry: [0.0; MAX_BLOCK],
         chosen: 0,
@@ -126,15 +133,9 @@ pub extern "C" fn process(n: usize) {
     e.voice.set(&def.recipe(), tone, e.volume);
     let chunk = &mut e.block[..n];
     e.mic.process(chunk, e.gain_db, e.gate_db);
-    if mix > 0.0 {
-        e.dry[..n].copy_from_slice(chunk);
-    }
+    e.dry[..n].copy_from_slice(chunk);
     e.voice.process(chunk);
-    if mix > 0.0 {
-        for (s, d) in chunk.iter_mut().zip(&e.dry[..n]) {
-            *s = *s * (1.0 - mix) + d * mix;
-        }
-    }
+    e.blend.process(chunk, &e.dry[..n], mix);
 }
 
 /// How far the voice runs behind the microphone right now, in samples.
