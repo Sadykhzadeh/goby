@@ -131,3 +131,54 @@ fn off_at_a_boost_stays_within_full_scale_and_is_near_exact_at_unity() {
     assert!(out.iter().all(|s| s.is_finite() && s.abs() <= 1.0), "a boosted Off reaches {}", peak(&out));
     assert!(peak(&out) > 0.95, "the boost is not heard: {}", peak(&out));
 }
+
+/// A volume change is ramped with a 10 ms time constant, so a knob turned while sound plays does not jump
+/// the waveform: around the change no step is more than the larger level it reaches allows.
+/// Off reaches the new level.
+#[test]
+fn a_volume_change_is_ramped_not_stepped() {
+    let tone: Vec<f32> =
+        (0..SR as usize / 5).map(|i| 0.5 * (std::f32::consts::TAU * 220.0 * i as f32 / SR as f32).sin()).collect();
+    let play = |recipe: &Recipe, to: f32| {
+        let mut voice = Voice::new(SR);
+        voice.set(recipe, 0.0, 1.0);
+        let mut out = Vec::with_capacity(tone.len());
+        for (n, s) in tone.iter().enumerate() {
+            if n == 4855 {
+                voice.set(recipe, 0.0, to);
+            }
+            let mut sample = [*s];
+            voice.process(&mut sample);
+            out.push(sample[0]);
+        }
+        out
+    };
+    let largest_step = |x: &[f32]| (4800..5280).map(|n| (x[n] - x[n - 1]).abs()).fold(0.0f32, f32::max);
+    for (name, recipe, _) in CASES {
+        let (steady, changed) = (play(recipe, 1.0), play(recipe, 1.3));
+        let (big, bound) = (largest_step(&changed), 1.3 * largest_step(&steady) + 0.002);
+        assert!(big <= bound, "{name}: a volume change steps the output to {big}, over {bound}");
+        if *recipe == Recipe::DRY {
+            let (before, after) = (steady[9000], changed[9000]);
+            assert!((after / before - 1.3).abs() < 1e-3, "off reaches {} not 1.3 times {before}", after);
+        }
+    }
+
+    // Off at a level near full scale, its volume passing 100 %: the passthrough's limit has no
+    // switch at unity, so the output moves no faster than the ramp.
+    let loud = vec![0.97f32; tone.len()];
+    let across_unity = |to: f32| {
+        let mut voice = Voice::new(SR);
+        voice.set(&Recipe::DRY, 0.0, 0.95);
+        let mut out = loud.clone();
+        for (n, s) in out.iter_mut().enumerate() {
+            if n == 4855 {
+                voice.set(&Recipe::DRY, 0.0, to);
+            }
+            voice.process(std::slice::from_mut(s));
+        }
+        out
+    };
+    let (big, bound) = (largest_step(&across_unity(1.05)), 0.002);
+    assert!(big <= bound, "off across 100 % steps the output to {big}, over {bound}");
+}

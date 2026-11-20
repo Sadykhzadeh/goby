@@ -402,6 +402,10 @@ pub struct Voice {
     /// The tone asked for; one that takes the pitch shifter in or out of use waits for a fade too.
     next_tone: f32,
     volume: f32,
+    /// The output level as it is now: it follows `volume` with a 10 ms time constant, so a knob
+    /// turned while sound plays moves the level without a jump in the waveform.
+    gain_now: f32,
+    gain_ramp: f32,
     shifters: [PitchShifter; 3],
     former: FormantShifter,
     /// How far `tune` last moved the pitch to reach a note; held while nobody speaks.
@@ -439,6 +443,8 @@ impl Voice {
             tone: 0.0,
             next_tone: 0.0,
             volume: 1.0,
+            gain_now: 1.0,
+            gain_ramp: 1.0 - (-1.0 / (0.01 * sr)).exp(),
             shifters: std::array::from_fn(|_| PitchShifter::new(sample_rate)),
             former: FormantShifter::new(sample_rate),
             bend: 1.0,
@@ -573,12 +579,13 @@ impl Voice {
         let sr = self.sample_rate;
         if r == Recipe::DRY && self.tone == 0.0 {
             // The passthrough is the one path with no soft limit of its own, so its output is
-            // eased above 0.99, as the voices' tanh eases theirs; below that it is the input
-            // times the level.
+            // eased above 0.99, as the voices' tanh eases theirs. Below that it is the input times
+            // the level, so the curve is the same at every volume and nothing switches at 100 %.
             for s in block.iter_mut() {
                 self.shifters.iter_mut().for_each(|p| p.listen(*s));
                 self.former.listen(*s);
-                *s = limit_at(*s * self.volume, PASSTHROUGH_KNEE);
+                self.gain_now += (self.volume - self.gain_now) * self.gain_ramp;
+                *s = limit_at(*s * self.gain_now, PASSTHROUGH_KNEE);
             }
             return;
         }
@@ -691,8 +698,9 @@ impl Voice {
                 x = x * (1.0 - r.reverb_mix * 0.3)
                     + self.reverb.process(x, r.reverb_size, r.reverb_damp) * r.reverb_mix * 2.0;
             }
+            self.gain_now += (self.volume - self.gain_now) * self.gain_ramp;
             // Soft limit so a loud scream never clips hard in voice chat.
-            *s = (x * r.gain * self.volume).tanh();
+            *s = (x * r.gain * self.gain_now).tanh();
         }
     }
 }
