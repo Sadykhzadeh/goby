@@ -66,7 +66,7 @@ const ease = k => 1 - Math.pow(1 - Math.min(1, k), 3);
 // ---- The window: the app's own UI, built for the web. Fetched once it is about to be seen,
 // or when someone asks to hear the voices; window.js swaps it in for the picture. ----
 let loading;
-const load = () => loading ??= fetch(new URL("goby.wasm", HERE))
+const load = () => loading ??= fetch(new URL("goby.wasm", HERE), { signal: AbortSignal.timeout(60_000) })
   .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error("goby.wasm: " + r.status)))
   .then(async bytes => {
     const w = await import(new URL("window.js", HERE));

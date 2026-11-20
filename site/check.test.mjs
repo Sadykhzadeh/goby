@@ -185,6 +185,7 @@ function runSiteScript(html, { reduced = false, hovered = false, clock = 0 } = {
   };
   const observed = [];
   const fetches = [];
+  const fetchOptions = [];
   const intervals = [];
   const ctx = {
     document: {
@@ -205,16 +206,18 @@ function runSiteScript(html, { reduced = false, hovered = false, clock = 0 } = {
     requestAnimationFrame: () => 0,
     setInterval: fn => intervals.push(fn),
     performance: { now: () => clock },
-    fetch: url => {
+    fetch: (url, options) => {
       fetches.push(String(url));
+      fetchOptions.push(options);
       return Promise.resolve({ ok: false, status: 404 });
     },
+    AbortSignal,
     URL,
     console,
   };
   vm.createContext(ctx);
   vm.runInContext(html, ctx, { filename: "site.js" });
-  return { ctx, observed, fetches, intervals, listeners, elements };
+  return { ctx, observed, fetches, fetchOptions, intervals, listeners, elements };
 }
 
 test("the page's script shows the 74 voices in hundredths decoded and eases between them", () => {
@@ -233,7 +236,7 @@ test("the page's script shows the 74 voices in hundredths decoded and eases betw
 
 test("the window and its wasm are not requested until the window nears the screen", () => {
   const siteJs = readFileSync(join(docs, "site.js"), "utf8");
-  const { observed, fetches } = runSiteScript(siteJs);
+  const { observed, fetches, fetchOptions } = runSiteScript(siteJs);
   assert.equal(fetches.length, 0);
   const win = observed.find(o => o.target.id === "win");
   assert.ok(win, "the window is observed");
@@ -242,6 +245,7 @@ test("the window and its wasm are not requested until the window nears the scree
   win.cb([{ isIntersecting: true }], win.io);
   assert.equal(fetches.length, 1);
   assert.match(fetches[0], /goby\.wasm$/);
+  assert.ok(fetchOptions[0].signal instanceof AbortSignal, "the request gives up after a while");
 });
 
 test("a window that failed to load is asked for again on the next try", async () => {
@@ -278,6 +282,7 @@ test("a sample that failed to load is asked for again on the next press", async 
       fetches.push(String(url));
       return Promise.resolve({ ok: false, status: 503 });
     },
+    AbortSignal,
     URL,
     TextDecoder,
     TextEncoder,
@@ -293,6 +298,52 @@ test("a sample that failed to load is asked for again on the next press", async 
   assert.equal(fetches.length, 2, "the next press asks for the sample again");
   assert.match(fetches[1], /sample\.mp3$/);
   assert.equal(elements["sample"].disabled, false);
+});
+
+test("a sample that never answers is given up on, and the next press asks again", async () => {
+  const source = readFileSync(join(docs, "window.js"), "utf8")
+    .replace(/^export /gm, "")
+    .replaceAll("import.meta.url", '"https://goby.azer.one/window.js"');
+  const fetches = [];
+  const timers = [];
+  const element = id => ({
+    id,
+    textContent: "",
+    innerHTML: "",
+    disabled: false,
+    classList: { toggle() {} },
+    setAttribute() {},
+    addEventListener() {},
+  });
+  const elements = { texts: { textContent: '{"sample.none":"Sample unavailable"}' } };
+  const ctx = {
+    document: { getElementById: id => (elements[id] ??= element(id)), documentElement: { lang: "en" } },
+    fetch: (url, options) => {
+      fetches.push(String(url));
+      return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(new Error("aborted"))));
+    },
+    AbortSignal: {
+      timeout: ms => {
+        const controller = new AbortController();
+        timers.push({ ms, abort: () => controller.abort() });
+        return controller.signal;
+      },
+    },
+    URL,
+    TextDecoder,
+    TextEncoder,
+    console,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(source, ctx, { filename: "window.js" });
+  const first = vm.runInContext("sample()", ctx);
+  assert.deepEqual(timers.map(t => t.ms), [60_000]);
+  timers[0].abort();
+  await first;
+  assert.equal(elements["sample-label"].textContent, "Sample unavailable");
+  assert.equal(elements["sample"].disabled, false);
+  vm.runInContext("sample()", ctx);
+  assert.equal(fetches.length, 2, "the next press asks for the sample again");
 });
 
 test("the hero's pause control holds the voices, and a second press turns them again", () => {

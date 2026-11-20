@@ -276,7 +276,7 @@ export function toggle() {
 // it going?"), taken from Wikimedia Commons, with its pauses shortened.
 let sampleBuf = null, sampleReady;
 function loadSample() {
-  return sampleReady ??= fetch(new URL("sample.mp3", import.meta.url))
+  return sampleReady ??= fetch(new URL("sample.mp3", import.meta.url), { signal: AbortSignal.timeout(60_000) })
     .then(r => r.ok ? r.arrayBuffer() : Promise.reject(new Error("sample.mp3: " + r.status)))
     .then(bytes => new OfflineAudioContext(1, 1, 48000).decodeAudioData(bytes))
     .then(speech => {
