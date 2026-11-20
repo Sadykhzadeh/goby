@@ -16,6 +16,7 @@ use windows::core::{HSTRING, PCWSTR, w};
 
 use crate::files::{self, File};
 use crate::settings::whole;
+use std::time::{Duration, Instant};
 
 /// The public half of the release key, X then Y. The private half is kept encrypted with
 /// the author's other secrets and signs every release's manifest.
@@ -35,6 +36,11 @@ const SOURCES: [&str; 2] = [
 /// Larger than any real manifest or executable; a host sending more is not trusted with it.
 const MAX_MANIFEST: usize = 4 * 1024;
 const MAX_EXE: u64 = 32 * 1024 * 1024;
+
+/// Whole-request limits. Each socket wait is bounded on its own too, but a peer that sends a
+/// byte every few seconds never trips those, so a download needs a limit on the whole.
+const FETCH_WITHIN: Duration = Duration::from_secs(60);
+const DOWNLOAD_WITHIN: Duration = Duration::from_secs(600);
 
 pub type Version = (u32, u32, u32);
 
@@ -143,9 +149,29 @@ pub fn verify(message: &[u8], signature: &[u8]) -> bool {
     verify_with(&PUBLIC_KEY, message, signature)
 }
 
+/// Collects a body that `read` fills in chunks, returning how many bytes each read gave and
+/// zero at the end. Refused past `max` bytes, or once `deadline` has passed with the body
+/// still going. A read blocks for at most the session's receive timeout, so the body ends
+/// within that long after the deadline.
+fn read_body(max: u64, deadline: Instant, mut read: impl FnMut(&mut [u8]) -> Option<usize>) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        match read(&mut buf)? {
+            0 => return Some(out),
+            n => out.extend_from_slice(&buf[..n]),
+        }
+        if out.len() as u64 > max || Instant::now() > deadline {
+            return None;
+        }
+    }
+}
+
 /// GET over HTTPS through WinHTTP, which checks the certificate against Windows' store and
-/// follows redirects only to HTTPS. `None` for anything but a 200 within `max` bytes.
-pub fn get(url: &str, max: u64) -> Option<Vec<u8>> {
+/// follows redirects only to HTTPS. `None` for anything but a 200 within `max` bytes, with
+/// the body read before `deadline`. The deadline is checked between reads; connecting and
+/// the headers are bounded by the session's socket timeouts.
+pub fn get(url: &str, max: u64, deadline: Instant) -> Option<Vec<u8>> {
     let rest = url.strip_prefix("https://")?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
     let agent = HSTRING::from(format!("Goby/{}", env!("CARGO_PKG_VERSION")));
@@ -189,19 +215,11 @@ pub fn get(url: &str, max: u64) -> Option<Vec<u8>> {
                 if status != 200 {
                     return None;
                 }
-                let mut out = Vec::new();
-                let mut buf = vec![0u8; 64 * 1024];
-                loop {
+                read_body(max, deadline, |buf| {
                     let mut n = 0u32;
                     WinHttpReadData(request, buf.as_mut_ptr() as _, buf.len() as u32, &mut n).ok()?;
-                    if n == 0 {
-                        return Some(out);
-                    }
-                    out.extend_from_slice(&buf[..n as usize]);
-                    if out.len() as u64 > max {
-                        return None;
-                    }
-                }
+                    Some(n as usize)
+                })
             })();
             if !request.is_null() {
                 let _ = WinHttpCloseHandle(request);
@@ -216,8 +234,9 @@ pub fn get(url: &str, max: u64) -> Option<Vec<u8>> {
 
 /// The manifest from one host, if it is there and signed by the release key.
 fn fetch(source: &str) -> Option<Manifest> {
-    let text = get(&format!("{source}.txt"), MAX_MANIFEST as u64)?;
-    let signature = get(&format!("{source}.sig"), 64)?;
+    let deadline = Instant::now() + FETCH_WITHIN;
+    let text = get(&format!("{source}.txt"), MAX_MANIFEST as u64, deadline)?;
+    let signature = get(&format!("{source}.sig"), 64, deadline)?;
     if !verify(&text, &signature) {
         return None;
     }
@@ -237,7 +256,8 @@ pub fn download(m: &Manifest) -> Option<(String, File)> {
     let dir = format!("{}\\update", crate::settings::Settings::dir()?);
     files::create_dirs(&dir).ok()?;
     let path = format!("{dir}\\goby-{}.exe", show(m.version));
-    let body = m.urls.iter().find_map(|url| get(url, m.size).filter(|b| b.len() as u64 == m.size))?;
+    let deadline = Instant::now() + DOWNLOAD_WITHIN;
+    let body = m.urls.iter().find_map(|url| get(url, m.size, deadline).filter(|b| b.len() as u64 == m.size))?;
     if sha256(&body) != Some(m.sha256) || !files::write(&path, &body) {
         return None;
     }
@@ -290,6 +310,40 @@ mod tests {
         assert_eq!(parse_version("1.2.3.4"), None);
         assert_eq!(parse_version("1.x.3"), None);
         assert_eq!(show((0, 3, 0)), "0.3.0");
+    }
+
+    #[test]
+    fn a_body_arrives_whole_in_chunks_within_its_limits() {
+        let data: Vec<u8> = (0..150_000u32).map(|i| i as u8).collect();
+        let mut rest = &data[..];
+        let body = read_body(u64::MAX, Instant::now() + Duration::from_secs(60), |buf| {
+            let n = rest.len().min(buf.len()).min(40_000);
+            buf[..n].copy_from_slice(&rest[..n]);
+            rest = &rest[n..];
+            Some(n)
+        });
+        assert_eq!(body.as_deref(), Some(&data[..]));
+        assert!(
+            read_body(10, Instant::now() + Duration::from_secs(60), |buf| {
+                buf[..8].fill(1);
+                Some(8)
+            })
+            .is_none()
+        );
+        assert!(read_body(u64::MAX, Instant::now() + Duration::from_secs(60), |_| None).is_none());
+    }
+
+    #[test]
+    fn a_trickling_body_is_cut_off_once_the_deadline_has_passed() {
+        let gone = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let mut reads = 0;
+        let body = read_body(u64::MAX, gone, |buf| {
+            reads += 1;
+            buf[0] = 1;
+            Some(1)
+        });
+        assert!(body.is_none());
+        assert_eq!(reads, 1);
     }
 
     #[test]
