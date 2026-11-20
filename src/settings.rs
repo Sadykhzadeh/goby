@@ -426,13 +426,19 @@ impl Settings {
     #[cfg(windows)]
     pub fn save(&self) {
         if let Some(dir) = Settings::dir() {
-            let _ = files::create_dirs(&dir);
-            // Write then rename, so a crash mid-write never leaves a half file behind.
-            let p = format!("{dir}\\settings.ini");
-            let tmp = format!("{p}.tmp");
-            if files::write(&tmp, self.render().as_bytes()) {
-                let _ = files::rename(&tmp, &p);
-            }
+            self.save_in(&dir);
+        }
+    }
+
+    /// Write then rename, so a crash mid-write never leaves a half file behind. A write that
+    /// fails part way, on a full disk for one, leaves no temp file either.
+    #[cfg(windows)]
+    fn save_in(&self, dir: &str) {
+        let _ = files::create_dirs(dir);
+        let p = format!("{dir}\\settings.ini");
+        let tmp = format!("{p}.tmp");
+        if !files::write(&tmp, self.render().as_bytes()) || files::rename(&tmp, &p).is_err() {
+            files::remove_file(&tmp);
         }
     }
 }
@@ -440,6 +446,19 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn a_save_that_cannot_finish_leaves_no_temp_file() {
+        let root = format!("{}goby-settings-save-{}", crate::files::temp_dir().unwrap(), std::process::id());
+        let dir = format!("{root}\\Goby");
+        crate::files::remove_dir_all(&root);
+        crate::files::create_dirs(&format!("{dir}\\settings.ini")).unwrap();
+        Settings::default().save_in(&dir);
+        assert!(!crate::files::exists(&format!("{dir}\\settings.ini.tmp")));
+        assert!(crate::files::exists(&format!("{dir}\\settings.ini")));
+        crate::files::remove_dir_all(&root);
+    }
 
     #[test]
     fn round_trips() {
