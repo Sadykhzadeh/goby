@@ -105,13 +105,15 @@ pub extern "C" fn voice_count() -> usize {
     voices::ALL.len()
 }
 
-/// The voice by its place in the catalog, the pitch in semitones and the output volume.
+/// The voice by its place in the catalog, the pitch in semitones and the output volume. A
+/// volume that is not finite counts as full level, as at start-up: one NaN would stay in the
+/// level for good, and every later block would come out silent.
 #[unsafe(no_mangle)]
 pub extern "C" fn set_voice(index: usize, tone: f32, volume: f32) {
     let e = engine();
     e.chosen = index.min(voices::ALL.len() - 1);
     e.tone = tone;
-    e.volume = volume;
+    e.volume = if volume.is_finite() { volume } else { 1.0 };
 }
 
 /// The microphone side: make-up gain, the gate threshold (NaN leaves the gate open),
@@ -167,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn a_non_finite_gain_or_mix_does_not_silence_the_output_for_good() {
+    fn a_non_finite_gain_mix_or_volume_does_not_silence_the_output_for_good() {
         init(48_000);
         set_mic(f32::NAN, f32::NAN, f32::NAN, true);
         assert!(peak().is_finite());
@@ -176,5 +178,9 @@ mod tests {
         set_mic(f32::INFINITY, f32::NAN, f32::INFINITY, true);
         set_mic(0.0, f32::NAN, 0.0, true);
         assert!(peak() > 0.1, "an infinite gain kept the output silent after a valid gain was set");
+        set_voice(1, 0.0, f32::NAN);
+        assert!(peak().is_finite());
+        set_voice(1, 0.0, 1.0);
+        assert!(peak() > 0.1, "a NaN volume kept the output silent after a valid volume was set");
     }
 }
