@@ -14,6 +14,10 @@
 //! One instance per thread, so the state lives in statics; calls come one at a time.
 #![allow(dead_code)]
 
+#[cfg(test)]
+// The app's voice tests name the crate goby_dsp; this makes that name refer to this crate.
+extern crate self as goby_dsp;
+
 #[path = "../../../crates/dsp/src/dsp.rs"]
 mod dsp;
 #[path = "../../../crates/dsp/src/formant.rs"]
@@ -111,13 +115,15 @@ pub extern "C" fn set_voice(index: usize, tone: f32, volume: f32) {
 }
 
 /// The microphone side: make-up gain, the gate threshold (NaN leaves the gate open),
-/// the share of the original voice mixed back in, and whether the effect is on.
+/// the share of the original voice mixed back in, and whether the effect is on. A gain or
+/// mix that is not finite counts as 0 dB or 0: one NaN would stay in the level and the
+/// blend for good, and every later block would come out silent.
 #[unsafe(no_mangle)]
 pub extern "C" fn set_mic(gain_db: f32, gate_db: f32, mix: f32, enabled: bool) {
     let e = engine();
-    e.gain_db = gain_db;
+    e.gain_db = if gain_db.is_finite() { gain_db } else { 0.0 };
     e.gate_db = Some(gate_db).filter(|g| !g.is_nan());
-    e.mix = mix;
+    e.mix = if mix.is_finite() { mix } else { 0.0 };
     e.enabled = enabled;
 }
 
@@ -142,4 +148,33 @@ pub extern "C" fn process(n: usize) {
 #[unsafe(no_mangle)]
 pub extern "C" fn delay() -> f32 {
     engine().voice.delay()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The loudest sample after a few blocks of a steady 0.5 input.
+    fn peak() -> f32 {
+        let e = engine();
+        let mut peak = 0.0f32;
+        for _ in 0..8 {
+            e.block[..256].fill(0.5);
+            process(256);
+            peak = e.block[..256].iter().fold(peak, |p, s| p.max(s.abs()));
+        }
+        peak
+    }
+
+    #[test]
+    fn a_non_finite_gain_or_mix_does_not_silence_the_output_for_good() {
+        init(48_000);
+        set_mic(f32::NAN, f32::NAN, f32::NAN, true);
+        assert!(peak().is_finite());
+        set_mic(0.0, f32::NAN, 0.0, true);
+        assert!(peak() > 0.1, "a NaN gain kept the output silent after a valid gain was set");
+        set_mic(f32::INFINITY, f32::NAN, f32::INFINITY, true);
+        set_mic(0.0, f32::NAN, 0.0, true);
+        assert!(peak() > 0.1, "an infinite gain kept the output silent after a valid gain was set");
+    }
 }
