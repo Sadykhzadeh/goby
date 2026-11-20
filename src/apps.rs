@@ -185,8 +185,10 @@ pub fn icon_pixels(path: &str, size: i32) -> Option<Vec<u8>> {
         let mut wide: Vec<u16> = path.encode_utf16().collect();
         wide.push(0);
         let mut name = [0u16; 260];
-        let n = wide.len().min(name.len());
-        name[..n].copy_from_slice(&wide[..n]);
+        if wide.len() > name.len() {
+            return None;
+        }
+        name[..wide.len()].copy_from_slice(&wide);
         let mut icon = HICON::default();
         if PrivateExtractIconsW(&name, 0, size, size, Some(std::slice::from_mut(&mut icon)), None, 0) == 0
             || icon.is_invalid()
@@ -248,6 +250,12 @@ mod tests {
 
     fn app(exe: &str, last_used: u64, active: bool) -> MicApp {
         MicApp { exe: exe.into(), name: display_name(exe), path: String::new(), last_used, active }
+    }
+
+    #[test]
+    fn a_path_too_long_for_the_icon_buffer_has_no_icon() {
+        let long = format!("C:\\{}\\goby.exe", "a".repeat(MAX_PATH as usize));
+        assert!(icon_pixels(&long, 16).is_none());
     }
 
     #[test]
