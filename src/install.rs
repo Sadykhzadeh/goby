@@ -242,18 +242,7 @@ pub fn install(desktop_shortcut: bool) -> std::io::Result<String> {
     // copy, just refresh the shortcuts and the entry.
     if !parent(&source).is_some_and(|p| same_dir(p, &dir)) {
         close_running();
-        files::remove_file(&old);
-        let moved = files::exists(&target) && !files::remove_file(&target);
-        if moved {
-            files::rename(&target, &old)?;
-        }
-        if let Err(e) = files::copy(&source, &target) {
-            // Put the previous version back rather than leave a broken install.
-            if moved {
-                let _ = files::rename(&old, &target);
-            }
-            return Err(e);
-        }
+        replace_copy(&source, &target, &old)?;
     }
     let links = shortcut_paths();
     for (i, link) in links.iter().enumerate() {
@@ -264,6 +253,24 @@ pub fn install(desktop_shortcut: bool) -> std::io::Result<String> {
     }
     write_uninstall_entry(&target);
     Ok(target)
+}
+
+/// Copies `source` over `target`, moving the current `target` aside to `old` first. When the
+/// copy fails the previous version goes back in place, so an install is never left without
+/// its program. `old` is removed once the new copy is there, or later by `tidy` if running.
+fn replace_copy(source: &str, target: &str, old: &str) -> std::io::Result<()> {
+    let moved = files::exists(target);
+    if moved {
+        files::rename(target, old)?;
+    }
+    if let Err(e) = files::copy(source, target) {
+        if moved {
+            let _ = files::rename(old, target);
+        }
+        return Err(e);
+    }
+    files::remove_file(old);
+    Ok(())
 }
 
 pub enum Choice {
@@ -487,6 +494,23 @@ mod tests {
         let exe = r"C:\Users\a\AppData\Local\Programs\Goby\goby.exe";
         assert_eq!(autostart_command(exe, true), r#""C:\Users\a\AppData\Local\Programs\Goby\goby.exe" --tray"#);
         assert_eq!(autostart_command(r"D:\tools\goby.exe", false), r#""D:\tools\goby.exe" --portable --tray"#);
+    }
+
+    #[test]
+    fn a_failed_copy_puts_the_previous_program_back() {
+        let dir = format!("{}goby-install-{}", files::temp_dir().unwrap(), std::process::id());
+        files::remove_dir_all(&dir);
+        files::create_dirs(&dir).unwrap();
+        let (source, target, old) = (format!("{dir}\\new.exe"), format!("{dir}\\goby.exe"), format!("{dir}\\goby.old"));
+        assert!(files::write(&target, b"previous"));
+        assert!(replace_copy(&source, &target, &old).is_err());
+        assert_eq!(files::read(&target).as_deref(), Some(&b"previous"[..]));
+        assert!(!files::exists(&old));
+        assert!(files::write(&source, b"next"));
+        replace_copy(&source, &target, &old).unwrap();
+        assert_eq!(files::read(&target).as_deref(), Some(&b"next"[..]));
+        assert!(!files::exists(&old));
+        files::remove_dir_all(&dir);
     }
 
     #[test]
